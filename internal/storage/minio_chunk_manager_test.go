@@ -18,7 +18,6 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"strconv"
 	"testing"
@@ -454,20 +453,42 @@ func TestMinIOCM(t *testing.T) {
 		assert.NoError(t, err)
 
 		pathPrefix := path.Join(testPrefix, "a")
-		r, err := testCM.ListWithPrefix(pathPrefix)
+		r, m, err := testCM.ListWithPrefix(pathPrefix, true)
 		assert.NoError(t, err)
 		assert.Equal(t, len(r), 2)
+		assert.Equal(t, len(m), 2)
+
+		key = path.Join(testPrefix, "b", "b", "b")
+		err = testCM.Write(key, value)
+		assert.NoError(t, err)
+
+		key = path.Join(testPrefix, "b", "a", "b")
+		err = testCM.Write(key, value)
+		assert.NoError(t, err)
+
+		key = path.Join(testPrefix, "bc", "a", "b")
+		err = testCM.Write(key, value)
+		assert.NoError(t, err)
+		dirs, mods, err := testCM.ListWithPrefix(testPrefix+"/", false)
+		assert.NoError(t, err)
+		assert.Equal(t, 3, len(dirs))
+		assert.Equal(t, 3, len(mods))
+
+		dirs, mods, err = testCM.ListWithPrefix(path.Join(testPrefix, "b"), false)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, len(dirs))
+		assert.Equal(t, 2, len(mods))
 
 		testCM.RemoveWithPrefix(testPrefix)
-		r, err = testCM.ListWithPrefix(pathPrefix)
+		r, m, err = testCM.ListWithPrefix(pathPrefix, false)
 		assert.NoError(t, err)
 		assert.Equal(t, len(r), 0)
+		assert.Equal(t, len(m), 0)
 
 		// test wrong prefix
 		b := make([]byte, 2048)
 		pathWrong := path.Join(testPrefix, string(b))
-		_, err = testCM.ListWithPrefix(pathWrong)
+		_, _, err = testCM.ListWithPrefix(pathWrong, true)
 		assert.Error(t, err)
-		fmt.Println(err)
 	})
 }

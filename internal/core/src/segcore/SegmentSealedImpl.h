@@ -50,12 +50,20 @@ class SegmentSealedImpl : public SegmentSealed {
     bool
     HasFieldData(FieldId field_id) const override;
 
+    int64_t
+    get_segment_id() const override {
+        return id_;
+    }
+
  public:
     int64_t
     GetMemoryUsageInBytes() const override;
 
     int64_t
     get_row_count() const override;
+
+    int64_t
+    get_deleted_count() const override;
 
     const Schema&
     get_schema() const override;

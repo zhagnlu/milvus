@@ -14,23 +14,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#pragma once
+package indexcoord
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+type indexTaskState int32
 
-#include "common/type_c.h"
+const (
+	// when we receive a index task
+	indexTaskInit indexTaskState = iota
+	// we've sent index task to scheduler, and wait for building index.
+	indexTaskInProgress
+	// task done, wait to be cleaned
+	indexTaskDone
+	// index task need to retry.
+	indexTaskRetry
+	// task has been deleted.
+	indexTaskDeleted
+)
 
-/*
- * In glibc, free chunks are stored in various lists based on size and history,
- * so that the library can quickly find suitable chunks to satisfy allocation requests.
- * The lists, called "bins".
- * ref: <https://sourceware.org/glibc/wiki/MallocInternals>
- */
-CStatus
-PurgeMemory(uint64_t max_bins_size);
-
-#ifdef __cplusplus
+var TaskStateNames = map[indexTaskState]string{
+	0: "Init",
+	1: "InProgress",
+	2: "Done",
+	3: "Retry",
+	4: "Deleted",
 }
-#endif
+
+func (x indexTaskState) String() string {
+	ret, ok := TaskStateNames[x]
+	if !ok {
+		return "None"
+	}
+	return ret
+}

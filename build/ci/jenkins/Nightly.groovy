@@ -8,7 +8,7 @@ String cron_string = BRANCH_NAME == "master" ? "50 22,2 * * * " : ""
 // Make timeout 4 hours so that we can run two nightly during the ci
 int total_timeout_minutes = 4 * 60
 def imageTag=''
-def chart_version='3.0.24'
+def chart_version='3.0.27'
 pipeline {
     triggers {
         cron """${cron_timezone}
@@ -144,6 +144,7 @@ pipeline {
                                                     --set dataNode.replicas=2 \
                                                     --set dataCoordinator.gc.missingTolerance=86400 \
                                                     --set dataCoordinator.gc.dropTolerance=86400 \
+                                                    --set indexCoordinator.gc.interval=1 \
                                                     --version ${chart_version} \
                                                     -f values/${mqMode}.yaml \
                                                     -f values/nightly.yaml "

@@ -48,12 +48,18 @@ func (m *mockSegmentDetector) watchSegments(collectionID int64, replicaID int64,
 }
 
 type mockShardQueryNode struct {
+	statisticResponse     *internalpb.GetStatisticsResponse
+	statisticErr          error
 	searchResult          *internalpb.SearchResults
 	searchErr             error
 	queryResult           *internalpb.RetrieveResults
 	queryErr              error
 	releaseSegmentsResult *commonpb.Status
 	releaseSegmentsErr    error
+}
+
+func (m *mockShardQueryNode) GetStatistics(ctx context.Context, req *querypb.GetStatisticsRequest) (*internalpb.GetStatisticsResponse, error) {
+	return m.statisticResponse, m.statisticErr
 }
 
 func (m *mockShardQueryNode) Search(_ context.Context, _ *querypb.SearchRequest) (*internalpb.SearchResults, error) {
@@ -74,6 +80,14 @@ func (m *mockShardQueryNode) Stop() error {
 
 func buildMockQueryNode(nodeID int64, addr string) shardQueryNode {
 	return &mockShardQueryNode{
+		statisticResponse: &internalpb.GetStatisticsResponse{
+			Stats: []*commonpb.KeyValuePair{
+				{
+					Key:   "row_count",
+					Value: "0",
+				},
+			},
+		},
 		searchResult: &internalpb.SearchResults{},
 		queryResult:  &internalpb.RetrieveResults{},
 	}
@@ -1018,7 +1032,7 @@ func TestShardCluster_Search(t *testing.T) {
 		require.EqualValues(t, unavailable, sc.state.Load())
 
 		_, err := sc.Search(ctx, &querypb.SearchRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1030,7 +1044,7 @@ func TestShardCluster_Search(t *testing.T) {
 		defer sc.Close()
 
 		_, err := sc.Search(ctx, &querypb.SearchRequest{
-			DmlChannel: vchannelName + "_suffix",
+			DmlChannels: []string{vchannelName + "_suffix"},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1079,7 +1093,7 @@ func TestShardCluster_Search(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		result, err := sc.Search(ctx, &querypb.SearchRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.NoError(t, err)
 		assert.Equal(t, len(nodeEvents), len(result))
@@ -1129,7 +1143,7 @@ func TestShardCluster_Search(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		_, err := sc.Search(ctx, &querypb.SearchRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, func(ctx context.Context) error { return errors.New("mocked") })
 		assert.Error(t, err)
 	})
@@ -1186,7 +1200,7 @@ func TestShardCluster_Search(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		_, err := sc.Search(ctx, &querypb.SearchRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1238,7 +1252,7 @@ func TestShardCluster_Search(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		_, err := sc.Search(ctx, &querypb.SearchRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1296,7 +1310,7 @@ func TestShardCluster_Query(t *testing.T) {
 		require.EqualValues(t, unavailable, sc.state.Load())
 
 		_, err := sc.Query(ctx, &querypb.QueryRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1309,7 +1323,7 @@ func TestShardCluster_Query(t *testing.T) {
 		sc.SyncSegments(nil, segmentStateLoaded)
 
 		_, err := sc.Query(ctx, &querypb.QueryRequest{
-			DmlChannel: vchannelName + "_suffix",
+			DmlChannels: []string{vchannelName + "_suffix"},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1357,7 +1371,7 @@ func TestShardCluster_Query(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		result, err := sc.Query(ctx, &querypb.QueryRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.NoError(t, err)
 		assert.Equal(t, len(nodeEvents), len(result))
@@ -1406,7 +1420,7 @@ func TestShardCluster_Query(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		_, err := sc.Query(ctx, &querypb.QueryRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, func(ctx context.Context) error { return errors.New("mocked") })
 		assert.Error(t, err)
 	})
@@ -1463,7 +1477,7 @@ func TestShardCluster_Query(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		_, err := sc.Query(ctx, &querypb.QueryRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
@@ -1515,11 +1529,287 @@ func TestShardCluster_Query(t *testing.T) {
 		require.EqualValues(t, available, sc.state.Load())
 
 		_, err := sc.Query(ctx, &querypb.QueryRequest{
-			DmlChannel: vchannelName,
+			DmlChannels: []string{vchannelName},
 		}, streamingDoNothing)
 		assert.Error(t, err)
 	})
 
+}
+
+func TestShardCluster_GetStatistics(t *testing.T) {
+	collectionID := int64(1)
+	vchannelName := "dml_1_1_v0"
+	replicaID := int64(0)
+	ctx := context.Background()
+
+	t.Run("get statistics on unavailable cluster", func(t *testing.T) {
+		nodeEvents := []nodeEvent{
+			{
+				nodeID:   1,
+				nodeAddr: "addr_1",
+			},
+			{
+				nodeID:   2,
+				nodeAddr: "addr_2",
+			},
+			{
+				nodeID:   3,
+				nodeAddr: "addr_3",
+			},
+		}
+
+		segmentEvents := []segmentEvent{
+			{
+				segmentID: 1,
+				nodeIDs:   []int64{1},
+				state:     segmentStateOffline,
+			},
+			{
+				segmentID: 2,
+				nodeIDs:   []int64{2},
+				state:     segmentStateOffline,
+			},
+			{
+				segmentID: 3,
+				nodeIDs:   []int64{3},
+				state:     segmentStateOffline,
+			},
+		}
+
+		sc := NewShardCluster(collectionID, replicaID, vchannelName,
+			&mockNodeDetector{initNodes: nodeEvents}, &mockSegmentDetector{
+				initSegments: segmentEvents,
+			}, buildMockQueryNode)
+
+		defer sc.Close()
+		require.EqualValues(t, unavailable, sc.state.Load())
+
+		_, err := sc.GetStatistics(ctx, &querypb.GetStatisticsRequest{
+			DmlChannels: []string{vchannelName},
+		}, streamingDoNothing)
+		assert.Error(t, err)
+	})
+
+	t.Run("get statistics on wrong channel", func(t *testing.T) {
+		sc := NewShardCluster(collectionID, replicaID, vchannelName,
+			&mockNodeDetector{}, &mockSegmentDetector{}, buildMockQueryNode)
+
+		defer sc.Close()
+
+		_, err := sc.GetStatistics(ctx, &querypb.GetStatisticsRequest{
+			DmlChannels: []string{vchannelName + "_suffix"},
+		}, streamingDoNothing)
+		assert.Error(t, err)
+	})
+
+	t.Run("normal get statistics", func(t *testing.T) {
+		nodeEvents := []nodeEvent{
+			{
+				nodeID:   1,
+				nodeAddr: "addr_1",
+			},
+			{
+				nodeID:   2,
+				nodeAddr: "addr_2",
+			},
+		}
+
+		segmentEvents := []segmentEvent{
+			{
+				segmentID: 1,
+				nodeIDs:   []int64{1},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 2,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 3,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+		}
+
+		sc := NewShardCluster(collectionID, replicaID, vchannelName,
+			&mockNodeDetector{
+				initNodes: nodeEvents,
+			}, &mockSegmentDetector{
+				initSegments: segmentEvents,
+			}, buildMockQueryNode)
+
+		defer sc.Close()
+		// setup first version
+		sc.SyncSegments(nil, segmentStateLoaded)
+
+		require.EqualValues(t, available, sc.state.Load())
+
+		result, err := sc.GetStatistics(ctx, &querypb.GetStatisticsRequest{
+			DmlChannels: []string{vchannelName},
+		}, streamingDoNothing)
+		assert.NoError(t, err)
+		assert.Equal(t, len(nodeEvents), len(result))
+	})
+
+	t.Run("with streaming fail", func(t *testing.T) {
+		nodeEvents := []nodeEvent{
+			{
+				nodeID:   1,
+				nodeAddr: "addr_1",
+			},
+			{
+				nodeID:   2,
+				nodeAddr: "addr_2",
+			},
+		}
+
+		segmentEvents := []segmentEvent{
+			{
+				segmentID: 1,
+				nodeIDs:   []int64{1},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 2,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 3,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+		}
+
+		sc := NewShardCluster(collectionID, replicaID, vchannelName,
+			&mockNodeDetector{
+				initNodes: nodeEvents,
+			}, &mockSegmentDetector{
+				initSegments: segmentEvents,
+			}, buildMockQueryNode)
+
+		defer sc.Close()
+		// setup first version
+		sc.SyncSegments(nil, segmentStateLoaded)
+
+		require.EqualValues(t, available, sc.state.Load())
+
+		_, err := sc.GetStatistics(ctx, &querypb.GetStatisticsRequest{
+			DmlChannels: []string{vchannelName},
+		}, func(ctx context.Context) error { return errors.New("mocked") })
+		assert.Error(t, err)
+	})
+
+	t.Run("partial fail", func(t *testing.T) {
+		nodeEvents := []nodeEvent{
+			{
+				nodeID:   1,
+				nodeAddr: "addr_1",
+			},
+			{
+				nodeID:   2,
+				nodeAddr: "addr_2",
+			},
+		}
+
+		segmentEvents := []segmentEvent{
+			{
+				segmentID: 1,
+				nodeIDs:   []int64{1},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 2,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 3,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+		}
+
+		sc := NewShardCluster(collectionID, replicaID, vchannelName,
+			&mockNodeDetector{
+				initNodes: nodeEvents,
+			}, &mockSegmentDetector{
+				initSegments: segmentEvents,
+			}, func(nodeID int64, addr string) shardQueryNode {
+				if nodeID != 2 { // hard code error one
+					return buildMockQueryNode(nodeID, addr)
+				}
+				return &mockShardQueryNode{
+					statisticErr: errors.New("mocked error"),
+					searchErr:    errors.New("mocked error"),
+					queryErr:     errors.New("mocked error"),
+				}
+			})
+
+		defer sc.Close()
+		// setup first version
+		sc.SyncSegments(nil, segmentStateLoaded)
+
+		require.EqualValues(t, available, sc.state.Load())
+
+		_, err := sc.GetStatistics(ctx, &querypb.GetStatisticsRequest{
+			DmlChannels: []string{vchannelName},
+		}, streamingDoNothing)
+		assert.Error(t, err)
+	})
+
+	t.Run("test meta error", func(t *testing.T) {
+		nodeEvents := []nodeEvent{
+			{
+				nodeID:   1,
+				nodeAddr: "addr_1",
+			},
+			{
+				nodeID:   2,
+				nodeAddr: "addr_2",
+			},
+		}
+		segmentEvents := []segmentEvent{
+			{
+				segmentID: 1,
+				nodeIDs:   []int64{1},
+				state:     segmentStateLoaded,
+			},
+			{
+				segmentID: 2,
+				nodeIDs:   []int64{2},
+				state:     segmentStateLoaded,
+			},
+		}
+
+		sc := NewShardCluster(collectionID, replicaID, vchannelName,
+			&mockNodeDetector{
+				initNodes: nodeEvents,
+			}, &mockSegmentDetector{
+				initSegments: segmentEvents,
+			}, buildMockQueryNode)
+
+		//mock meta error
+		sc.mut.Lock()
+		sc.segments[3] = shardSegmentInfo{
+			segmentID: 3,
+			nodeID:    3, // node does not exist
+			state:     segmentStateLoaded,
+		}
+		sc.mut.Unlock()
+
+		defer sc.Close()
+		// setup first version
+		sc.SyncSegments(nil, segmentStateLoaded)
+
+		require.EqualValues(t, available, sc.state.Load())
+
+		_, err := sc.GetStatistics(ctx, &querypb.GetStatisticsRequest{
+			DmlChannels: []string{vchannelName},
+		}, streamingDoNothing)
+		assert.Error(t, err)
+	})
 }
 
 func TestShardCluster_Version(t *testing.T) {
@@ -1882,16 +2172,17 @@ func TestShardCluster_HandoffSegments(t *testing.T) {
 			}, buildMockQueryNode)
 		defer sc.Close()
 
+		// init first version
 		sc.SyncSegments(segmentEventsToSyncInfo(nil), segmentStateLoaded)
 
-		// add rc to all segments
+		// add rc to current version
 		_, versionID := sc.segmentAllocations(nil)
 
 		sig := make(chan struct{})
 		go func() {
 			err := sc.HandoffSegments(&querypb.SegmentChangeInfo{
 				OnlineSegments: []*querypb.SegmentInfo{
-					{SegmentID: 1, NodeID: 2, CollectionID: collectionID, DmChannel: vchannelName, NodeIds: []UniqueID{1}},
+					{SegmentID: 1, NodeID: 2, CollectionID: collectionID, DmChannel: vchannelName, NodeIds: []UniqueID{2}},
 				},
 				OfflineSegments: []*querypb.SegmentInfo{
 					{SegmentID: 1, NodeID: 1, CollectionID: collectionID, DmChannel: vchannelName, NodeIds: []UniqueID{1}},
@@ -1910,7 +2201,7 @@ func TestShardCluster_HandoffSegments(t *testing.T) {
 		}
 		sc.finishUsage(versionID)
 
-		// wait for handoff appended into list
+		// after handoff, the version id shall be changed
 		assert.Eventually(t, func() bool {
 			sc.mut.RLock()
 			defer sc.mut.RUnlock()
@@ -1926,8 +2217,6 @@ func TestShardCluster_HandoffSegments(t *testing.T) {
 			}
 		}
 		sc.finishUsage(tmpVersionID)
-		// rc shall be 0 now
-		sc.finishUsage(versionID)
 
 		// wait handoff finished
 		<-sig

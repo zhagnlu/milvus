@@ -92,7 +92,7 @@ func (tt *testTask) execute(ctx context.Context) error {
 			loadTask := &loadSegmentTask{
 				baseTask: &baseTask{
 					ctx:              tt.ctx,
-					condition:        newTaskCondition(tt.ctx),
+					condition:        newTaskCondition(),
 					triggerCondition: tt.triggerCondition,
 				},
 				LoadSegmentsRequest: req,
@@ -107,7 +107,7 @@ func (tt *testTask) execute(ctx context.Context) error {
 		childTask := &loadSegmentTask{
 			baseTask: &baseTask{
 				ctx:              tt.ctx,
-				condition:        newTaskCondition(tt.ctx),
+				condition:        newTaskCondition(),
 				triggerCondition: tt.triggerCondition,
 			},
 			LoadSegmentsRequest: &querypb.LoadSegmentsRequest{
@@ -126,7 +126,7 @@ func (tt *testTask) execute(ctx context.Context) error {
 		childTask := &watchDmChannelTask{
 			baseTask: &baseTask{
 				ctx:              tt.ctx,
-				condition:        newTaskCondition(tt.ctx),
+				condition:        newTaskCondition(),
 				triggerCondition: tt.triggerCondition,
 			},
 			WatchDmChannelsRequest: &querypb.WatchDmChannelsRequest{
@@ -165,7 +165,7 @@ func TestWatchQueryChannel_ClearEtcdInfoAfterAssignedNodeDown(t *testing.T) {
 	testTask := &testTask{
 		baseTask: baseTask{
 			ctx:              baseCtx,
-			condition:        newTaskCondition(baseCtx),
+			condition:        newTaskCondition(),
 			triggerCondition: querypb.TriggerCondition_GrpcRequest,
 		},
 		baseMsg: &commonpb.MsgBase{
@@ -498,7 +498,7 @@ func Test_saveInternalTaskToEtcd(t *testing.T) {
 	testTask := &testTask{
 		baseTask: baseTask{
 			ctx:              ctx,
-			condition:        newTaskCondition(ctx),
+			condition:        newTaskCondition(),
 			triggerCondition: querypb.TriggerCondition_GrpcRequest,
 			taskID:           100,
 		},
@@ -613,4 +613,51 @@ func TestTaskScheduler_BindContext(t *testing.T) {
 			return nctx.Err() == context.Canceled
 		}, time.Second, time.Millisecond*10)
 	})
+}
+
+func TestTaskScheduler_willLoadOrRelease(t *testing.T) {
+	ctx := context.Background()
+	queryCoord := &QueryCoord{}
+
+	loadCollectionTask := genLoadCollectionTask(ctx, queryCoord)
+	loadPartitionTask := genLoadPartitionTask(ctx, queryCoord)
+	releaseCollectionTask := genReleaseCollectionTask(ctx, queryCoord)
+	releasePartitionTask := genReleasePartitionTask(ctx, queryCoord)
+
+	queue := newTaskQueue()
+	queue.tasks.PushBack(loadCollectionTask)
+	queue.tasks.PushBack(loadPartitionTask)
+	queue.tasks.PushBack(releaseCollectionTask)
+	queue.tasks.PushBack(releasePartitionTask)
+	queue.tasks.PushBack(loadCollectionTask)
+	loadCollectionTask.CollectionID++
+	queue.tasks.PushBack(loadCollectionTask) // add other collection's task
+	loadCollectionTask.CollectionID = defaultCollectionID
+
+	taskType := queue.willLoadOrRelease(defaultCollectionID)
+	assert.Equal(t, commonpb.MsgType_LoadCollection, taskType)
+
+	queue.tasks.PushBack(loadPartitionTask)
+	taskType = queue.willLoadOrRelease(defaultCollectionID)
+	assert.Equal(t, commonpb.MsgType_LoadPartitions, taskType)
+
+	queue.tasks.PushBack(releaseCollectionTask)
+	taskType = queue.willLoadOrRelease(defaultCollectionID)
+	assert.Equal(t, commonpb.MsgType_ReleaseCollection, taskType)
+
+	queue.tasks.PushBack(releasePartitionTask)
+	taskType = queue.willLoadOrRelease(defaultCollectionID)
+	assert.Equal(t, commonpb.MsgType_ReleasePartitions, taskType)
+
+	loadSegmentTask := &loadSegmentTask{
+		LoadSegmentsRequest: &querypb.LoadSegmentsRequest{
+			Base: &commonpb.MsgBase{
+				MsgType: commonpb.MsgType_LoadSegments,
+			},
+		},
+	}
+	queue.tasks.PushBack(loadSegmentTask)
+	taskType = queue.willLoadOrRelease(defaultCollectionID)
+	// should be the last release or load for collection or partition
+	assert.Equal(t, commonpb.MsgType_ReleasePartitions, taskType)
 }

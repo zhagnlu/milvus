@@ -19,10 +19,8 @@ package querynode
 import (
 	"context"
 	"io/ioutil"
-	"math/rand"
 	"net/url"
 	"os"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -97,7 +95,6 @@ func newQueryNodeMock() *QueryNode {
 	replica := newCollectionReplica()
 	svr.metaReplica = replica
 	svr.dataSyncService = newDataSyncService(ctx, svr.metaReplica, tsReplica, factory)
-	svr.statsService = newStatsService(ctx, svr.metaReplica, factory)
 	svr.vectorStorage, err = factory.NewVectorStorageChunkManager(ctx)
 	if err != nil {
 		panic(err)
@@ -143,7 +140,6 @@ func startEmbedEtcdServer() (*embed.Etcd, error) {
 
 func TestMain(m *testing.M) {
 	setup()
-	Params.CommonCfg.QueryNodeStats = Params.CommonCfg.QueryNodeStats + strconv.Itoa(rand.Int())
 	// init embed etcd
 	var err error
 	embedetcdServer, err = startEmbedEtcdServer()
@@ -328,20 +324,19 @@ func TestQueryNode_watchChangeInfo(t *testing.T) {
 	wg.Wait()
 }
 
-func TestQueryNode_validateChangeChannel(t *testing.T) {
+func TestQueryNode_splitChangeChannel(t *testing.T) {
 
 	type testCase struct {
-		name                string
-		info                *querypb.SegmentChangeInfo
-		expectedError       bool
-		expectedChannelName string
+		name           string
+		info           *querypb.SegmentChangeInfo
+		expectedResult map[string]*querypb.SegmentChangeInfo
 	}
 
 	cases := []testCase{
 		{
-			name:          "empty info",
-			info:          &querypb.SegmentChangeInfo{},
-			expectedError: true,
+			name:           "empty info",
+			info:           &querypb.SegmentChangeInfo{},
+			expectedResult: map[string]*querypb.SegmentChangeInfo{},
 		},
 		{
 			name: "normal segment change info",
@@ -353,8 +348,16 @@ func TestQueryNode_validateChangeChannel(t *testing.T) {
 					{DmChannel: defaultDMLChannel},
 				},
 			},
-			expectedError:       false,
-			expectedChannelName: defaultDMLChannel,
+			expectedResult: map[string]*querypb.SegmentChangeInfo{
+				defaultDMLChannel: {
+					OnlineSegments: []*querypb.SegmentInfo{
+						{DmChannel: defaultDMLChannel},
+					},
+					OfflineSegments: []*querypb.SegmentInfo{
+						{DmChannel: defaultDMLChannel},
+					},
+				},
+			},
 		},
 		{
 			name: "empty offline change info",
@@ -363,8 +366,13 @@ func TestQueryNode_validateChangeChannel(t *testing.T) {
 					{DmChannel: defaultDMLChannel},
 				},
 			},
-			expectedError:       false,
-			expectedChannelName: defaultDMLChannel,
+			expectedResult: map[string]*querypb.SegmentChangeInfo{
+				defaultDMLChannel: {
+					OnlineSegments: []*querypb.SegmentInfo{
+						{DmChannel: defaultDMLChannel},
+					},
+				},
+			},
 		},
 		{
 			name: "empty online change info",
@@ -373,8 +381,13 @@ func TestQueryNode_validateChangeChannel(t *testing.T) {
 					{DmChannel: defaultDMLChannel},
 				},
 			},
-			expectedError:       false,
-			expectedChannelName: defaultDMLChannel,
+			expectedResult: map[string]*querypb.SegmentChangeInfo{
+				defaultDMLChannel: {
+					OfflineSegments: []*querypb.SegmentInfo{
+						{DmChannel: defaultDMLChannel},
+					},
+				},
+			},
 		},
 		{
 			name: "different channel in online",
@@ -384,7 +397,18 @@ func TestQueryNode_validateChangeChannel(t *testing.T) {
 					{DmChannel: "other_channel"},
 				},
 			},
-			expectedError: true,
+			expectedResult: map[string]*querypb.SegmentChangeInfo{
+				defaultDMLChannel: {
+					OnlineSegments: []*querypb.SegmentInfo{
+						{DmChannel: defaultDMLChannel},
+					},
+				},
+				"other_channel": {
+					OnlineSegments: []*querypb.SegmentInfo{
+						{DmChannel: "other_channel"},
+					},
+				},
+			},
 		},
 		{
 			name: "different channel in offline",
@@ -396,18 +420,32 @@ func TestQueryNode_validateChangeChannel(t *testing.T) {
 					{DmChannel: "other_channel"},
 				},
 			},
-			expectedError: true,
+			expectedResult: map[string]*querypb.SegmentChangeInfo{
+				defaultDMLChannel: {
+					OnlineSegments: []*querypb.SegmentInfo{
+						{DmChannel: defaultDMLChannel},
+					},
+				},
+				"other_channel": {
+					OfflineSegments: []*querypb.SegmentInfo{
+						{DmChannel: "other_channel"},
+					},
+				},
+			},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			channelName, err := validateChangeChannel(tc.info)
-			if tc.expectedError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tc.expectedChannelName, channelName)
+			result := splitSegmentsChange(tc.info)
+			assert.Equal(t, len(tc.expectedResult), len(result))
+			for k, v := range tc.expectedResult {
+				r := assert.True(t, proto.Equal(v, result[k]))
+
+				if !r {
+					t.Log(v)
+					t.Log(result[k])
+				}
 			}
 		})
 	}
@@ -445,7 +483,7 @@ func TestQueryNode_handleSealedSegmentsChangeInfo(t *testing.T) {
 		})
 	})
 
-	t.Run("bad change info", func(t *testing.T) {
+	t.Run("multple vchannel change info", func(t *testing.T) {
 		assert.NotPanics(t, func() {
 			qn.handleSealedSegmentsChangeInfo(&querypb.SealedSegmentsChangeInfo{
 				Infos: []*querypb.SegmentChangeInfo{

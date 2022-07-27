@@ -44,13 +44,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/funcutil"
 )
 
-const (
-	collectionMetaPrefix   = "queryCoord-collectionMeta"
-	dmChannelMetaPrefix    = "queryCoord-dmChannelWatchInfo"
-	deltaChannelMetaPrefix = "queryCoord-deltaChannel"
-	ReplicaMetaPrefix      = "queryCoord-ReplicaMeta"
-)
-
 type col2SegmentInfos = map[UniqueID][]*querypb.SegmentInfo
 type col2SealedSegmentChangeInfos = map[UniqueID]*querypb.SealedSegmentsChangeInfo
 
@@ -101,6 +94,8 @@ type Meta interface {
 	applyReplicaBalancePlan(p *balancePlan) error
 	updateShardLeader(replicaID UniqueID, dmChannel string, leaderID UniqueID, leaderAddr string) error
 }
+
+var _ Meta = (*MetaReplica)(nil)
 
 // MetaReplica records the current load information on all querynodes
 type MetaReplica struct {
@@ -156,6 +151,53 @@ func newMeta(ctx context.Context, kv kv.MetaKv, factory dependency.Factory, idAl
 	return m, nil
 }
 
+func (m *MetaReplica) fixSegmentInfoDMChannel() error {
+	var segmentIDs []UniqueID
+	for id, info := range m.segmentsInfo.segmentIDMap {
+		if info.GetDmChannel() == "" {
+			segmentIDs = append(segmentIDs, id)
+		}
+	}
+
+	if len(segmentIDs) == 0 {
+		log.Info("QueryCoord MetaReplica no need to fix SegmentInfo DmChannel")
+		return nil
+	}
+
+	//var segmentInfos []*datapb.SegmentInfo
+	infoResp, err := m.dataCoord.GetSegmentInfo(m.ctx, &datapb.GetSegmentInfoRequest{
+		Base: &commonpb.MsgBase{
+			MsgType: commonpb.MsgType_SegmentInfo,
+		},
+		SegmentIDs:       segmentIDs,
+		IncludeUnHealthy: true,
+	})
+	if err != nil {
+		log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
+		return err
+	}
+	if infoResp.GetStatus().ErrorCode != commonpb.ErrorCode_Success {
+		err = errors.New(infoResp.GetStatus().Reason)
+		log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
+		return err
+	}
+
+	for _, newInfo := range infoResp.Infos {
+		segment, err := m.getSegmentInfoByID(newInfo.GetID())
+		if err != nil {
+			log.Warn("failed to find original patched segment", zap.Int64("segmentID", newInfo.GetID()), zap.Error(err))
+			return err
+		}
+		segment.DmChannel = newInfo.GetInsertChannel()
+		err = m.segmentsInfo.saveSegment(segment)
+		if err != nil {
+			log.Warn("failed to save patched segment", zap.Int64("segmentID", newInfo.GetID()), zap.Error(err))
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *MetaReplica) reloadFromKV() error {
 	log.Info("recovery collections...")
 	collectionKeys, collectionValues, err := m.getKvClient().LoadWithPrefix(collectionMetaPrefix)
@@ -182,6 +224,11 @@ func (m *MetaReplica) reloadFromKV() error {
 	if err := m.segmentsInfo.loadSegments(); err != nil {
 		return err
 	}
+	for id, segment := range m.segmentsInfo.segmentIDMap {
+		if _, ok := m.collectionInfos[segment.CollectionID]; !ok {
+			delete(m.segmentsInfo.segmentIDMap, id)
+		}
+	}
 
 	deltaChannelKeys, deltaChannelValues, err := m.getKvClient().LoadWithPrefix(deltaChannelMetaPrefix)
 	if err != nil {
@@ -198,6 +245,7 @@ func (m *MetaReplica) reloadFromKV() error {
 		if err != nil {
 			return err
 		}
+		reviseVChannelInfo(deltaChannelInfo)
 		m.deltaChannelInfos[collectionID] = append(m.deltaChannelInfos[collectionID], deltaChannelInfo)
 	}
 
@@ -284,7 +332,6 @@ func (m *MetaReplica) reloadFromKV() error {
 
 	//TODO::update partition states
 	log.Info("reload from kv finished")
-
 	return nil
 }
 
@@ -524,6 +571,14 @@ func (m *MetaReplica) releaseCollection(collectionID UniqueID) error {
 
 	m.replicas.Remove(collection.ReplicaIds...)
 
+	m.segmentsInfo.mu.Lock()
+	for id, segment := range m.segmentsInfo.segmentIDMap {
+		if segment.CollectionID == collectionID {
+			delete(m.segmentsInfo.segmentIDMap, id)
+		}
+	}
+	m.segmentsInfo.mu.Unlock()
+	log.Info("successfully release collection from meta", zap.Int64("collectionID", collectionID))
 	return nil
 }
 
@@ -1181,6 +1236,9 @@ func removeCollectionMeta(collectionID UniqueID, replicas []UniqueID, kv kv.Meta
 		replicaPrefix := fmt.Sprintf("%s/%d", ReplicaMetaPrefix, replicaID)
 		prefixes = append(prefixes, replicaPrefix)
 	}
+
+	prefixes = append(prefixes,
+		fmt.Sprintf("%s/%d", util.SegmentMetaPrefix, collectionID))
 
 	return kv.MultiRemoveWithPrefix(prefixes)
 }

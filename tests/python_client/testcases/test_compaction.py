@@ -118,11 +118,6 @@ class TestCompactionParams(TestcaseBase):
         c_plans = collection_w.get_compaction_plans()[0]
         assert len(c_plans.plans) == 0
 
-        collection_w.load()
-        segments_info = self.utility_wrap.get_query_segment_info(collection_w.name)[0]
-        for segment_info in segments_info:
-            assert segment_info.state == SegmentState.Growing
-
     @pytest.mark.tags(CaseLabel.L2)
     def test_compact_empty_collection(self):
         """
@@ -931,7 +926,7 @@ class TestCompactionOperation(TestcaseBase):
         collection_w = self.collection_insert_multi_segments_one_shard(prefix, num_of_segment=threshold)
 
         # Estimated auto-merging takes 30s
-        cost = 60
+        cost = 120
         collection_w.load()
         replicas = collection_w.get_replicas()[0]
         replica_num = len(replicas.groups)
@@ -1158,7 +1153,7 @@ class TestCompactionOperation(TestcaseBase):
         t = threading.Thread(target=do_index, args=())
         t.start()
         collection_w.compact()
-        collection_w.wait_for_compaction_completed(timeout=90)
+        collection_w.wait_for_compaction_completed(timeout=180)
         collection_w.get_compaction_plans()
 
         t.join()

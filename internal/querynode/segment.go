@@ -224,6 +224,18 @@ func deleteSegment(segment *Segment) {
 		zap.String("segmentType", segment.getType().String()))
 }
 
+func (s *Segment) getRealCount() int64 {
+	/*
+		int64_t
+		GetRealCount(CSegmentInterface c_segment);
+	*/
+	if s.segmentPtr == nil {
+		return -1
+	}
+	var rowCount = C.GetRealCount(s.segmentPtr)
+	return int64(rowCount)
+}
+
 func (s *Segment) getRowCount() int64 {
 	/*
 		long int
@@ -279,9 +291,13 @@ func (s *Segment) search(searchReq *searchRequest) (*SearchResult, error) {
 		return nil, fmt.Errorf("nil search plan")
 	}
 
+	loadIndex := s.hasLoadIndexForIndexedField(searchReq.searchFieldID)
 	var searchResult SearchResult
-	log.Debug("start do search on segment", zap.Int64("msgID", searchReq.msgID),
-		zap.Int64("segmentID", s.segmentID), zap.String("segmentType", s.segmentType.String()))
+	log.Debug("start do search on segment",
+		zap.Int64("msgID", searchReq.msgID),
+		zap.Int64("segmentID", s.segmentID),
+		zap.String("segmentType", s.segmentType.String()),
+		zap.Bool("loadIndex", loadIndex))
 	tr := timerecord.NewTimeRecorder("cgoSearch")
 	status := C.Search(s.segmentPtr, searchReq.plan.cSearchPlan, searchReq.cPlaceholderGroup,
 		C.uint64_t(searchReq.timestamp), &searchResult.cSearchResult, C.int64_t(s.segmentID))
@@ -289,8 +305,11 @@ func (s *Segment) search(searchReq *searchRequest) (*SearchResult, error) {
 	if err := HandleCStatus(&status, "Search failed"); err != nil {
 		return nil, err
 	}
-	log.Debug("do search on segment done", zap.Int64("msgID", searchReq.msgID),
-		zap.Int64("segmentID", s.segmentID), zap.String("segmentType", s.segmentType.String()))
+	log.Debug("do search on segment done",
+		zap.Int64("msgID", searchReq.msgID),
+		zap.Int64("segmentID", s.segmentID),
+		zap.String("segmentType", s.segmentType.String()),
+		zap.Bool("loadIndex", loadIndex))
 	return &searchResult, nil
 }
 

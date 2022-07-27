@@ -42,10 +42,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 )
 
-const (
-	queryNodeInfoPrefix = "queryCoord-queryNodeInfo"
-)
-
 // Cluster manages all query node connections and grpc requests
 type Cluster interface {
 	// Collection/Parition
@@ -107,14 +103,14 @@ type queryNodeCluster struct {
 
 	sync.RWMutex
 	clusterMeta      Meta
-	handler          *channelUnsubscribeHandler
+	cleaner          *ChannelCleaner
 	nodes            map[int64]Node
 	newNodeFn        newQueryNodeFn
 	segmentAllocator SegmentAllocatePolicy
 	channelAllocator ChannelAllocatePolicy
 }
 
-func newQueryNodeCluster(ctx context.Context, clusterMeta Meta, kv *etcdkv.EtcdKV, newNodeFn newQueryNodeFn, session *sessionutil.Session, handler *channelUnsubscribeHandler) (Cluster, error) {
+func newQueryNodeCluster(ctx context.Context, clusterMeta Meta, kv *etcdkv.EtcdKV, newNodeFn newQueryNodeFn, session *sessionutil.Session, cleaner *ChannelCleaner) (Cluster, error) {
 	childCtx, cancel := context.WithCancel(ctx)
 	nodes := make(map[int64]Node)
 	c := &queryNodeCluster{
@@ -123,7 +119,7 @@ func newQueryNodeCluster(ctx context.Context, clusterMeta Meta, kv *etcdkv.EtcdK
 		client:           kv,
 		session:          session,
 		clusterMeta:      clusterMeta,
-		handler:          handler,
+		cleaner:          cleaner,
 		nodes:            nodes,
 		newNodeFn:        newNodeFn,
 		segmentAllocator: defaultSegAllocatePolicy(),
@@ -466,43 +462,10 @@ func (c *queryNodeCluster) GetSegmentInfo(ctx context.Context, in *querypb.GetSe
 		}
 	}
 
-	// Fetch growing segments
-	c.RLock()
-	var wg sync.WaitGroup
-	cnt := len(c.nodes)
-	resChan := make(chan respTuple, cnt)
-	wg.Add(cnt)
-	for _, node := range c.nodes {
-		go func(node Node) {
-			defer wg.Done()
-			res, err := node.getSegmentInfo(ctx, in)
-			resChan <- respTuple{
-				res: res,
-				err: err,
-			}
-		}(node)
-	}
-	c.RUnlock()
-	wg.Wait()
-	close(resChan)
-
-	for tuple := range resChan {
-		if tuple.err != nil {
-			return nil, tuple.err
-		}
-
-		segments := tuple.res.GetInfos()
-		for _, segment := range segments {
-			if segment.SegmentState != commonpb.SegmentState_Sealed {
-				segmentInfos = append(segmentInfos, segment)
-			}
-		}
-	}
-
-	//TODO::update meta
 	return segmentInfos, nil
 }
 
+// Deprecated
 func (c *queryNodeCluster) GetSegmentInfoByNode(ctx context.Context, nodeID int64, in *querypb.GetSegmentInfoRequest) ([]*querypb.SegmentInfo, error) {
 	c.RLock()
 	node, ok := c.nodes[nodeID]
@@ -576,13 +539,14 @@ func (c *queryNodeCluster) setNodeState(nodeID int64, node Node, state nodeState
 
 		// 2.add unsubscribed channels to handler, handler will auto unsubscribe channel
 		if len(unsubscribeChannelInfo.CollectionChannels) != 0 {
-			c.handler.addUnsubscribeChannelInfo(unsubscribeChannelInfo)
+			c.cleaner.addUnsubscribeChannelInfo(unsubscribeChannelInfo)
 		}
 	}
 
 	node.setState(state)
 }
 
+// TODO, registerNode return error is not handled correctly
 func (c *queryNodeCluster) RegisterNode(ctx context.Context, session *sessionutil.Session, id UniqueID, state nodeState) error {
 	c.Lock()
 	defer c.Unlock()

@@ -34,12 +34,17 @@ pipeline {
         string(
             description: 'Image Repository',
             name: 'image_repository',
-            defaultValue: 'registry.milvus.io/milvus/milvus'
+            defaultValue: 'harbor.milvus.io/dockerhub/milvusdb/milvus'
         )
         string(
             description: 'Image Tag',
             name: 'image_tag',
             defaultValue: 'master-latest'
+        )
+        string(
+            description: 'Wait Time after chaos test',
+            name: 'idel_time',
+            defaultValue: '1'
         )
         string(
             description: 'Etcd Image Repository',
@@ -49,7 +54,7 @@ pipeline {
         string(
             description: 'Etcd Image Tag',
             name: 'etcd_image_tag',
-            defaultValue: "3.5.0-r5"
+            defaultValue: "3.5.0-r6"
         )
         string(
             description: 'QueryNode Nums',
@@ -128,7 +133,7 @@ pipeline {
                         script {
                             def image_tag_modified = ""
                             if ("${params.image_tag}" == "master-latest") {
-                                image_tag_modified = sh(returnStdout: true, script: 'bash ../../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus-dev -t master-latest -f master- -F -L -q').trim()    
+                                image_tag_modified = sh(returnStdout: true, script: 'bash ../../../../scripts/docker_image_find_tag.sh -n milvusdb/milvus -t master-latest -f master- -F -L -q').trim()    
                             }
                             else {
                                 image_tag_modified = "${params.image_tag}"
@@ -137,14 +142,15 @@ pipeline {
                             sh "echo ${params.chaos_type}"
                             sh "helm repo add milvus https://milvus-io.github.io/milvus-helm"
                             sh "helm repo update"
-                            if ("${params.pod_name}" == "standalone"){
+                            def pod_name = "${params.pod_name}"
+                            if (pod_name.contains("standalone")){
                                 sh"""
                                 IMAGE_TAG="${image_tag_modified}" \
                                 REPOSITORY="${params.image_repository}" \
                                 RELEASE_NAME="${env.RELEASE_NAME}" \
                                 bash install_milvus_standalone.sh
                                 """    
-                            }else{   
+                            }else{
                                 sh"""
                                 IMAGE_TAG="${image_tag_modified}" \
                                 REPOSITORY="${params.image_repository}" \
@@ -212,11 +218,11 @@ pipeline {
 
                         if ("${params.chaos_task}" == "chaos-test"){
                             def host = sh(returnStdout: true, script: "kubectl get svc/${env.RELEASE_NAME}-milvus -o jsonpath=\"{.spec.clusterIP}\"").trim()
-                            sh "pytest -s -v test_chaos.py --host $host --log-cli-level=INFO --capture=no || echo 'chaos test fail' "
+                            sh "timeout 14m pytest -s -v test_chaos.py --host $host --log-cli-level=INFO --capture=no || echo 'chaos test fail' "
                         }
                         if ("${params.chaos_task}" == "data-consist-test"){
                             def host = sh(returnStdout: true, script: "kubectl get svc/${env.RELEASE_NAME}-milvus -o jsonpath=\"{.spec.clusterIP}\"").trim()
-                            sh "pytest -s -v test_chaos_data_consist.py --host $host --log-cli-level=INFO --capture=no || echo 'chaos test fail' "                           
+                            sh "timeout 14m pytest -s -v test_chaos_data_consist.py --host $host --log-cli-level=INFO --capture=no || echo 'chaos test fail' "                           
                         }
                         echo "chaos test done"
                         sh "kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=${env.RELEASE_NAME} -n ${env.NAMESPACE} --timeout=360s"
@@ -239,7 +245,20 @@ pipeline {
                     }
                 }
             }
-        } 
+        }
+        stage ('Milvus Idle Time') {
+
+            steps {
+                container('main') {
+                    dir ('tests/python_client/chaos') {
+                        script {
+                        echo "sleep ${params.idel_time}m"
+                        sh "sleep ${params.idel_time}m"
+                        }
+                    }
+                }
+            }
+        }
 
         stage ('run e2e test after chaos') {
             options {

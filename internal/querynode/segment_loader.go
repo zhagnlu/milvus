@@ -47,6 +47,10 @@ import (
 	"github.com/milvus-io/milvus/internal/util/timerecord"
 )
 
+const (
+	requestConcurrencyLevelLimit = 8
+)
+
 // segmentLoader is only responsible for loading the field data from binlog
 type segmentLoader struct {
 	metaReplica ReplicaInterface
@@ -89,10 +93,19 @@ func (loader *segmentLoader) LoadSegment(req *querypb.LoadSegmentsRequest, segme
 		zap.Any("segmentType", segmentType.String()))
 
 	// check memory limit
-	concurrencyLevel := loader.cpuPool.Cap()
-	if concurrencyLevel > segmentNum {
-		concurrencyLevel = segmentNum
+	min := func(first int, values ...int) int {
+		minValue := first
+		for _, v := range values {
+			if v < minValue {
+				minValue = v
+			}
+		}
+		return minValue
 	}
+	concurrencyLevel := min(loader.cpuPool.Cap(),
+		len(req.Infos),
+		requestConcurrencyLevelLimit)
+
 	for ; concurrencyLevel > 1; concurrencyLevel /= 2 {
 		err := loader.checkSegmentSize(req.CollectionID, req.Infos, concurrencyLevel)
 		if err == nil {
@@ -358,10 +371,10 @@ func (loader *segmentLoader) loadSealedSegmentFields(segment *Segment, fields []
 		return err
 	}
 
-	log.Info("log field binlogs done",
+	log.Info("load field binlogs done for sealed segment",
 		zap.Int64("collection", segment.collectionID),
 		zap.Int64("segment", segment.segmentID),
-		zap.Any("fields", fields),
+		zap.Any("len(field)", len(fields)),
 		zap.String("segmentType", segment.getType().String()))
 
 	return nil
@@ -429,7 +442,11 @@ func (loader *segmentLoader) loadIndexedFieldData(segment *Segment, vecFieldInfo
 		if err != nil {
 			return err
 		}
-		log.Debug("load field's index data done", zap.Int64("segmentID", segment.ID()), zap.Int64("fieldID", fieldID))
+
+		log.Info("load field binlogs done for sealed segment with index",
+			zap.Int64("collection", segment.collectionID),
+			zap.Int64("segment", segment.segmentID),
+			zap.Int64("fieldID", fieldID))
 
 		segment.setIndexedFieldInfo(fieldID, fieldInfo)
 	}
@@ -843,6 +860,10 @@ func newSegmentLoader(
 			zap.Error(err))
 		panic(err)
 	}
+
+	log.Info("SegmentLoader created",
+		zap.Int("cpu-pool-size", cpuNum),
+		zap.Int("io-pool-size", ioPoolSize))
 
 	loader := &segmentLoader{
 		metaReplica: metaReplica,

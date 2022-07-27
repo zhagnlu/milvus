@@ -111,7 +111,6 @@ type commonConfig struct {
 	QueryCoordSearch       string
 	QueryCoordSearchResult string
 	QueryCoordTimeTick     string
-	QueryNodeStats         string
 	QueryNodeSubName       string
 
 	DataCoordStatistic   string
@@ -132,7 +131,6 @@ type commonConfig struct {
 	SimdType    string
 
 	AuthorizationEnabled bool
-	MemPurgeRatio        float64
 }
 
 func (p *commonConfig) init(base *BaseTable) {
@@ -151,7 +149,6 @@ func (p *commonConfig) init(base *BaseTable) {
 	p.initQueryCoordSearch()
 	p.initQueryCoordSearchResult()
 	p.initQueryCoordTimeTick()
-	p.initQueryNodeStats()
 	p.initQueryNodeSubName()
 
 	p.initDataCoordStatistic()
@@ -171,7 +168,6 @@ func (p *commonConfig) init(base *BaseTable) {
 	p.initStorageType()
 
 	p.initEnableAuthorization()
-	p.initMemoryPurgeRatio()
 }
 
 func (p *commonConfig) initClusterPrefix() {
@@ -274,14 +270,6 @@ func (p *commonConfig) initQueryCoordTimeTick() {
 }
 
 // --- querynode ---
-func (p *commonConfig) initQueryNodeStats() {
-	keys := []string{
-		"msgChannel.chanNamePrefix.queryNodeStats",
-		"common.chanNamePrefix.queryNodeStats",
-	}
-	p.QueryNodeStats = p.initChanNamePrefix(keys)
-}
-
 func (p *commonConfig) initQueryNodeSubName() {
 	keys := []string{
 		"msgChannel.subNamePrefix.queryNodeSubNamePrefix",
@@ -381,10 +369,6 @@ func (p *commonConfig) initStorageType() {
 
 func (p *commonConfig) initEnableAuthorization() {
 	p.AuthorizationEnabled = p.Base.ParseBool("common.security.authorizationEnabled", false)
-}
-
-func (p *commonConfig) initMemoryPurgeRatio() {
-	p.MemPurgeRatio = p.Base.ParseFloatWithDefault("common.mem_purge_ratio", 0.2)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -588,6 +572,10 @@ type queryCoordConfig struct {
 	CreatedTime time.Time
 	UpdatedTime time.Time
 
+	//---- Task ---
+	RetryNum      int32
+	RetryInterval int64
+
 	//---- Handoff ---
 	AutoHandoff bool
 
@@ -601,6 +589,11 @@ type queryCoordConfig struct {
 func (p *queryCoordConfig) init(base *BaseTable) {
 	p.Base = base
 	p.NodeID.Store(UniqueID(0))
+
+	//---- Task ---
+	p.initTaskRetryNum()
+	p.initTaskRetryInterval()
+
 	//---- Handoff ---
 	p.initAutoHandoff()
 
@@ -609,6 +602,14 @@ func (p *queryCoordConfig) init(base *BaseTable) {
 	p.initOverloadedMemoryThresholdPercentage()
 	p.initBalanceIntervalSeconds()
 	p.initMemoryUsageMaxDifferencePercentage()
+}
+
+func (p *queryCoordConfig) initTaskRetryNum() {
+	p.RetryNum = p.Base.ParseInt32WithDefault("queryCoord.task.retrynum", 5)
+}
+
+func (p *queryCoordConfig) initTaskRetryInterval() {
+	p.RetryInterval = p.Base.ParseInt64WithDefault("queryCoord.task.retryinterval", int64(10*time.Second))
 }
 
 func (p *queryCoordConfig) initAutoHandoff() {
@@ -709,8 +710,10 @@ type queryNodeConfig struct {
 	GroupEnabled         bool
 	MaxReceiveChanSize   int32
 	MaxUnsolvedQueueSize int32
+	MaxReadConcurrency   int32
 	MaxGroupNQ           int64
 	TopKMergeRatio       float64
+	CPURatio             float64
 }
 
 func (p *queryNodeConfig) init(base *BaseTable) {
@@ -733,9 +736,11 @@ func (p *queryNodeConfig) init(base *BaseTable) {
 
 	p.initGroupEnabled()
 	p.initMaxReceiveChanSize()
+	p.initMaxReadConcurrency()
 	p.initMaxUnsolvedQueueSize()
 	p.initMaxGroupNQ()
 	p.initTopKMergeRatio()
+	p.initCPURatio()
 }
 
 // InitAlias initializes an alias for the QueryNode role.
@@ -780,7 +785,7 @@ func (p *queryNodeConfig) initFlowGraphMaxParallelism() {
 }
 
 func (p *queryNodeConfig) initSmallIndexParams() {
-	p.ChunkRows = p.Base.ParseInt64WithDefault("queryNode.segcore.chunkRows", 32768)
+	p.ChunkRows = p.Base.ParseInt64WithDefault("queryNode.segcore.chunkRows", 1024)
 	if p.ChunkRows < 1024 {
 		log.Warn("chunk rows can not be less than 1024, force set to 1024", zap.Any("current", p.ChunkRows))
 		p.ChunkRows = 1024
@@ -850,11 +855,22 @@ func (p *queryNodeConfig) initGroupEnabled() {
 }
 
 func (p *queryNodeConfig) initMaxReceiveChanSize() {
-	p.MaxReceiveChanSize = p.Base.ParseInt32WithDefault("queryNode.grouping.receiveChanSize", 10240)
+	p.MaxReceiveChanSize = p.Base.ParseInt32WithDefault("queryNode.scheduler.receiveChanSize", 10240)
 }
 
 func (p *queryNodeConfig) initMaxUnsolvedQueueSize() {
-	p.MaxUnsolvedQueueSize = p.Base.ParseInt32WithDefault("queryNode.grouping.unsolvedQueueSize", 10240)
+	p.MaxUnsolvedQueueSize = p.Base.ParseInt32WithDefault("queryNode.scheduler.unsolvedQueueSize", 10240)
+}
+
+func (p *queryNodeConfig) initCPURatio() {
+	p.CPURatio = p.Base.ParseFloatWithDefault("queryNode.scheduler.cpuRatio", 10.0)
+}
+
+func (p *queryNodeConfig) initMaxReadConcurrency() {
+	p.MaxReadConcurrency = p.Base.ParseInt32WithDefault("queryNode.scheduler.maxReadConcurrency", 0)
+	if p.MaxReadConcurrency <= 0 {
+		p.MaxReadConcurrency = math.MaxInt32
+	}
 }
 
 func (p *queryNodeConfig) initMaxGroupNQ() {
@@ -1023,7 +1039,7 @@ func (p *dataCoordConfig) initGlobalCompactionInterval() {
 
 // -- GC --
 func (p *dataCoordConfig) initEnableGarbageCollection() {
-	p.EnableGarbageCollection = p.Base.ParseBool("dataCoord.enableGarbageCollection", false)
+	p.EnableGarbageCollection = p.Base.ParseBool("dataCoord.enableGarbageCollection", true)
 }
 
 func (p *dataCoordConfig) initGCInterval() {
@@ -1086,6 +1102,9 @@ type dataNodeConfig struct {
 	// etcd
 	ChannelWatchSubPath string
 
+	// io concurrency to fetch stats logs
+	IOConcurrency int
+
 	CreatedTime time.Time
 	UpdatedTime time.Time
 }
@@ -1099,6 +1118,7 @@ func (p *dataNodeConfig) init(base *BaseTable) {
 	p.initInsertBinlogRootPath()
 	p.initStatsBinlogRootPath()
 	p.initDeleteBinlogRootPath()
+	p.initIOConcurrency()
 
 	p.initChannelWatchPath()
 }
@@ -1149,6 +1169,10 @@ func (p *dataNodeConfig) initChannelWatchPath() {
 	p.ChannelWatchSubPath = "channelwatch"
 }
 
+func (p *dataNodeConfig) initIOConcurrency() {
+	p.IOConcurrency = p.Base.ParseIntWithDefault("dataNode.dataSync.ioConcurrency", 10)
+}
+
 func (p *dataNodeConfig) SetNodeID(id UniqueID) {
 	p.NodeID.Store(id)
 }
@@ -1171,6 +1195,8 @@ type indexCoordConfig struct {
 
 	IndexStorageRootPath string
 
+	GCInterval time.Duration
+
 	CreatedTime time.Time
 	UpdatedTime time.Time
 }
@@ -1179,6 +1205,7 @@ func (p *indexCoordConfig) init(base *BaseTable) {
 	p.Base = base
 
 	p.initIndexStorageRootPath()
+	p.initGCInterval()
 }
 
 // initIndexStorageRootPath initializes the root path of index files.
@@ -1188,6 +1215,10 @@ func (p *indexCoordConfig) initIndexStorageRootPath() {
 		panic(err)
 	}
 	p.IndexStorageRootPath = path.Join(rootPath, "index_files")
+}
+
+func (p *indexCoordConfig) initGCInterval() {
+	p.GCInterval = time.Duration(p.Base.ParseInt64WithDefault("indexCoord.gc.interval", 60*10)) * time.Second
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1204,6 +1235,7 @@ type indexNodeConfig struct {
 	Alias string
 
 	IndexStorageRootPath string
+	BuildParallel        int
 
 	CreatedTime time.Time
 	UpdatedTime time.Time
@@ -1213,6 +1245,7 @@ func (p *indexNodeConfig) init(base *BaseTable) {
 	p.Base = base
 	p.NodeID.Store(UniqueID(0))
 	p.initIndexStorageRootPath()
+	p.initBuildParallel()
 }
 
 // InitAlias initializes an alias for the IndexNode role.
@@ -1226,6 +1259,10 @@ func (p *indexNodeConfig) initIndexStorageRootPath() {
 		panic(err)
 	}
 	p.IndexStorageRootPath = path.Join(rootPath, "index_files")
+}
+
+func (p *indexNodeConfig) initBuildParallel() {
+	p.BuildParallel = p.Base.ParseIntWithDefault("indexNode.scheduler.buildParallel", 1)
 }
 
 func (p *indexNodeConfig) SetNodeID(id UniqueID) {

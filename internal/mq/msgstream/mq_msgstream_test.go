@@ -30,6 +30,7 @@ import (
 	"unsafe"
 
 	"github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
+	"go.uber.org/atomic"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	pulsarwrapper "github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper/pulsar"
@@ -647,7 +648,6 @@ func TestStream_PulsarMsgStream_DefaultRepackFunc(t *testing.T) {
 	msgPack.Msgs = append(msgPack.Msgs, getTsMsg(commonpb.MsgType_TimeTick, 1))
 	msgPack.Msgs = append(msgPack.Msgs, getTsMsg(commonpb.MsgType_Search, 2))
 	msgPack.Msgs = append(msgPack.Msgs, getTsMsg(commonpb.MsgType_SearchResult, 3))
-	msgPack.Msgs = append(msgPack.Msgs, getTsMsg(commonpb.MsgType_QueryNodeStats, 4))
 
 	factory := ProtoUDFactory{}
 
@@ -1527,6 +1527,62 @@ func TestStream_RmqTtMsgStream_Insert(t *testing.T) {
 	Close(rocksdbName, inputStream, outputStream, etcdKV)
 }
 
+func TestStream_RmqTtMsgStream_DuplicatedIDs(t *testing.T) {
+	rocksdbName := "/tmp/rocksmq_tt_msg_seek"
+	etcdKV := initRmq(rocksdbName)
+
+	c1 := funcutil.RandomString(8)
+	producerChannels := []string{c1}
+	consumerChannels := []string{c1}
+	consumerSubName := funcutil.RandomString(8)
+
+	msgPack0 := MsgPack{}
+	msgPack0.Msgs = append(msgPack0.Msgs, getTimeTickMsg(0))
+
+	msgPack1 := MsgPack{}
+	msgPack1.Msgs = append(msgPack1.Msgs, getTsMsg(commonpb.MsgType_Insert, 1))
+	msgPack1.Msgs = append(msgPack1.Msgs, getTsMsg(commonpb.MsgType_Insert, 1))
+	msgPack1.Msgs = append(msgPack1.Msgs, getTsMsg(commonpb.MsgType_Insert, 1))
+
+	msgPack2 := MsgPack{}
+	msgPack2.Msgs = append(msgPack2.Msgs, getTimeTickMsg(15))
+
+	ctx := context.Background()
+	inputStream, outputStream := initRmqTtStream(ctx, producerChannels, consumerChannels, consumerSubName)
+
+	err := inputStream.Broadcast(&msgPack0)
+	assert.Nil(t, err)
+	err = inputStream.Produce(&msgPack1)
+	assert.Nil(t, err)
+	err = inputStream.Broadcast(&msgPack2)
+	assert.Nil(t, err)
+
+	receivedMsg := consumer(ctx, outputStream)
+	assert.Equal(t, len(receivedMsg.Msgs), 1)
+	assert.Equal(t, receivedMsg.BeginTs, uint64(0))
+	assert.Equal(t, receivedMsg.EndTs, uint64(15))
+
+	outputStream.Close()
+
+	factory := ProtoUDFactory{}
+
+	rmqClient, _ := rmq.NewClientWithDefaultOptions()
+	outputStream, _ = NewMqTtMsgStream(context.Background(), 100, 100, rmqClient, factory.NewUnmarshalDispatcher())
+	consumerSubName = funcutil.RandomString(8)
+	outputStream.AsConsumer(consumerChannels, consumerSubName)
+
+	outputStream.Seek(receivedMsg.StartPositions)
+	outputStream.Start()
+	seekMsg := consumer(ctx, outputStream)
+	assert.Equal(t, len(seekMsg.Msgs), 1)
+	for _, msg := range seekMsg.Msgs {
+		assert.EqualValues(t, msg.BeginTs(), 1)
+	}
+
+	Close(rocksdbName, inputStream, outputStream, etcdKV)
+
+}
+
 func TestStream_RmqTtMsgStream_Seek(t *testing.T) {
 	rocksdbName := "/tmp/rocksmq_tt_msg_seek"
 	etcdKV := initRmq(rocksdbName)
@@ -1916,18 +1972,6 @@ func getTsMsg(msgType MsgType, reqID UniqueID) TsMsg {
 			TimeTickMsg: timeTickResult,
 		}
 		return timeTickMsg
-	case commonpb.MsgType_QueryNodeStats:
-		queryNodeSegStats := internalpb.QueryNodeStats{
-			Base: &commonpb.MsgBase{
-				MsgType:  commonpb.MsgType_QueryNodeStats,
-				SourceID: reqID,
-			},
-		}
-		queryNodeSegStatsMsg := &QueryNodeStatsMsg{
-			BaseMsg:        baseMsg,
-			QueryNodeStats: queryNodeSegStats,
-		}
-		return queryNodeSegStatsMsg
 	}
 	return nil
 }
@@ -1965,7 +2009,7 @@ func getRandInsertMsgPack(num int, start int, end int) *MsgPack {
 		_, ok := set[reqID]
 		if !ok {
 			set[reqID] = true
-			msgPack.Msgs = append(msgPack.Msgs, getTsMsg(commonpb.MsgType_Insert, int64(reqID)))
+			msgPack.Msgs = append(msgPack.Msgs, getInsertMsgUniqueID(int64(reqID))) //getTsMsg(commonpb.MsgType_Insert, int64(reqID)))
 		}
 	}
 	return &msgPack
@@ -1974,9 +2018,43 @@ func getRandInsertMsgPack(num int, start int, end int) *MsgPack {
 func getInsertMsgPack(ts []int) *MsgPack {
 	msgPack := MsgPack{}
 	for i := 0; i < len(ts); i++ {
-		msgPack.Msgs = append(msgPack.Msgs, getTsMsg(commonpb.MsgType_Insert, int64(ts[i])))
+		msgPack.Msgs = append(msgPack.Msgs, getInsertMsgUniqueID(int64(ts[i]))) //getTsMsg(commonpb.MsgType_Insert, int64(ts[i])))
 	}
 	return &msgPack
+}
+
+var idCounter atomic.Int64
+
+func getInsertMsgUniqueID(ts UniqueID) TsMsg {
+	hashValue := uint32(ts)
+	time := uint64(ts)
+	baseMsg := BaseMsg{
+		BeginTimestamp: 0,
+		EndTimestamp:   0,
+		HashValues:     []uint32{hashValue},
+	}
+
+	insertRequest := internalpb.InsertRequest{
+		Base: &commonpb.MsgBase{
+			MsgType:   commonpb.MsgType_Insert,
+			MsgID:     idCounter.Inc(),
+			Timestamp: time,
+			SourceID:  ts,
+		},
+		CollectionName: "Collection",
+		PartitionName:  "Partition",
+		SegmentID:      1,
+		ShardName:      "0",
+		Timestamps:     []Timestamp{time},
+		RowIDs:         []int64{1},
+		RowData:        []*commonpb.Blob{{}},
+	}
+	insertMsg := &InsertMsg{
+		BaseMsg:       baseMsg,
+		InsertRequest: insertRequest,
+	}
+	return insertMsg
+
 }
 
 func getTimeTickMsgPack(reqID UniqueID) *MsgPack {

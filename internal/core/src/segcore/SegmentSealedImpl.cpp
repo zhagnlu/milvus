@@ -254,11 +254,10 @@ SegmentSealedImpl::LoadDeletedRecord(const LoadDeletedRecordInfo& info) {
     auto timestamps = reinterpret_cast<const Timestamp*>(info.timestamps);
 
     // step 2: fill pks and timestamps
-    deleted_record_.pks_.set_data_raw(0, pks.data(), size);
-    deleted_record_.timestamps_.set_data_raw(0, timestamps, size);
-    deleted_record_.ack_responder_.AddSegment(0, size);
-    deleted_record_.reserved.fetch_add(size);
-    deleted_record_.record_size_ = size;
+    auto reserved_begin = deleted_record_.reserved.fetch_add(size);
+    deleted_record_.pks_.set_data_raw(reserved_begin, pks.data(), size);
+    deleted_record_.timestamps_.set_data_raw(reserved_begin, timestamps, size);
+    deleted_record_.ack_responder_.AddSegment(reserved_begin, reserved_begin + size);
 }
 
 // internal API: support scalar index only
@@ -323,6 +322,12 @@ SegmentSealedImpl::get_row_count() const {
     return row_count_opt_.value_or(0);
 }
 
+int64_t
+SegmentSealedImpl::get_deleted_count() const {
+    std::shared_lock lck(mutex_);
+    return deleted_record_.ack_responder_.GetAck();
+}
+
 const Schema&
 SegmentSealedImpl::get_schema() const {
     return *schema_;
@@ -381,14 +386,7 @@ SegmentSealedImpl::vector_search(int64_t vec_count,
     auto vec_data = insert_record_.get_field_data_base(field_id);
     AssertInfo(vec_data->num_chunk() == 1, "num chunk not equal to 1 for sealed segment");
     auto chunk_data = vec_data->get_chunk_data(0);
-
-    auto sub_qr = [&] {
-        if (field_meta.get_data_type() == DataType::VECTOR_FLOAT) {
-            return query::FloatSearchBruteForce(dataset, chunk_data, row_count, bitset);
-        } else {
-            return query::BinarySearchBruteForce(dataset, chunk_data, row_count, bitset);
-        }
-    }();
+    auto sub_qr = query::BruteForceSearch(dataset, chunk_data, row_count, bitset);
 
     SearchResult results;
     results.distances_ = std::move(sub_qr.mutable_distances());

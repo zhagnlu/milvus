@@ -35,6 +35,7 @@ def gen_experiment_config(yaml):
 def start_monitor_threads(checkers={}):
     """start the threads by checkers"""
     for k, ch in checkers.items():
+        ch._keep_running = True
         t = threading.Thread(target=ch.keep_running, args=(), name=k, daemon=True)
         t.start()
 
@@ -69,9 +70,7 @@ def get_chaos_yamls():
 
 def reconnect(connections, alias='default'):
     """trying to connect by connection alias"""
-    res = connections.get_connection_addr(alias)
-    connections.remove_connection(alias)
-    return connections.connect(alias, host=res["host"], port=res["port"])
+    return connections.connect(alias)
 
 
 def assert_statistic(checkers, expectations={}):

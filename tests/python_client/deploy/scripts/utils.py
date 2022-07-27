@@ -5,8 +5,7 @@ from pymilvus import (
     Collection, list_collections,
 )
 
-all_index_types = ["FLAT", "IVF_FLAT", "IVF_SQ8", "IVF_PQ", "HNSW", "ANNOY", "RHNSW_FLAT", "RHNSW_PQ", "RHNSW_SQ",
-                   "BIN_FLAT", "BIN_IVF_FLAT"]
+all_index_types = ["FLAT", "IVF_FLAT", "IVF_SQ8", "IVF_PQ", "HNSW", "ANNOY", "RHNSW_FLAT", "RHNSW_PQ", "RHNSW_SQ"]
 
 default_index_params = [{"nlist": 128}, {"nlist": 128}, {"nlist": 128}, {"nlist": 128, "m": 16, "nbits": 8},
                         {"M": 48, "efConstruction": 500}, {"n_trees": 50}, {"M": 48, "efConstruction": 500},
@@ -138,16 +137,20 @@ def load_and_search(prefix, replicas=1):
     for col_name in col_list:
         c = Collection(name=col_name)
         print(f"collection name: {col_name}")
-        print("release collection")
-        c.release()
         print("load collection")
-        t0 = time.time()
         if replicas == 1:
+            t0 = time.time()
             c.load()
+            print(f"load time: {time.time() - t0:.4f}")
         if replicas > 1:
+            print("release collection before load if replicas > 1")
+            t0 = time.time()
+            c.release()
+            print(f"release time: {time.time() - t0:.4f}")
+            t0 = time.time()
             c.load(replica_number=replicas)
+            print(f"load time: {time.time() - t0:.4f}")
             print(c.get_replicas())
-        print(f"load time: {time.time() - t0:.4f}")
         topK = 5
         vectors = [[1.0 for _ in range(128)] for _ in range(3000)]
         index_name = col_name.replace(prefix, "")
@@ -157,8 +160,9 @@ def load_and_search(prefix, replicas=1):
         start_time = time.time()
         print(f"\nSearch...")
         # define output_fields of search result
+        v_search = vectors[:1]
         res = c.search(
-            vectors[:1], "float_vector", search_params, topK,
+            v_search, "float_vector", search_params, topK,
             "count > 500", output_fields=["count", "random_value"], timeout=120
         )
         end_time = time.time()
@@ -168,7 +172,9 @@ def load_and_search(prefix, replicas=1):
                 # Get value of the random value field for search result
                 print(hit, hit.entity.get("random_value"))
             ids = hits.ids
+            assert len(ids) == topK
             print(ids)
+        assert len(res) == len(v_search)
         print("search latency: %.4fs" % (end_time - start_time))
         t0 = time.time()
         expr = "count in [2,4,6,8]"
@@ -178,6 +184,7 @@ def load_and_search(prefix, replicas=1):
         for r in sorted_res:
             print(r)
         t1 = time.time()
+        assert len(res) == 4
         print("query latency: %.4fs" % (t1 - t0))
         # c.release()
         print("###########")

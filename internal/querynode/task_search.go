@@ -89,6 +89,10 @@ func (s *searchTask) searchOnStreaming() error {
 		return errors.New("search context timeout")
 	}
 
+	if len(s.req.GetDmlChannels()) <= 0 {
+		return errors.New("invalid nil dml channels")
+	}
+
 	// check if collection has been released, check streaming since it's released first
 	_, err := s.QS.metaReplica.getCollectionByID(s.CollectionID)
 	if err != nil {
@@ -110,7 +114,7 @@ func (s *searchTask) searchOnStreaming() error {
 	defer searchReq.delete()
 
 	// TODO add context
-	partResults, _, _, sErr := searchStreaming(s.QS.metaReplica, searchReq, s.CollectionID, s.iReq.GetPartitionIDs(), s.req.GetDmlChannel())
+	partResults, _, _, sErr := searchStreaming(s.QS.metaReplica, searchReq, s.CollectionID, s.iReq.GetPartitionIDs(), s.req.GetDmlChannels()[0])
 	if sErr != nil {
 		log.Debug("failed to search streaming data", zap.Int64("msgID", s.ID()),
 			zap.Int64("collectionID", s.CollectionID), zap.Error(sErr))
@@ -177,13 +181,27 @@ func (s *searchTask) Notify(err error) {
 }
 
 func (s *searchTask) estimateCPUUsage() {
+	var segmentNum int64
 	if s.DataScope == querypb.DataScope_Streaming {
 		// assume growing segments num is 5
-		s.cpu = int32(s.NQ) * 5 / 2
+		partitionIDs := s.iReq.GetPartitionIDs()
+		channel := ""
+		if len(s.req.GetDmlChannels()) > 0 {
+			channel = s.req.GetDmlChannels()[0]
+		}
+		segIDs, err := s.QS.metaReplica.getSegmentIDsByVChannel(partitionIDs, channel, segmentTypeGrowing)
+		if err != nil {
+			log.Error("searchTask estimateCPUUsage", zap.Error(err))
+		}
+		segmentNum = int64(len(segIDs))
+		if segmentNum <= 0 {
+			segmentNum = 1
+		}
 	} else if s.DataScope == querypb.DataScope_Historical {
-		segmentNum := int64(len(s.req.GetSegmentIDs()))
-		s.cpu = int32(s.NQ * segmentNum / 2)
+		segmentNum = int64(len(s.req.GetSegmentIDs()))
 	}
+	cpu := float64(s.NQ*segmentNum) * Params.QueryNodeCfg.CPURatio
+	s.cpu = int32(cpu)
 	if s.cpu <= 0 {
 		s.cpu = 5
 	} else if s.cpu > s.maxCPU {
@@ -384,7 +402,7 @@ func newSearchTask(ctx context.Context, src *querypb.SearchRequest) (*searchTask
 				id:   src.Req.Base.GetMsgID(),
 				ts:   src.Req.Base.GetTimestamp(),
 			},
-			DbID:               src.Req.GetReqID(),
+			DbID:               src.Req.GetDbID(),
 			CollectionID:       src.Req.GetCollectionID(),
 			TravelTimestamp:    src.Req.GetTravelTimestamp(),
 			GuaranteeTimestamp: src.Req.GetGuaranteeTimestamp(),

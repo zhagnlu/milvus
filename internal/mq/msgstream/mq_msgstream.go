@@ -34,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/util/retry"
 	"github.com/milvus-io/milvus/internal/util/trace"
+	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/opentracing/opentracing-go"
 )
 
@@ -756,10 +757,21 @@ func (ms *MqTtMsgStream) bufMsgPackToChannel() {
 			ms.chanMsgBufMutex.Unlock()
 			ms.consumerLock.Unlock()
 
+			idset := make(typeutil.UniqueSet)
+			uniqueMsgs := make([]TsMsg, 0, len(timeTickBuf))
+			for _, msg := range timeTickBuf {
+				if idset.Contain(msg.ID()) {
+					log.Warn("mqTtMsgStream, found duplicated msg", zap.Int64("msgID", msg.ID()))
+					continue
+				}
+				idset.Insert(msg.ID())
+				uniqueMsgs = append(uniqueMsgs, msg)
+			}
+
 			msgPack := MsgPack{
 				BeginTs:        ms.lastTimeStamp,
 				EndTs:          currTs,
-				Msgs:           timeTickBuf,
+				Msgs:           uniqueMsgs,
 				StartPositions: startMsgPosition,
 				EndPositions:   endMsgPositions,
 			}
@@ -872,6 +884,10 @@ func (ms *MqTtMsgStream) Seek(msgPositions []*internalpb.MsgPosition) error {
 		err = consumer.Seek(seekMsgID, true)
 		if err != nil {
 			log.Warn("Failed to seek", zap.String("channel", mp.ChannelName), zap.Error(err))
+			// stop retry if consumer topic not exist
+			if errors.Is(err, mqwrapper.ErrTopicNotExist) {
+				return retry.Unrecoverable(err)
+			}
 			return err
 		}
 		log.Info("MsgStream seek finished", zap.String("channel", mp.ChannelName))

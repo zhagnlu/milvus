@@ -12,6 +12,7 @@
 package paramtable
 
 import (
+	"math"
 	"os"
 	"path"
 	"testing"
@@ -90,9 +91,6 @@ func TestComponentParam(t *testing.T) {
 		t.Logf("querycoord timetick channel = %s", Params.QueryCoordTimeTick)
 
 		// -- querynode --
-		assert.Equal(t, Params.QueryNodeStats, "by-dev-query-node-stats")
-		t.Logf("querynode stats channel = %s", Params.QueryNodeStats)
-
 		assert.Equal(t, Params.QueryNodeSubName, "by-dev-queryNode")
 		t.Logf("querynode subname = %s", Params.QueryNodeSubName)
 
@@ -233,10 +231,10 @@ func TestComponentParam(t *testing.T) {
 
 		// test query side config
 		chunkRows := Params.ChunkRows
-		assert.Equal(t, int64(32768), chunkRows)
+		assert.Equal(t, int64(1024), chunkRows)
 
 		nlist := Params.SmallIndexNlist
-		assert.Equal(t, int64(256), nlist)
+		assert.Equal(t, int64(128), nlist)
 
 		nprobe := Params.SmallIndexNProbe
 		assert.Equal(t, int64(16), nprobe)
@@ -244,8 +242,10 @@ func TestComponentParam(t *testing.T) {
 		assert.Equal(t, true, Params.GroupEnabled)
 		assert.Equal(t, int32(10240), Params.MaxReceiveChanSize)
 		assert.Equal(t, int32(10240), Params.MaxUnsolvedQueueSize)
+		assert.Equal(t, int32(math.MaxInt32), Params.MaxReadConcurrency)
 		assert.Equal(t, int64(1000), Params.MaxGroupNQ)
 		assert.Equal(t, 10.0, Params.TopKMergeRatio)
+		assert.Equal(t, 10.0, Params.CPURatio)
 
 		// test small indexNlist/NProbe default
 		Params.Base.Remove("queryNode.segcore.smallIndex.nlist")
@@ -278,6 +278,8 @@ func TestComponentParam(t *testing.T) {
 	t.Run("test dataCoordConfig", func(t *testing.T) {
 		Params := CParams.DataCoordCfg
 		assert.Equal(t, 24*60*60*time.Second, Params.SegmentMaxLifetime)
+
+		assert.True(t, Params.EnableGarbageCollection)
 	})
 
 	t.Run("test dataNodeConfig", func(t *testing.T) {

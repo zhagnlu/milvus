@@ -595,7 +595,7 @@ func TestLoadBalanceTask(t *testing.T) {
 	loadBalanceTask := &loadBalanceTask{
 		baseTask: &baseTask{
 			ctx:              baseCtx,
-			condition:        newTaskCondition(baseCtx),
+			condition:        newTaskCondition(),
 			triggerCondition: querypb.TriggerCondition_NodeDown,
 		},
 		LoadBalanceRequest: loadBalanceSegment,
@@ -885,7 +885,7 @@ func Test_LoadCollectionAndLoadPartitions(t *testing.T) {
 
 	// second load defaultPartitionID
 	status, err = queryCoord.LoadPartitions(ctx, loadPartitionReq)
-	assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.ErrorCode)
+	assert.Equal(t, commonpb.ErrorCode_IllegalArgument, status.ErrorCode)
 	assert.Nil(t, err)
 
 	node.stop()
@@ -1141,7 +1141,7 @@ func Test_RepeatedLoadDifferentPartitions(t *testing.T) {
 		ReplicaNumber: 1,
 	}
 	status, err = queryCoord.LoadPartitions(ctx, failLoadRequest)
-	assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.ErrorCode)
+	assert.Equal(t, commonpb.ErrorCode_IllegalArgument, status.ErrorCode)
 	assert.Nil(t, err)
 
 	node.stop()
@@ -1187,7 +1187,7 @@ func Test_LoadPartitionsAndLoadCollection(t *testing.T) {
 
 	// second load defaultCollectionID
 	status, err = queryCoord.LoadCollection(ctx, loadCollectionReq)
-	assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.ErrorCode)
+	assert.Equal(t, commonpb.ErrorCode_IllegalArgument, status.ErrorCode)
 	assert.Nil(t, err)
 
 	node.stop()

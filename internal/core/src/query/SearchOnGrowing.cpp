@@ -89,7 +89,7 @@ FloatSearch(const segcore::SegmentGrowingImpl& segment,
         auto size_per_chunk = element_end - element_begin;
 
         auto sub_view = bitset.subview(element_begin, size_per_chunk);
-        auto sub_qr = FloatSearchBruteForce(search_dataset, chunk.data(), size_per_chunk, sub_view);
+        auto sub_qr = BruteForceSearch(search_dataset, chunk.data(), size_per_chunk, sub_view);
 
         // convert chunk uid to segment uid
         for (auto& x : sub_qr.mutable_seg_offsets()) {
@@ -99,7 +99,6 @@ FloatSearch(const segcore::SegmentGrowingImpl& segment,
         }
         final_qr.merge(sub_qr);
     }
-    current_chunk_id = max_chunk;
     results.distances_ = std::move(final_qr.mutable_distances());
     results.seg_offsets_ = std::move(final_qr.mutable_seg_offsets());
     results.unity_topK_ = topk;
@@ -151,7 +150,7 @@ BinarySearch(const segcore::SegmentGrowingImpl& segment,
         auto nsize = element_end - element_begin;
 
         auto sub_view = bitset.subview(element_begin, nsize);
-        auto sub_result = BinarySearchBruteForce(search_dataset, chunk.data(), nsize, sub_view);
+        auto sub_result = BruteForceSearch(search_dataset, chunk.data(), nsize, sub_view);
 
         // convert chunk uid to segment uid
         for (auto& x : sub_result.mutable_seg_offsets()) {

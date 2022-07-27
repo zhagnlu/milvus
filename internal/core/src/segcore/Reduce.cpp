@@ -190,7 +190,6 @@ ReduceHelper::ReduceResultData(int slice_index) {
 
     // `search_records` records the search result offsets
     std::vector<std::vector<int64_t>> search_records(num_segments_);
-    std::unordered_set<milvus::PkType> pk_set;
     int64_t skip_dup_cnt = 0;
 
     // reduce search results
@@ -209,7 +208,11 @@ ReduceHelper::ReduceResultData(int slice_index) {
                                       base_offset + search_result->real_topK_per_nq_[qi]);
         }
 
-        pk_set.clear();
+        // nq has no results for all segments
+        if (result_pairs.size() == 0) {
+            continue;
+        }
+        std::unordered_set<milvus::PkType> pk_set;
         int64_t last_nq_result_offset = result_offset;
         while (result_offset - last_nq_result_offset < slice_topKs_[slice_index]) {
             std::sort(result_pairs.begin(), result_pairs.end(), std::greater<>());

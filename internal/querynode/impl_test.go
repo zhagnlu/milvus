@@ -477,11 +477,99 @@ func TestImpl_Search(t *testing.T) {
 	require.NoError(t, err)
 
 	node.queryShardService.addQueryShard(defaultCollectionID, defaultDMLChannel, defaultReplicaID)
+	node.ShardClusterService.addShardCluster(defaultCollectionID, defaultReplicaID, defaultDMLChannel)
+	// shard cluster not synced
+	_, err = node.Search(ctx, &queryPb.SearchRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel},
+	})
+	assert.NoError(t, err)
+
+	// shard cluster sync segments
+	sc, ok := node.ShardClusterService.getShardCluster(defaultDMLChannel)
+	assert.True(t, ok)
+	sc.SyncSegments(nil, segmentStateLoaded)
 
 	_, err = node.Search(ctx, &queryPb.SearchRequest{
 		Req:             req,
 		FromShardLeader: false,
-		DmlChannel:      defaultDMLChannel,
+		DmlChannels:     []string{defaultDMLChannel},
+	})
+	assert.NoError(t, err)
+}
+
+func TestImpl_searchWithDmlChannel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	node, err := genSimpleQueryNode(ctx)
+	require.NoError(t, err)
+
+	schema := genTestCollectionSchema()
+	req, err := genSearchRequest(defaultNQ, IndexFaissIDMap, schema)
+	require.NoError(t, err)
+
+	node.queryShardService.addQueryShard(defaultCollectionID, defaultDMLChannel, defaultReplicaID)
+	node.ShardClusterService.addShardCluster(defaultCollectionID, defaultReplicaID, defaultDMLChannel)
+	sc, ok := node.ShardClusterService.getShardCluster(defaultDMLChannel)
+	assert.True(t, ok)
+	sc.SyncSegments(nil, segmentStateLoaded)
+
+	_, err = node.searchWithDmlChannel(ctx, &queryPb.SearchRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel},
+	}, defaultDMLChannel)
+	assert.NoError(t, err)
+
+	// search for wrong dml channel
+	_, err = node.searchWithDmlChannel(ctx, &queryPb.SearchRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel + "_suffix"},
+	}, defaultDMLChannel)
+	assert.NoError(t, err)
+}
+
+func TestImpl_GetCollectionStatistics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	node, err := genSimpleQueryNode(ctx)
+	defer node.Stop()
+	require.NoError(t, err)
+
+	req, err := genGetCollectionStatisticRequest()
+	require.NoError(t, err)
+
+	node.queryShardService.addQueryShard(defaultCollectionID, defaultDMLChannel, defaultReplicaID)
+
+	_, err = node.GetStatistics(ctx, &queryPb.GetStatisticsRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel},
+	})
+	assert.NoError(t, err)
+}
+
+func TestImpl_GetPartitionStatistics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	node, err := genSimpleQueryNode(ctx)
+	defer node.Stop()
+	require.NoError(t, err)
+
+	req, err := genGetPartitionStatisticRequest()
+	require.NoError(t, err)
+
+	node.queryShardService.addQueryShard(defaultCollectionID, defaultDMLChannel, defaultReplicaID)
+
+	_, err = node.GetStatistics(ctx, &queryPb.GetStatisticsRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel},
 	})
 	assert.NoError(t, err)
 }
@@ -499,12 +587,59 @@ func TestImpl_Query(t *testing.T) {
 	require.NoError(t, err)
 
 	node.queryShardService.addQueryShard(defaultCollectionID, defaultDMLChannel, defaultReplicaID)
+	node.ShardClusterService.addShardCluster(defaultCollectionID, defaultReplicaID, defaultDMLChannel)
+	// shard cluster not synced
+	_, err = node.Query(ctx, &queryPb.QueryRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel},
+	})
+	assert.NoError(t, err)
+
+	// sync cluster segments
+	sc, ok := node.ShardClusterService.getShardCluster(defaultDMLChannel)
+	assert.True(t, ok)
+	sc.SyncSegments(nil, segmentStateLoaded)
 
 	_, err = node.Query(ctx, &queryPb.QueryRequest{
 		Req:             req,
 		FromShardLeader: false,
-		DmlChannel:      defaultDMLChannel,
+		DmlChannels:     []string{defaultDMLChannel},
 	})
+	assert.NoError(t, err)
+}
+
+func TestImpl_queryWithDmlChannel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	node, err := genSimpleQueryNode(ctx)
+	defer node.Stop()
+	require.NoError(t, err)
+
+	schema := genTestCollectionSchema()
+	req, err := genRetrieveRequest(schema)
+	require.NoError(t, err)
+
+	node.queryShardService.addQueryShard(defaultCollectionID, defaultDMLChannel, defaultReplicaID)
+	node.ShardClusterService.addShardCluster(defaultCollectionID, defaultReplicaID, defaultDMLChannel)
+	sc, ok := node.ShardClusterService.getShardCluster(defaultDMLChannel)
+	assert.True(t, ok)
+	sc.SyncSegments(nil, segmentStateLoaded)
+
+	_, err = node.queryWithDmlChannel(ctx, &queryPb.QueryRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel},
+	}, defaultDMLChannel)
+	assert.NoError(t, err)
+
+	// query for wrong dml channel
+	_, err = node.queryWithDmlChannel(ctx, &queryPb.QueryRequest{
+		Req:             req,
+		FromShardLeader: false,
+		DmlChannels:     []string{defaultDMLChannel + "_suffix"},
+	}, defaultDMLChannel)
 	assert.NoError(t, err)
 }
 

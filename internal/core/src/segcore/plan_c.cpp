@@ -9,6 +9,7 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
+#include "common/CGoHelper.h"
 #include "pb/segcore.pb.h"
 #include "query/Plan.h"
 #include "segcore/Collection.h"
@@ -76,11 +77,10 @@ ParsePlaceholderGroup(CSearchPlan c_plan,
                       const void* placeholder_group_blob,
                       const int64_t blob_size,
                       CPlaceholderGroup* res_placeholder_group) {
-    std::string blob_str((char*)placeholder_group_blob, blob_size);
     auto plan = (milvus::query::Plan*)c_plan;
 
     try {
-        auto res = milvus::query::ParsePlaceholderGroup(plan, blob_str);
+        auto res = milvus::query::ParsePlaceholderGroup(plan, (const uint8_t*)(placeholder_group_blob), blob_size);
 
         auto status = CStatus();
         status.error_code = Success;
@@ -107,6 +107,17 @@ int64_t
 GetTopK(CSearchPlan plan) {
     auto res = milvus::query::GetTopK((milvus::query::Plan*)plan);
     return res;
+}
+
+CStatus
+GetFieldID(CSearchPlan plan, int64_t* field_id) {
+    try {
+        auto p = static_cast<const milvus::query::Plan*>(plan);
+        *field_id = milvus::query::GetFieldID(p);
+        return milvus::SuccessCStatus();
+    } catch (std::exception& e) {
+        return milvus::FailureCStatus(UnexpectedError, strdup(e.what()));
+    }
 }
 
 const char*

@@ -264,7 +264,8 @@ func (s *Server) GetCollectionStatistics(ctx context.Context, req *datapb.GetCol
 	return resp, nil
 }
 
-// GetPartitionStatistics returns statistics for parition
+// GetPartitionStatistics returns statistics for partition
+// if partID is empty, return statistics for all partitions of the collection
 // for now only row count is returned
 func (s *Server) GetPartitionStatistics(ctx context.Context, req *datapb.GetPartitionStatisticsRequest) (*datapb.GetPartitionStatisticsResponse, error) {
 	resp := &datapb.GetPartitionStatisticsResponse{
@@ -276,9 +277,17 @@ func (s *Server) GetPartitionStatistics(ctx context.Context, req *datapb.GetPart
 		resp.Status.Reason = serverNotServingErrMsg
 		return resp, nil
 	}
-	nums := s.meta.GetNumRowsOfPartition(req.CollectionID, req.PartitionID)
+	nums := int64(0)
+	if len(req.GetPartitionIDs()) == 0 {
+		nums = s.meta.GetNumRowsOfCollection(req.CollectionID)
+	}
+	for _, partID := range req.GetPartitionIDs() {
+		num := s.meta.GetNumRowsOfPartition(req.CollectionID, partID)
+		nums += num
+	}
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.Stats = append(resp.Stats, &commonpb.KeyValuePair{Key: "row_count", Value: strconv.FormatInt(nums, 10)})
+	logutil.Logger(ctx).Debug("success to get partition statistics", zap.Any("response", resp))
 	return resp, nil
 }
 
@@ -350,8 +359,8 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	segment := s.meta.GetSegment(segmentID)
 
 	if segment == nil {
-		FailResponse(resp, fmt.Sprintf("failed to get segment %d", segmentID))
 		log.Error("failed to get segment", zap.Int64("segmentID", segmentID))
+		failResponseWithCode(resp, commonpb.ErrorCode_SegmentNotFound, fmt.Sprintf("failed to get segment %d", segmentID))
 		return resp, nil
 	}
 
@@ -359,7 +368,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	if !req.GetImporting() {
 		channel := segment.GetInsertChannel()
 		if !s.channelManager.Match(nodeID, channel) {
-			FailResponse(resp, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
+			failResponse(resp, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
 			resp.ErrorCode = commonpb.ErrorCode_MetaFailed
 			log.Warn("node is not matched with channel", zap.String("channel", channel), zap.Int64("nodeID", nodeID))
 			return resp, nil
@@ -438,7 +447,7 @@ func (s *Server) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtual
 	// validate
 	nodeID := req.GetBase().GetSourceID()
 	if !s.channelManager.Match(nodeID, channel) {
-		FailResponse(resp.Status, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
+		failResponse(resp.Status, fmt.Sprintf("channel %s is not watched on node %d", channel, nodeID))
 		resp.Status.ErrorCode = commonpb.ErrorCode_MetaFailed
 		log.Warn("node is not matched with channel", zap.String("channel", channel), zap.Int64("nodeID", nodeID))
 		return resp, nil
