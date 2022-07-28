@@ -46,6 +46,8 @@ set(MILVUS_TEST_FILES
         test_string_expr.cpp
         test_timestamp_index.cpp
         test_utils.cpp
+        test_minio_chunk_manager.cpp
+        test_local_chunk_manager.cpp
         )
 
 if (LINUX OR APPLE)
