@@ -23,10 +23,10 @@ endif()
 
 milvus_add_pkg_config("milvus_storage")
 
-set(STORAGE_FILES parquet_c.cpp PayloadStream.cpp)
+set(STORAGE_FILES parquet_c.cpp PayloadStream.cpp LocalChunkManager.cpp MinioChunkManager.cpp DiskANNFileManagerImpl.cpp)
 add_library(milvus_storage SHARED ${STORAGE_FILES})
 
-target_link_libraries( milvus_storage PUBLIC arrow parquet pthread)
+target_link_libraries( milvus_storage PUBLIC arrow boost_system boost_filesystem aws-cpp-sdk-s3 parquet milvus_log pthread)
 
 if(NOT CMAKE_INSTALL_PREFIX)
     set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_BINARY_DIR})
