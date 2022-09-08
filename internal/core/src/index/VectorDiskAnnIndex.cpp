@@ -34,9 +34,11 @@ VectorDiskAnnIndex<T>::VectorDiskAnnIndex(const IndexType& index_type,
     file_manager_ = std::dynamic_pointer_cast<storage::DiskANNFileManagerImpl>(file_manager);
     auto& local_chunk_manager = storage::LocalChunkManager::GetInstance();
     auto local_index_path_prefix = file_manager_->GetLocalIndexObjectPrefix();
+    LOG(DEBUG) << "vector disk ann index create local file prefix " << local_index_path_prefix;
     AssertInfo(!local_chunk_manager.Exist(local_index_path_prefix),
                "local index path " + local_index_path_prefix + " has been exist");
     local_chunk_manager.CreateDir(local_index_path_prefix);
+    LOG(DEBUG) << "vector disk ann local index prefix is/or exist, fire = " << local_index_path_prefix << ", isExist = " << local_chunk_manager.DirExist(local_index_path_prefix);
     index_ = std::make_unique<knowhere::IndexDiskANN<T>>(local_index_path_prefix, metric_type, file_manager);
 }
 
@@ -65,7 +67,10 @@ VectorDiskAnnIndex<T>::BuildWithDataset(const DatasetPtr& dataset, const Config&
     build_config.data_path = local_data_path;
     if (!local_chunk_manager.Exist(local_data_path)) {
         local_chunk_manager.CreateFile(local_data_path);
+        LOG(DEBUG) << "vector disk ann build index, and create file for raw data, file = " << local_data_path;
     }
+
+    LOG(DEBUG) << "vector disk ann build index, after create raw data file , file is exist = " << local_chunk_manager.Exist(local_data_path);
 
     int64_t offset = 0;
     auto num = uint32_t(milvus::GetDatasetRows(dataset));
@@ -83,9 +88,12 @@ VectorDiskAnnIndex<T>::BuildWithDataset(const DatasetPtr& dataset, const Config&
     knowhere::Config cfg;
     knowhere::DiskANNBuildConfig::Set(cfg, build_config);
 
+    LOG(DEBUG) << "vector disk ann index raw data is ready, start build knowhere::Diskann";
     index_->BuildAll(nullptr, cfg);
+    LOG(DEBUG) << "knowhere disk ann index build done";
 
     local_chunk_manager.RemoveDir(storage::GetLocalRawDataPathPrefixWithBuildID(segment_id));
+    LOG(DEBUG) << "after build ann index, remove raw data file, dir is/or exist = " << local_chunk_manager.DirExist(storage::GetLocalRawDataPathPrefixWithBuildID(segment_id));
     // TODO ::
     // SetDim(index_->Dim());
 }
