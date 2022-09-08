@@ -1271,7 +1271,13 @@ func checkTrain(field *schemapb.FieldSchema, indexParams map[string]string) erro
 		return err
 	}
 
-	ok := adapter.CheckTrain(indexParams)
+	ok := adapter.CheckValidDataType(field.GetDataType())
+	if !ok {
+		log.Warn("Field data type don't support the index build type", zap.String("fieldDataType", field.GetDataType().String()), zap.String("indexType", indexType))
+		return fmt.Errorf("field data type %s don't support the index build type %s", field.GetDataType().String(), indexType)
+	}
+
+	ok = adapter.CheckTrain(indexParams)
 	if !ok {
 		log.Warn("Create index with invalid params", zap.Any("index_params", indexParams))
 		return fmt.Errorf("invalid index params: %v", indexParams)
@@ -1305,7 +1311,22 @@ func (cit *createIndexTask) PreExecute(ctx context.Context) error {
 		return fmt.Errorf("failed to parse index params: %s", err)
 	}
 
-	return checkTrain(field, indexParams)
+	err = checkTrain(field, indexParams)
+	if err != nil {
+		return err
+	}
+
+	newIndexParams := make([]*commonpb.KeyValuePair, 0)
+	for k, v := range indexParams {
+		newIndexParams = append(newIndexParams, &commonpb.KeyValuePair{
+			Key:   k,
+			Value: v,
+		})
+	}
+
+	cit.ExtraParams = newIndexParams
+
+	return nil
 }
 
 func (cit *createIndexTask) Execute(ctx context.Context) error {

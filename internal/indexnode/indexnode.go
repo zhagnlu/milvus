@@ -17,11 +17,12 @@
 package indexnode
 
 /*
-#cgo pkg-config: milvus_indexbuilder
+#cgo pkg-config: milvus_indexbuilder milvus_common
 
 #include <stdlib.h>
 #include <stdint.h>
 #include "indexbuilder/init_c.h"
+#include "common/init_c.h"
 */
 import "C"
 import (
@@ -31,7 +32,9 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -153,6 +156,34 @@ func (i *IndexNode) initKnowhere() {
 	// override segcore index slice size
 	cIndexSliceSize := C.int64_t(Params.CommonCfg.IndexSliceSize)
 	C.IndexBuilderSetIndexSliceSize(cIndexSliceSize)
+
+	//_, b, _, _ := runtime.Caller(0)
+	//LocalRootPath := filepath.Dir(b)
+
+	b, _ := os.Getwd()
+	LocalRootPath := filepath.Dir(b) + "/" + filepath.Base(b) + "/" + "data/"
+	CLocalRootPath := C.CString(LocalRootPath)
+	C.LocalRootPathInit(CLocalRootPath)
+	C.free(unsafe.Pointer(CLocalRootPath))
+
+	CMinioAddress := C.CString(Params.MinioCfg.Address)
+	C.MinioAddressInit(CMinioAddress)
+	C.free(unsafe.Pointer(CMinioAddress))
+
+	CMinioAccessKey := C.CString(Params.MinioCfg.AccessKeyID)
+	C.MinioAccessKeyInit(CMinioAccessKey)
+	C.free(unsafe.Pointer(CMinioAccessKey))
+
+	CMinioAccessValue := C.CString(Params.MinioCfg.SecretAccessKey)
+	C.MinioAccessValueInit(CMinioAccessValue)
+	C.free(unsafe.Pointer(CMinioAccessValue))
+
+	CUseSSL := C.bool(Params.MinioCfg.UseSSL)
+	C.MinioSSLInit(CUseSSL)
+
+	CMinioBucketName := C.CString(strings.TrimLeft(Params.MinioCfg.BucketName, "/"))
+	C.MinioBucketNameInit(CMinioBucketName)
+	C.free(unsafe.Pointer(CMinioBucketName))
 }
 
 func (i *IndexNode) initSession() error {

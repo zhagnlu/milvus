@@ -690,6 +690,7 @@ func (i *IndexCoord) GetIndexInfos(ctx context.Context, req *indexpb.GetIndexInf
 						IndexParams:    i.metaTable.GetIndexParams(segIdx.CollectionID, segIdx.IndexID),
 						IndexFilePaths: segIdx.IndexFilePaths,
 						SerializedSize: segIdx.IndexSize,
+						IndexVersion:   segIdx.IndexVersion,
 					})
 			}
 		}
@@ -698,6 +699,7 @@ func (i *IndexCoord) GetIndexInfos(ctx context.Context, req *indexpb.GetIndexInf
 	log.Info("IndexCoord GetIndexFilePaths ", zap.Int("segIDs num", len(req.SegmentIDs)),
 		zap.Int("file path num", len(ret.SegmentInfo)), zap.Any("ret ", ret.SegmentInfo))
 
+	log.Debug("index coorrd get index infos", zap.Any("res", ret))
 	return ret, nil
 }
 

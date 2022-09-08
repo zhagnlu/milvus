@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
 	"path"
 	"runtime"
 	"runtime/debug"
@@ -251,6 +252,12 @@ func (loader *segmentLoader) loadFiles(segment *Segment,
 		for _, fieldBinlog := range loadInfo.BinlogPaths {
 			fieldID := fieldBinlog.FieldID
 			if indexInfo, ok := fieldID2IndexInfo[fieldID]; ok {
+				// TODO:: ugly
+				indexInfo.IndexParams = append(indexInfo.IndexParams, &commonpb.KeyValuePair{
+					Key:   "count",
+					Value: strconv.FormatInt(loadInfo.NumOfRows, 10),
+				})
+
 				fieldInfo := &IndexedFieldInfo{
 					fieldBinlog: fieldBinlog,
 					indexInfo:   indexInfo,
@@ -465,30 +472,45 @@ func (loader *segmentLoader) loadFieldIndexData(segment *Segment, indexInfo *que
 	futures := make([]*concurrency.Future, 0, len(indexInfo.IndexFilePaths))
 	indexCodec := storage.NewIndexFileBinlogCodec()
 
-	for _, p := range indexInfo.IndexFilePaths {
-		indexPath := p
+	for _, indexPath := range indexInfo.IndexFilePaths {
 		if path.Base(indexPath) != storage.IndexParamsKey {
-			indexFuture := loader.cpuPool.Submit(func() (interface{}, error) {
-				indexBlobFuture := loader.ioPool.Submit(func() (interface{}, error) {
-					log.Debug("load index file", zap.String("path", indexPath))
-					return loader.cm.Read(indexPath)
-				})
-
-				indexBlob, err := indexBlobFuture.Await()
-				if err != nil {
-					return nil, err
-				}
-
-				data, _, _, _, err := indexCodec.Deserialize([]*storage.Blob{{Key: path.Base(indexPath), Value: indexBlob.([]byte)}})
-				return data, err
-			})
-
-			futures = append(futures, indexFuture)
 			filteredPaths = append(filteredPaths, indexPath)
 		}
 	}
 
-	err := concurrency.AwaitAll(futures...)
+	// 2. use index bytes and index path to update segment
+	indexInfo.IndexFilePaths = filteredPaths
+	fieldType, err := loader.getFieldType(segment, indexInfo.FieldID)
+	if err != nil {
+		return err
+	}
+
+	indexParams := funcutil.KeyValuePair2Map(indexInfo.IndexParams)
+	if indexParams["index_type"] == indexparamcheck.IndexDISKANN {
+		return segment.segmentLoadIndexData(nil, indexInfo, fieldType)
+	}
+
+	for _, p := range indexInfo.IndexFilePaths {
+		indexPath := p
+		indexFuture := loader.cpuPool.Submit(func() (interface{}, error) {
+			indexBlobFuture := loader.ioPool.Submit(func() (interface{}, error) {
+				log.Debug("load index file", zap.String("path", indexPath))
+				return loader.cm.Read(indexPath)
+			})
+
+			indexBlob, err := indexBlobFuture.Await()
+			if err != nil {
+				return nil, err
+			}
+
+			data, _, _, _, err := indexCodec.Deserialize([]*storage.Blob{{Key: path.Base(indexPath), Value: indexBlob.([]byte)}})
+			return data, err
+		})
+
+		futures = append(futures, indexFuture)
+	}
+
+	err = concurrency.AwaitAll(futures...)
 	if err != nil {
 		return err
 	}
@@ -498,12 +520,6 @@ func (loader *segmentLoader) loadFieldIndexData(segment *Segment, indexInfo *que
 		indexBuffer = append(indexBuffer, blobs[0].Value)
 	}
 
-	// 2. use index bytes and index path to update segment
-	indexInfo.IndexFilePaths = filteredPaths
-	fieldType, err := loader.getFieldType(segment, indexInfo.FieldID)
-	if err != nil {
-		return err
-	}
 	return segment.segmentLoadIndexData(indexBuffer, indexInfo, fieldType)
 }
 
@@ -781,6 +797,15 @@ func JoinIDPath(ids ...UniqueID) string {
 	return path.Join(idStr...)
 }
 
+func getFieldSizeFromFieldBinlog(fieldBinlog *datapb.FieldBinlog) int64 {
+	fieldSize := int64(0)
+	for _, binlog := range fieldBinlog.Binlogs {
+		fieldSize += binlog.LogSize
+	}
+
+	return fieldSize
+}
+
 func (loader *segmentLoader) checkSegmentSize(collectionID UniqueID, segmentLoadInfos []*querypb.SegmentLoadInfo, concurrency int) error {
 	usedMem := metricsinfo.GetUsedMemoryCount()
 	totalMem := metricsinfo.GetMemoryCount()
@@ -794,11 +819,54 @@ func (loader *segmentLoader) checkSegmentSize(collectionID UniqueID, segmentLoad
 
 	usedMemAfterLoad := usedMem
 	maxSegmentSize := uint64(0)
+
+	localUsedSize, err := GetLocalUsedSize()
+	if err != nil {
+		return fmt.Errorf("get local used size failed, collectionID = %d", collectionID)
+	}
+	usedLocalSizeAfterLoad := uint64(localUsedSize)
+
 	for _, loadInfo := range segmentLoadInfos {
-		segmentSize := uint64(loadInfo.SegmentSize)
-		usedMemAfterLoad += segmentSize
-		if segmentSize > maxSegmentSize {
-			maxSegmentSize = segmentSize
+		oldUsedMem := usedMemAfterLoad
+		vecFieldID2IndexInfo := make(map[int64]*querypb.FieldIndexInfo)
+		for _, fieldIndexInfo := range loadInfo.IndexInfos {
+			if fieldIndexInfo.EnableIndex {
+				fieldID := fieldIndexInfo.FieldID
+				vecFieldID2IndexInfo[fieldID] = fieldIndexInfo
+			}
+		}
+
+		for _, fieldBinlog := range loadInfo.BinlogPaths {
+			fieldID := fieldBinlog.FieldID
+			if fieldIndexInfo, ok := vecFieldID2IndexInfo[fieldID]; ok {
+				indexType, err := funcutil.GetAttrByKeyFromRepeatedKV("index_type", fieldIndexInfo.IndexParams)
+				if err != nil {
+					return fmt.Errorf("index type not exist in index params, collectionID = %d, segmentID = %d, buildID = %d",
+						loadInfo.CollectionID, loadInfo.SegmentID, fieldIndexInfo.BuildID)
+				}
+				if indexType == indexparamcheck.IndexDISKANN {
+					usedMemAfterLoad += uint64(fieldIndexInfo.IndexSize / 6)
+					usedLocalSizeAfterLoad += uint64(fieldIndexInfo.IndexSize * 5 / 6)
+				} else {
+					usedMemAfterLoad += uint64(fieldIndexInfo.IndexSize)
+				}
+			} else {
+				usedMemAfterLoad += uint64(getFieldSizeFromFieldBinlog(fieldBinlog))
+			}
+		}
+
+		// get size of state data
+		for _, fieldBinlog := range loadInfo.Statslogs {
+			usedMemAfterLoad += uint64(getFieldSizeFromFieldBinlog(fieldBinlog))
+		}
+
+		// get size of delete data
+		for _, fieldBinlog := range loadInfo.Deltalogs {
+			usedMemAfterLoad += uint64(getFieldSizeFromFieldBinlog(fieldBinlog))
+		}
+
+		if usedMemAfterLoad-oldUsedMem > maxSegmentSize {
+			maxSegmentSize = usedMemAfterLoad - oldUsedMem
 		}
 	}
 
@@ -807,15 +875,16 @@ func (loader *segmentLoader) checkSegmentSize(collectionID UniqueID, segmentLoad
 	}
 
 	// when load segment, data will be copied from go memory to c++ memory
-	loadingUsage := usedMemAfterLoad + uint64(
+	memLoadingUsage := usedMemAfterLoad + uint64(
 		float64(maxSegmentSize)*float64(concurrency)*Params.QueryNodeCfg.LoadMemoryUsageFactor)
-	log.Debug("predict memory usage while loading (in MiB)",
+	log.Debug("predict memory and disk usage while loading (in MiB)",
 		zap.Int64("collectionID", collectionID),
 		zap.Int("concurrency", concurrency),
-		zap.Uint64("usage", toMB(loadingUsage)),
-		zap.Uint64("usageAfterLoad", toMB(usedMemAfterLoad)))
+		zap.Uint64("memUsage", toMB(memLoadingUsage)),
+		zap.Uint64("memUsageAfterLoad", toMB(usedMemAfterLoad)),
+		zap.Uint64("diskUsageAfterLoad", toMB(usedLocalSizeAfterLoad)))
 
-	if loadingUsage > uint64(float64(totalMem)*Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage) {
+	if memLoadingUsage > uint64(float64(totalMem)*Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage) {
 		return fmt.Errorf("load segment failed, OOM if load, collectionID = %d, maxSegmentSize = %v MB, concurrency = %d, usedMemAfterLoad = %v MB, totalMem = %v MB, thresholdFactor = %f",
 			collectionID,
 			toMB(maxSegmentSize),
@@ -823,6 +892,14 @@ func (loader *segmentLoader) checkSegmentSize(collectionID UniqueID, segmentLoad
 			toMB(usedMemAfterLoad),
 			toMB(totalMem),
 			Params.QueryNodeCfg.OverloadedMemoryThresholdPercentage)
+	}
+
+	if usedLocalSizeAfterLoad > uint64(float64(Params.QueryNodeCfg.DiskCapacityLimit)*Params.QueryNodeCfg.MaxDiskUsagePercentage) {
+		return fmt.Errorf("load segment failed, disk space is not enough, collectionID = %d, usedDiskAfterLoad = %v MB, totalDisk = %v MB, thresholdFactor = %f",
+			collectionID,
+			toMB(usedLocalSizeAfterLoad),
+			toMB(uint64(Params.QueryNodeCfg.DiskCapacityLimit)),
+			Params.QueryNodeCfg.MaxDiskUsagePercentage)
 	}
 
 	return nil

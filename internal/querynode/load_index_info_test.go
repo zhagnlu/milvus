@@ -53,7 +53,7 @@ func TestLoadIndexInfo(t *testing.T) {
 	}
 
 	fieldType := schemapb.DataType_FloatVector
-	err = loadIndexInfo.appendIndexInfo(indexBytes, indexInfo, fieldType)
+	err = loadIndexInfo.appendLoadIndexInfo(indexBytes, indexInfo, fieldType)
 	assert.NoError(t, err)
 
 	deleteLoadIndexInfo(loadIndexInfo)

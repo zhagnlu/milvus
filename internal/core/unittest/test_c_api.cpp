@@ -35,6 +35,7 @@ namespace chrono = std::chrono;
 using namespace milvus;
 using namespace milvus::segcore;
 using namespace knowhere;
+using milvus::Index::LoadIndexInfo;
 
 namespace {
 const int DIM = 16;
@@ -1398,8 +1399,12 @@ TEST(CApiTest, LoadIndexInfo) {
     std::string index_param_value2 = "cpu";
     status = AppendIndexParam(c_load_index_info, index_param_key2.data(), index_param_value2.data());
     assert(status.error_code == Success);
+    std::string index_param_key3 = knowhere::meta::METRIC_TYPE;
+    std::string index_param_value3 = knowhere::metric::L2;
+    status = AppendIndexParam(c_load_index_info, index_param_key3.data(), index_param_value3.data());
+    assert(status.error_code == Success);
     std::string field_name = "field0";
-    status = AppendFieldInfo(c_load_index_info, 0, CDataType::FloatVector);
+    status = AppendFieldInfo(c_load_index_info, 0, 0, 0, 0, CDataType::FloatVector);
     assert(status.error_code == Success);
     status = AppendIndex(c_load_index_info, c_binary_set);
     assert(status.error_code == Success);
@@ -1434,12 +1439,13 @@ TEST(CApiTest, LoadIndex_Search) {
     auto binary_set = indexing->Serialize(conf);
 
     // fill loadIndexInfo
-    LoadIndexInfo load_index_info;
+    milvus::Index::LoadIndexInfo load_index_info;
     auto& index_params = load_index_info.index_params;
     index_params["index_type"] = "IVF_PQ";
     index_params["index_mode"] = "CPU";
     auto mode = knowhere::IndexMode::MODE_CPU;
-    load_index_info.index = knowhere::VecIndexFactory::GetInstance().CreateVecIndex(index_params["index_type"], mode);
+    load_index_info.index =
+        std::make_shared<milvus::Index::VectorMemIndex>(index_params["index_type"], knowhere::metric::L2, mode);
     load_index_info.index->Load(binary_set);
 
     // search
@@ -1555,7 +1561,7 @@ TEST(CApiTest, Indexing_Without_Predicate) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -1680,7 +1686,7 @@ TEST(CApiTest, Indexing_Expr_Without_Predicate) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -1823,7 +1829,7 @@ TEST(CApiTest, Indexing_With_float_Predicate_Range) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -1980,7 +1986,7 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Range) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -2121,7 +2127,7 @@ TEST(CApiTest, Indexing_With_float_Predicate_Term) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -2271,7 +2277,7 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Term) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -2414,7 +2420,7 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Range) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -2570,7 +2576,7 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Range) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -2713,7 +2719,7 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Term) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -2879,7 +2885,7 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Term) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::BinaryVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::BinaryVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load index for vec field, load raw data for scalar filed
@@ -3058,7 +3064,7 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     auto load_index_info = (LoadIndexInfo*)c_load_index_info;
@@ -3342,7 +3348,7 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     AppendIndexParam(c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
     AppendIndexParam(c_load_index_info, index_mode_key.c_str(), index_mode_value.c_str());
     AppendIndexParam(c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
-    AppendFieldInfo(c_load_index_info, 100, CDataType::FloatVector);
+    AppendFieldInfo(c_load_index_info, 0, 0, 0, 100, CDataType::FloatVector);
     AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
 
     // load vec index
@@ -3451,61 +3457,61 @@ TEST(CApiTest, RetriveScalarFieldFromSealedSegmentWithIndex) {
     // load index for int8 field
     auto age8_col = raw_data.get_col<int8_t>(i8_fid);
     GenScalarIndexing(N, age8_col.data());
-    auto age8_index = milvus::scalar::CreateScalarIndexSort<int8_t>();
+    auto age8_index = milvus::Index::CreateScalarIndexSort<int8_t>();
     age8_index->Build(N, age8_col.data());
     load_index_info.field_id = i8_fid.get();
-    load_index_info.field_type = Int8;
-    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int8_t>>(age8_index.release());
+    load_index_info.field_type = DataType::INT8;
+    load_index_info.index = std::shared_ptr<milvus::Index::ScalarIndexSort<int8_t>>(age8_index.get());
     segment->LoadIndex(load_index_info);
 
     // load index for 16 field
     auto age16_col = raw_data.get_col<int16_t>(i16_fid);
     GenScalarIndexing(N, age16_col.data());
-    auto age16_index = milvus::scalar::CreateScalarIndexSort<int16_t>();
+    auto age16_index = milvus::Index::CreateScalarIndexSort<int16_t>();
     age16_index->Build(N, age16_col.data());
     load_index_info.field_id = i16_fid.get();
-    load_index_info.field_type = Int16;
-    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int16_t>>(age16_index.release());
+    load_index_info.field_type = DataType::INT16;
+    load_index_info.index = std::shared_ptr<milvus::Index::ScalarIndexSort<int16_t>>(age16_index.get());
     segment->LoadIndex(load_index_info);
 
     // load index for int32 field
     auto age32_col = raw_data.get_col<int32_t>(i32_fid);
     GenScalarIndexing(N, age32_col.data());
-    auto age32_index = milvus::scalar::CreateScalarIndexSort<int32_t>();
+    auto age32_index = milvus::Index::CreateScalarIndexSort<int32_t>();
     age32_index->Build(N, age32_col.data());
     load_index_info.field_id = i32_fid.get();
-    load_index_info.field_type = Int32;
-    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int32_t>>(age32_index.release());
+    load_index_info.field_type = DataType::INT32;
+    load_index_info.index = std::shared_ptr<milvus::Index::ScalarIndexSort<int32_t>>(age32_index.get());
     segment->LoadIndex(load_index_info);
 
     // load index for int64 field
     auto age64_col = raw_data.get_col<int64_t>(i64_fid);
     GenScalarIndexing(N, age64_col.data());
-    auto age64_index = milvus::scalar::CreateScalarIndexSort<int64_t>();
+    auto age64_index = milvus::Index::CreateScalarIndexSort<int64_t>();
     age64_index->Build(N, age64_col.data());
     load_index_info.field_id = i64_fid.get();
-    load_index_info.field_type = Int64;
-    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<int64_t>>(age64_index.release());
+    load_index_info.field_type = DataType::INT64;
+    load_index_info.index = std::shared_ptr<milvus::Index::ScalarIndexSort<int64_t>>(age64_index.get());
     segment->LoadIndex(load_index_info);
 
     // load index for float field
     auto age_float_col = raw_data.get_col<float>(float_fid);
     GenScalarIndexing(N, age_float_col.data());
-    auto age_float_index = milvus::scalar::CreateScalarIndexSort<float>();
+    auto age_float_index = milvus::Index::CreateScalarIndexSort<float>();
     age_float_index->Build(N, age_float_col.data());
     load_index_info.field_id = float_fid.get();
-    load_index_info.field_type = Float;
-    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<float>>(age_float_index.release());
+    load_index_info.field_type = DataType::FLOAT;
+    load_index_info.index = std::shared_ptr<milvus::Index::ScalarIndexSort<float>>(age_float_index.get());
     segment->LoadIndex(load_index_info);
 
     // load index for double field
     auto age_double_col = raw_data.get_col<double>(double_fid);
     GenScalarIndexing(N, age_double_col.data());
-    auto age_double_index = milvus::scalar::CreateScalarIndexSort<double>();
+    auto age_double_index = milvus::Index::CreateScalarIndexSort<double>();
     age_double_index->Build(N, age_double_col.data());
     load_index_info.field_id = double_fid.get();
-    load_index_info.field_type = Float;
-    load_index_info.index = std::shared_ptr<milvus::scalar::ScalarIndexSort<double>>(age_double_index.release());
+    load_index_info.field_type = DataType::FLOAT;
+    load_index_info.index = std::shared_ptr<milvus::Index::ScalarIndexSort<double>>(age_double_index.get());
     segment->LoadIndex(load_index_info);
 
     // create retrieve plan

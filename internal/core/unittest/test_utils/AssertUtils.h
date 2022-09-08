@@ -15,7 +15,7 @@
 #include <vector>
 #include <memory>
 
-using milvus::scalar::ScalarIndexPtr;
+using milvus::Index::ScalarIndexPtr;
 
 namespace {
 

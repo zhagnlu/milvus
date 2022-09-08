@@ -25,3 +25,14 @@ const milvus::PkType INVALID_PK;  // of std::monostate if not set.
 // TODO: default field start id, could get from config.yaml
 const int64_t START_USER_FIELDID = 100;
 const char MAX_LENGTH[] = "max_length";
+
+// const fieldID (rowID and timestamp)
+const milvus::FieldId RowFieldID = milvus::FieldId(0);
+const milvus::FieldId TimestampFieldID = milvus::FieldId(1);
+
+// fill followed extra info to binlog file
+const char ORIGIN_SIZE_KEY[] = "original_size";
+const char INDEX_BUILD_ID_KEY[] = "indexBuildID";
+
+const char INDEX_ROOT_PATH[] = "index_files";
+const char RAWDATA_ROOT_PATH[] = "raw_datas";

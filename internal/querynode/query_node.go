@@ -17,11 +17,12 @@
 package querynode
 
 /*
-#cgo pkg-config: milvus_segcore
+#cgo pkg-config: milvus_segcore milvus_common
 
 #include "segcore/collection_c.h"
 #include "segcore/segment_c.h"
 #include "segcore/segcore_init_c.h"
+#include "common/init_c.h"
 
 */
 import "C"
@@ -34,6 +35,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -198,6 +200,31 @@ func (node *QueryNode) InitSegcore() {
 	// override segcore index slice size
 	cIndexSliceSize := C.int64_t(Params.CommonCfg.IndexSliceSize)
 	C.SegcoreSetIndexSliceSize(cIndexSliceSize)
+
+	b, _ := os.Getwd()
+	LocalRootPath := filepath.Dir(b) + "/" + filepath.Base(b) + "/data/"
+	CLocalRootPath := C.CString(LocalRootPath)
+	C.LocalRootPathInit(CLocalRootPath)
+	C.free(unsafe.Pointer(CLocalRootPath))
+
+	CMinioAddress := C.CString(Params.MinioCfg.Address)
+	C.MinioAddressInit(CMinioAddress)
+	C.free(unsafe.Pointer(CMinioAddress))
+
+	CMinioAccessKey := C.CString(Params.MinioCfg.AccessKeyID)
+	C.MinioAccessKeyInit(CMinioAccessKey)
+	C.free(unsafe.Pointer(CMinioAccessKey))
+
+	CMinioAccessValue := C.CString(Params.MinioCfg.SecretAccessKey)
+	C.MinioAccessValueInit(CMinioAccessValue)
+	C.free(unsafe.Pointer(CMinioAccessValue))
+
+	CUseSSL := C.bool(Params.MinioCfg.UseSSL)
+	C.MinioSSLInit(CUseSSL)
+
+	CMinioBucketName := C.CString(strings.TrimLeft(Params.MinioCfg.BucketName, "/"))
+	C.MinioBucketNameInit(CMinioBucketName)
+	C.free(unsafe.Pointer(CMinioBucketName))
 }
 
 // Init function init historical and streaming module to manage segments
