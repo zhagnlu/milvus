@@ -82,7 +82,7 @@ MinioChunkManager::MinioChunkManager(const std::string& endpoint,
 
     client_ = std::make_shared<Aws::S3::S3Client>(
         Aws::Auth::AWSCredentials(ConvertToAwsString(access_key), ConvertToAwsString(access_value)), config,
-        Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Always, false);
+        Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
 
     LOG_SEGCORE_INFO_C << "init MinioChunkManager with parameter[endpoint: '" << endpoint << "', access_key:'"
                        << access_key << "', access_value:'" << access_value << "', default_bucket_name:'" << bucket_name
