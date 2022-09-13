@@ -23,18 +23,19 @@ macro ( build_aws_sdk_s3 )
 
     set( AWS_SDK_BUILD_COMMAND make )
     set( AWS_SDK_INSTALL_COMMAND make install )
-
-    set (AWS_SDK_S3_CMAKE_ARGS 
+    set( AWS_SDK_S3_CMAKE_ARGS
         "-DCMAKE_BUILD_TYPE=Release"
-        "-DBUILD_ONLY=s3"
-		"-DENABLE_TESTING=OFF"
+        "-DENABLE_TESTING=OFF"
+        "-DBUILD_ONLY=s3|sts"
         "-DAUTORUN_UNIT_TESTS=OFF"
         "-DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}" )
+    #list(APPEND AWS_SDK_S3_CMAKE_ARGS "-DBUILD_ONLY=s3;sts")
 
     ExternalProject_Add(aws_sdk_s3_ep
             URL                    ${AWS_SDK_SOURCE_URL}
             URL_MD5                ${AWS_SDK_MD5}
             BINARY_DIR             aws-s3-bin
+            LIST_SEPARATOR         "|"
             PREFIX                 ${CMAKE_BINARY_DIR}/3rdparty_download/aws-sdk-subbuild
             BUILD_COMMAND          ${AWS_SDK_BUILD_COMMAND}
             INSTALL_COMMAND        ${AWS_SDK_INSTALL_COMMAND}

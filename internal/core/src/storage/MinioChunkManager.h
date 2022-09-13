@@ -17,6 +17,7 @@
 #pragma once
 
 #include <aws/core/Aws.h>
+#include <aws/core/auth/AWSCredentials.h>
 #include <aws/s3/S3Client.h>
 #include <map>
 #include <memory>
@@ -38,7 +39,8 @@ class MinioChunkManager : public RemoteChunkManager {
                                const std::string& access_key,
                                const std::string& access_value,
                                const std::string& default_bucket_name,
-                               bool sercure = false);
+                               bool sercure = false,
+                               bool use_iam = false);
 
     MinioChunkManager(const MinioChunkManager&);
     MinioChunkManager&
@@ -53,7 +55,7 @@ class MinioChunkManager : public RemoteChunkManager {
         static MinioChunkManager instance(
             config::ChunkMangerConfig::GetAddress(), config::ChunkMangerConfig::GetAccessKey(),
             config::ChunkMangerConfig::GetAccessValue(), config::ChunkMangerConfig::GetBucketName(),
-            config::ChunkMangerConfig::GetUseSSL());
+            config::ChunkMangerConfig::GetUseSSL(), config::ChunkMangerConfig::GetUseIAM());
         return instance;
     }
 
@@ -125,6 +127,9 @@ class MinioChunkManager : public RemoteChunkManager {
     GetObjectBuffer(const std::string& bucket_name, const std::string& object_name, void* buf, uint64_t size);
     std::vector<std::string>
     ListObjects(const char* bucket_name, const char* prefix = NULL);
+
+    Aws::Auth::AWSCredentials
+    GetIAMCred();
 
  private:
     Aws::SDKOptions sdk_options_;
