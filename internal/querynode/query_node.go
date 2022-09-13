@@ -222,6 +222,9 @@ func (node *QueryNode) InitSegcore() {
 	CUseSSL := C.bool(Params.MinioCfg.UseSSL)
 	C.MinioSSLInit(CUseSSL)
 
+	CUseIAM := C.bool(Params.MinioCfg.UseIAM)
+	C.MinioIAMInit(CUseIAM)
+
 	CMinioBucketName := C.CString(strings.TrimLeft(Params.MinioCfg.BucketName, "/"))
 	C.MinioBucketNameInit(CMinioBucketName)
 	C.free(unsafe.Pointer(CMinioBucketName))
