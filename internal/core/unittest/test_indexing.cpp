@@ -322,6 +322,7 @@ class IndexTest : public ::testing::TestWithParam<Param> {
         auto accessKey = minioConfig["accessKeyID"].as<std::string>();
         auto accessValue = minioConfig["secretAccessKey"].as<std::string>();
         auto useSSL = minioConfig["useSSL"].as<bool>();
+        auto useSSL = minioConfig["useIAM"].as<bool>();
         auto bucketName = minioConfig["bucketName"].as<std::string>();
 
         config::ChunkMangerConfig::SetAddress(endpoint);
@@ -329,6 +330,7 @@ class IndexTest : public ::testing::TestWithParam<Param> {
         config::ChunkMangerConfig::SetAccessValue(accessValue);
         config::ChunkMangerConfig::SetBucketName(bucketName);
         config::ChunkMangerConfig::SetUseSSL(useSSL);
+        config::ChunkMangerConfig::SetIAM(useIAM);
         auto& chunk_manager = milvus::storage::MinioChunkManager::GetInstance();
         if (!chunk_manager.BucketExists(bucketName)) {
             chunk_manager.CreateBucket(bucketName);
