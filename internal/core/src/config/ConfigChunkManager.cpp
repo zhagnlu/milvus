@@ -22,8 +22,10 @@ std::string MINIO_ADDRESS;
 std::string MINIO_ACCESS_KEY;
 std::string MINIO_ACCESS_VALUE;
 std::string MINIO_BUCKET_NAME;
+std::string DEFAULT_STS_ROLE_ENDPOINT = "https://sts.amazonaws.com";
 bool MINIO_USE_SSL = false;
 std::string LOCAL_BUCKET_NAME = "/tmp";
+bool MINIO_USE_IAM = false;
 
 void
 ChunkMangerConfig::SetAddress(const std::string& address) {
@@ -73,6 +75,21 @@ ChunkMangerConfig::SetUseSSL(bool use_ssl) {
 bool
 ChunkMangerConfig::GetUseSSL() {
     return MINIO_USE_SSL;
+}
+
+void
+ChunkMangerConfig::SetUseIAM(bool use_iam) {
+    MINIO_USE_IAM = use_iam;
+}
+
+bool
+ChunkMangerConfig::GetUseIAM() {
+    return MINIO_USE_IAM;
+}
+
+std::string
+ChunkMangerConfig::GetDefaultSTSEndpoint() {
+    return DEFAULT_STS_ROLE_ENDPOINT;
 }
 
 void

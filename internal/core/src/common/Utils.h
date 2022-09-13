@@ -12,6 +12,8 @@
 #pragma once
 
 #include <string>
+#include <fstream>
+#include <sstream>
 #include "exceptions/EasyAssert.h"
 #include "config/ConfigChunkManager.h"
 #include "common/Consts.h"
@@ -94,6 +96,17 @@ upper_div(int64_t value, int64_t align) {
     Assert(align > 0);
     auto groups = (value + align - 1) / align;
     return groups;
+}
+
+inline std::string
+read_string_from_file(const std::string& file_path) {
+    const std::ifstream file(file_path, std::ios_base::binary);
+    if (file.fail()) {
+        throw std::runtime_error("failed to open file");
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
 }
 
 }  // namespace milvus

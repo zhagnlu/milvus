@@ -16,6 +16,9 @@
 
 #include <fstream>
 #include <aws/core/auth/AWSCredentials.h>
+#include <aws/core/auth/STSCredentialsProvider.h>
+#include <aws/core/auth/AWSCredentialsProviderChain.h>
+#include <aws/core/internal/AWSHttpResourceClient.h>
 #include <aws/s3/model/CreateBucketRequest.h>
 #include <aws/s3/model/DeleteBucketRequest.h>
 #include <aws/s3/model/DeleteObjectRequest.h>
@@ -23,9 +26,12 @@
 #include <aws/s3/model/ListObjectsRequest.h>
 #include <aws/s3/model/GetObjectRequest.h>
 #include <aws/s3/model/PutObjectRequest.h>
+#include <aws/sts/model/AssumeRoleWithWebIdentityRequest.h>
+#include <aws/sts/STSClient.h>
 
 #include "MinioChunkManager.h"
 
+#include "common/Utils.h"
 #include "log/Log.h"
 
 #define THROWS3ERROR(FUNCTION)                                                                         \
@@ -62,11 +68,81 @@ ConvertFromAwsString(const Aws::String& aws_str) {
     return std::string(aws_str.c_str(), aws_str.size());
 }
 
+bool
+HasPrefix(const std::string str, const std::string prefix) {
+    return str.length() >= prefix.length() && str.substr(0, prefix.length()) == prefix;
+}
+
+Aws::Auth::AWSCredentials
+MinioChunkManager::GetIAMCred() {
+    Aws::Auth::AWSCredentials cred;
+
+    std::string endpoint;
+    const char* awsRegion = std::getenv("AWS_REGION");
+    if (awsRegion == NULL) {
+        endpoint = config::ChunkMangerConfig::GetDefaultSTSEndpoint();
+    } else if (HasPrefix(awsRegion, "cn-")) {
+        endpoint = std::string("https://sts.") + awsRegion + ".amazonaws.com.cn";
+    } else {
+        endpoint = std::string("https://sts.") + awsRegion + ".amazonaws.com";
+    }
+
+    std::string webIdenToken;
+    const char* tokenFilePath = std::getenv("AWS_WEB_IDENTITY_TOKEN_FILE");
+    if (tokenFilePath == NULL) {
+        std::stringstream err_msg;
+        err_msg << "Error: GetIAMCred: AWS_WEB_IDENTITY_TOKEN_FILE not found in env";
+        throw ConfigException(err_msg.str());
+    }
+    webIdenToken = read_string_from_file(tokenFilePath);
+
+    const char* roleARN = std::getenv("AWS_ROLE_ARN");
+    if (roleARN == NULL) {
+        std::stringstream err_msg;
+        err_msg << "Error: GetIAMCred: AWS_ROLE_ARN not found in env";
+        throw ConfigException(err_msg.str());
+    }
+
+    const char* sessionName = std::getenv("AWS_ROLE_SESSION_NAME");
+
+    Aws::Client::ClientConfiguration clientConfig;
+    clientConfig.endpointOverride = ConvertToAwsString(endpoint);
+    // Aws::STS::STSClient sts(clientConfig);
+    // Aws::STS::Model::AssumeRoleWithWebIdentityRequest request;
+    // request.SetRoleArn(roleARN);
+    // request.SetWebIdentityToken(webIdenToken.c_str());
+    // if (sessionName != NULL) {
+    // request.SetRoleSessionName(sessionName);
+    //}
+    // auto outcome = sts.AssumeRoleWithWebIdentity(request);
+    // auto result = outcome.GetResult();
+    // cred = result.GetCredentials();
+    //
+    auto client = Aws::Internal::STSCredentialsClient(clientConfig);
+    Aws::Internal::STSCredentialsClient::STSAssumeRoleWithWebIdentityRequest request;
+    request.roleArn = ConvertToAwsString(roleARN);
+    request.webIdentityToken = ConvertToAwsString(webIdenToken);
+    if (sessionName != NULL) {
+        request.roleSessionName = ConvertToAwsString(sessionName);
+    } else {
+        request.roleSessionName = ConvertToAwsString("");
+    }
+    LOG_SEGCORE_INFO_C << "AssumeRoleWithWebIdentityRequest: {roleARN: " << request.roleArn
+                       << ", webIdenToken: " << request.webIdentityToken << ", sessionName:" << request.roleSessionName
+                       << "};";
+    cred = client.GetAssumeRoleWithWebIdentityCredentials(request).creds;
+    LOG_SEGCORE_INFO_C << "AWSCredentials result: { access_id:" << cred.GetAWSAccessKeyId()
+                       << ", access_key:" << cred.GetAWSSecretKey() << ", token:" << cred.GetSessionToken() << "}";
+
+    return cred;
+}  // namespace milvus::storage
+
 MinioChunkManager::MinioChunkManager(const std::string& endpoint,
                                      const std::string& access_key,
                                      const std::string& access_value,
                                      const std::string& bucket_name,
-                                     bool secure)
+                                     bool secure,
+                                     bool use_iam)
     : default_bucket_name_(bucket_name) {
     Aws::InitAPI(sdk_options_);
     Aws::Client::ClientConfiguration config;
@@ -80,9 +156,20 @@ MinioChunkManager::MinioChunkManager(const std::string& endpoint,
         config.verifySSL = false;
     }
 
-    client_ = std::make_shared<Aws::S3::S3Client>(
-        Aws::Auth::AWSCredentials(ConvertToAwsString(access_key), ConvertToAwsString(access_value)), config,
-        Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
+    Aws::Auth::AWSCredentials cred;
+    if (use_iam) {
+        auto provider = std::make_shared<Aws::Auth::STSAssumeRoleWebIdentityCredentialsProvider>();
+        client_ = std::make_shared<Aws::S3::S3Client>(provider, config,
+                                                      Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
+        LOG_SEGCORE_INFO_C << "use iam mode, credentials{ access_id:"
+                           << provider->GetAWSCredentials().GetAWSAccessKeyId()
+                           << " access_key:" << provider->GetAWSCredentials().GetAWSSecretKey()
+                           << " token:" << provider->GetAWSCredentials().GetSessionToken() << "}";
+    } else {
+        client_ = std::make_shared<Aws::S3::S3Client>(
+            Aws::Auth::AWSCredentials(ConvertToAwsString(access_key), ConvertToAwsString(access_value)), config,
+            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
+    }
 
     LOG_SEGCORE_INFO_C << "init MinioChunkManager with parameter[endpoint: '" << endpoint << "', access_key:'"
                        << access_key << "', access_value:'" << access_value << "', default_bucket_name:'" << bucket_name

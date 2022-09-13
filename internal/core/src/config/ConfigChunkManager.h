@@ -56,6 +56,15 @@ class ChunkMangerConfig {
 
     static std::string
     GetLocalBucketName();
+
+    static bool
+    GetUseIAM();
+
+    static void
+    SetUseIAM(bool);
+
+    static std::string
+    GetDefaultSTSEndpoint();
 };
 
 }  // namespace milvus::config

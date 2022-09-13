@@ -132,6 +132,14 @@ class S3ErrorException : public MinioException {
     }
 };
 
+class ConfigException : public MinioException {
+ public:
+    explicit ConfigException(const std::string& msg) : MinioException(msg) {
+    }
+    virtual ~ConfigException() {
+    }
+};
+
 class DiskANNFileManagerException : public std::runtime_error {
  public:
     explicit DiskANNFileManagerException(const std::string& msg) : std::runtime_error(msg) {
