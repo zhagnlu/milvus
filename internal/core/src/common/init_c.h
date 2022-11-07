@@ -30,9 +30,6 @@ void
 InitThreadCoreCoefficient(const int64_t);
 
 void
-InitCpuNum(const int);
-
-void
 InitLocalRootPath(const char*);
 
 #ifdef __cplusplus
