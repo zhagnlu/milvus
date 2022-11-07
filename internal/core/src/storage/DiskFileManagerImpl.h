@@ -24,10 +24,7 @@
 
 #include "storage/IndexData.h"
 #include "storage/FileManager.h"
-#include "storage/LocalChunkManager.h"
 #include "storage/MinioChunkManager.h"
-
-#include "common/Consts.h"
 
 namespace milvus::storage {
 
@@ -78,11 +75,6 @@ class DiskFileManagerImpl : public FileManagerImpl {
 
     void
     CacheIndexToDisk(std::vector<std::string> remote_files);
-
-    uint64_t
-    CacheBatchIndexFilesToDisk(const std::vector<std::string>& remote_files,
-                               const std::string& local_file_name,
-                               uint64_t local_file_init_offfset);
 
     FieldDataMeta
     GetFileDataMeta() const {

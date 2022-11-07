@@ -20,6 +20,11 @@
 
 namespace milvus {
 
+extern int64_t index_file_slice_size;
+
+void
+SetIndexSliceSize(const int64_t size);
+
 void
 Assemble(BinarySet& binarySet);
 

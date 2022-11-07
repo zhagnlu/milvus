@@ -32,9 +32,8 @@ const (
 	DefaultRetentionDuration = 3600 * 24
 
 	// DefaultIndexSliceSize defines the default slice size of index file when serializing.
-	DefaultIndexSliceSize        = 16
-	DefaultGracefulTime          = 5000 //ms
-	DefaultThreadCoreCoefficient = 50
+	DefaultIndexSliceSize = 16
+	DefaultGracefulTime   = 5000 //ms
 
 	DefaultSessionTTL        = 60 //s
 	DefaultSessionRetryTimes = 30
@@ -144,7 +143,6 @@ type commonConfig struct {
 	EntityExpirationTTL  time.Duration
 
 	IndexSliceSize           int64
-	ThreadCoreCoefficient    int64
 	MaxDegree                int64
 	SearchListSize           int64
 	PGCodeBudgetGBRatio      float64
@@ -205,7 +203,6 @@ func (p *commonConfig) init(base *BaseTable) {
 	p.initBeamWidthRatio()
 	p.initGracefulTime()
 	p.initStorageType()
-	p.initThreadCoreCoefficient()
 
 	p.initEnableAuthorization()
 
@@ -402,10 +399,6 @@ func (p *commonConfig) initSimdType() {
 
 func (p *commonConfig) initIndexSliceSize() {
 	p.IndexSliceSize = p.Base.ParseInt64WithDefault("common.indexSliceSize", DefaultIndexSliceSize)
-}
-
-func (p *commonConfig) initThreadCoreCoefficient() {
-	p.ThreadCoreCoefficient = p.Base.ParseInt64WithDefault("common.threadCoreCoefficient", DefaultThreadCoreCoefficient)
 }
 
 func (p *commonConfig) initPGCodeBudgetGBRatio() {

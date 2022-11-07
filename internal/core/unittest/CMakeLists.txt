@@ -82,7 +82,6 @@ if (LINUX)
             gtest
             gtest_main
             milvus_segcore
-            milvus_storage
             milvus_indexbuilder
             )
     install(TARGETS index_builder_test DESTINATION unittest)
@@ -95,7 +94,6 @@ add_executable(all_tests
 target_link_libraries(all_tests
         gtest
         milvus_segcore
-        milvus_storage
         milvus_indexbuilder
         pthread
         )

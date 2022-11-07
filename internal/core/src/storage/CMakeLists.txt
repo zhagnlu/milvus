@@ -33,7 +33,6 @@ set(STORAGE_FILES
     IndexData.cpp
     InsertData.cpp
     Event.cpp
-    ThreadPool.cpp
     storage_c.cpp)
 
 if(BUILD_DISK_ANN STREQUAL "ON")

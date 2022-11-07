@@ -27,9 +27,6 @@ void
 InitIndexSliceSize(const int64_t);
 
 void
-InitThreadCoreCoefficient(const int64_t);
-
-void
 InitLocalRootPath(const char*);
 
 #ifdef __cplusplus

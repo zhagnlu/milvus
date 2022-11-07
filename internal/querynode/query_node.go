@@ -53,6 +53,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/concurrency"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/internal/util/gc"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/paramtable"
@@ -214,10 +215,7 @@ func (node *QueryNode) InitSegcore() {
 	cIndexSliceSize := C.int64_t(Params.CommonCfg.IndexSliceSize)
 	C.InitIndexSliceSize(cIndexSliceSize)
 
-	cThreadCoreCoefficient := C.int64_t(Params.CommonCfg.ThreadCoreCoefficient)
-	C.InitThreadCoreCoefficient(cThreadCoreCoefficient)
-
-	initcore.InitLocalStorageConfig(&Params)
+	initcore.InitLocalStorageConfig(Params)
 }
 
 // Init function init historical and streaming module to manage segments
