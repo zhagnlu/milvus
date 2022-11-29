@@ -43,6 +43,7 @@ macro( build_arrow )
         "-DARROW_PYTHON=OFF"
         "-DARROW_WITH_RE2=OFF"
         "-DARROW_BUILD_UTILITIES=OFF"
+        #        "-DCMAKE_BUILD_TYPE=Debug"
         "-DARROW_PARQUET=ON"
         "-DPARQUET_BUILD_SHARED=OFF"
         "-DThrift_SOURCE=BUNDLED"
@@ -55,7 +56,7 @@ macro( build_arrow )
     if ( WIN32 )
         set( ARROW_CMAKE_ARGS ${ARROW_CMAKE_ARGS} "-DARROW_JEMALLOC=OFF" )
     else ()
-        set( ARROW_CMAKE_ARGS ${ARROW_CMAKE_ARGS} "-DARROW_JEMALLOC=ON" )
+        set( ARROW_CMAKE_ARGS ${ARROW_CMAKE_ARGS} "-DARROW_JEMALLOC=OFF" )
     endif ()
 
     ExternalProject_Add(

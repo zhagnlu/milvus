@@ -17,13 +17,32 @@
 #include "storage/PayloadReader.h"
 #include "exceptions/EasyAssert.h"
 
+#include "log/Log.h"
+
 namespace milvus::storage {
+
+static size_t
+getCurrentRSS() {
+    /* Linux ---------------------------------------------------- */
+    long rss = 0L;
+    FILE* fp = NULL;
+    if ((fp = fopen("/proc/self/statm", "r")) == NULL)
+        return (size_t)0L; /* Can't open? */
+    if (fscanf(fp, "%*s%ld", &rss) != 1) {
+        fclose(fp);
+        return (size_t)0L; /* Can't read? */
+    }
+    fclose(fp);
+    return (size_t)rss * (size_t)sysconf(_SC_PAGESIZE);
+}
+
 PayloadReader::PayloadReader(std::shared_ptr<PayloadInputStream> input, DataType data_type) : column_type_(data_type) {
     init(input);
 }
 
 PayloadReader::PayloadReader(const uint8_t* data, int length, DataType data_type) : column_type_(data_type) {
     auto input = std::make_shared<storage::PayloadInputStream>(data, length);
+
     init(input);
 }
 
@@ -31,17 +50,25 @@ void
 PayloadReader::init(std::shared_ptr<PayloadInputStream> input) {
     auto mem_pool = arrow::default_memory_pool();
     // TODO :: Stream read file data, avoid copying
+
     std::unique_ptr<parquet::arrow::FileReader> reader;
+
     auto st = parquet::arrow::OpenFile(input, mem_pool, &reader);
+    LOG_SEGCORE_INFO_ << "PayloadReader xxxx 222 input size " << input->GetSize().ValueOrDie()
+                      << " rss:  " << getCurrentRSS();
+
     AssertInfo(st.ok(), "failed to get arrow file reader");
     std::shared_ptr<arrow::Table> table;
     st = reader->ReadTable(&table);
+    LOG_SEGCORE_INFO_ << "PayloadReader xxxx 333 " << getCurrentRSS();
+
     AssertInfo(st.ok(), "failed to get reader data to arrow table");
     auto column = table->column(0);
     AssertInfo(column != nullptr, "returned arrow column is null");
     AssertInfo(column->chunks().size() == 1, "arrow chunk size in arrow column should be 1");
     auto array = column->chunk(0);
     AssertInfo(array != nullptr, "empty arrow array of PayloadReader");
+
     field_data_ = std::make_shared<FieldData>(array, column_type_);
 }
 

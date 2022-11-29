@@ -59,6 +59,20 @@ using ReadLock = std::shared_lock<std::shared_mutex>;
 using WriteLock = std::lock_guard<std::shared_mutex>;
 
 namespace milvus::storage {
+size_t
+getCurrentRSS() {
+    /* Linux ---------------------------------------------------- */
+    long rss = 0L;
+    FILE* fp = NULL;
+    if ((fp = fopen("/proc/self/statm", "r")) == NULL)
+        return (size_t)0L; /* Can't open? */
+    if (fscanf(fp, "%*s%ld", &rss) != 1) {
+        fclose(fp);
+        return (size_t)0L; /* Can't read? */
+    }
+    fclose(fp);
+    return (size_t)rss * (size_t)sysconf(_SC_PAGESIZE);
+}
 
 DiskFileManagerImpl::DiskFileManagerImpl(const FieldDataMeta& field_mata,
                                          const IndexMeta& index_meta,
@@ -92,6 +106,8 @@ EncodeAndUploadIndexSlice(RemoteChunkManager* remote_chunk_manager,
     indexData->SetFieldDataMeta(field_meta);
     auto serialized_index_data = indexData->serialize_to_remote_file();
     auto serialized_index_size = serialized_index_data.size();
+    std::cout << "offset" << offset << "batch_size" << batch_size << "serialized_index_size:" << serialized_index_size
+              << std::endl;
     remote_chunk_manager->Write(object_key, serialized_index_data.data(), serialized_index_size);
     return std::pair<std::string, size_t>(object_key, serialized_index_size);
 }
@@ -128,6 +144,7 @@ DiskFileManagerImpl::AddFile(const std::string& file) noexcept {
         futures.push_back(pool.Submit(EncodeAndUploadIndexSlice, rcm_.get(), buf.get(), offset, batch_size, index_meta_,
                                       field_meta_, std::string(objectKey)));
         offset += batch_size;
+        std::cout << "batch:" << batch_size << "offset:" << offset << std::endl;
     }
     for (auto& future : futures) {
         auto res = future.get();
@@ -155,6 +172,8 @@ DiskFileManagerImpl::CacheIndexToDisk(std::vector<std::string> remote_files) {
 
     auto EstimateParalleDegree = [&](const std::string& file) -> uint64_t {
         auto fileSize = rcm_->Size(file);
+        std::cout << fileSize << std::endl;
+        std::cout << DEFAULT_DISK_INDEX_MAX_MEMORY_LIMIT << std::endl;
         return uint64_t(DEFAULT_DISK_INDEX_MAX_MEMORY_LIMIT / fileSize);
     };
 
@@ -175,6 +194,7 @@ DiskFileManagerImpl::CacheIndexToDisk(std::vector<std::string> remote_files) {
             if (batch_remote_files.size() == 0) {
                 // Use first file size as average size to estimate
                 max_parallel_degree = EstimateParalleDegree(origin_file);
+                std::cout << max_parallel_degree << std::endl;
             }
             batch_remote_files.push_back(origin_file);
         }
@@ -191,11 +211,26 @@ std::unique_ptr<DataCodec>
 DownloadAndDecodeRemoteIndexfile(RemoteChunkManager* remote_chunk_manager,
                                  std::string file,
                                  milvus::storage::Payload** index_payload_ptr) {
+    LOG_SEGCORE_INFO_ << "download and decode remote index file xxxx init" << getCurrentRSS();
+
     auto fileSize = remote_chunk_manager->Size(file);
     auto buf = std::shared_ptr<uint8_t[]>(new uint8_t[fileSize]);
     remote_chunk_manager->Read(file, buf.get(), fileSize);
+    auto res = DeserializeFileData(buf.get(), fileSize);
+    LOG_SEGCORE_INFO_ << "download and decode remote index file xxxx middle" << getCurrentRSS();
+    buf.reset();
+    LOG_SEGCORE_INFO_ << "download and decode remote index file xxxx  done" << getCurrentRSS();
+    return res;
+}
 
-    return DeserializeFileData(buf.get(), fileSize);
+void
+WriteLocalIndexFile(LocalChunkManager* local_chunk_manager,
+                    std::string file,
+                    uint64_t offset,
+                    std::shared_ptr<DataCodec> data,
+                    uint64_t size) {
+    auto index_payload = data->GetPayload();
+    local_chunk_manager->Write(file, offset, const_cast<uint8_t*>(index_payload->raw_data), size);
 }
 
 uint64_t
@@ -210,20 +245,31 @@ DiskFileManagerImpl::CacheBatchIndexFilesToDisk(const std::vector<std::string>& 
         cache_payloads[i] = nullptr;
     }
     std::vector<std::future<std::unique_ptr<DataCodec>>> futures;
+    std::cout << "catch batch index file to disk:" << remote_files[0] << "init :" << getCurrentRSS() << std::endl;
+    std::cout << "remote file size:" << remote_files.size() << std::endl;
+    LOG_SEGCORE_INFO_C << "catch batch index file to disk:" << remote_files[0] << "init :" << getCurrentRSS()
+                       << std::endl;
     for (int i = 0; i < batch_size; ++i) {
         futures.push_back(
             pool.Submit(DownloadAndDecodeRemoteIndexfile, rcm_.get(), remote_files[i], &cache_payloads[i]));
     }
 
     uint64_t offset = local_file_init_offfset;
+    std::vector<std::future<void>> write_futures;
     for (int i = 0; i < batch_size; ++i) {
         auto res = futures[i].get();
-        auto index_payload = res->GetPayload();
-        auto index_size = index_payload->rows * sizeof(uint8_t);
-        local_chunk_manager.Write(local_file_name, offset, const_cast<uint8_t*>(index_payload->raw_data), index_size);
+        std::shared_ptr<DataCodec> data = std::move(res);
+        auto index_size = data->GetPayload()->rows * sizeof(uint8_t);
+        write_futures.push_back(
+            pool.Submit(WriteLocalIndexFile, &local_chunk_manager, local_file_name, offset, data, index_size));
         offset += index_size;
     }
-
+    for (auto& future : write_futures) {
+        future.get();
+    }
+    std::cout << "catch batch index file to disk:" << remote_files[0] << "done:" << getCurrentRSS() << std::endl;
+    LOG_SEGCORE_INFO_C << "catch batch index file to disk:" << remote_files[0] << "done:" << getCurrentRSS()
+                       << std::endl;
     return offset;
 }
 
