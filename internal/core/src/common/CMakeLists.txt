@@ -18,10 +18,9 @@ set(COMMON_SRC
         binary_set_c.cpp
         init_c.cpp
         Common.cpp
-        )
+)
 
 add_library(milvus_common SHARED ${COMMON_SRC})
-
 target_link_libraries(milvus_common
         milvus_config
         milvus_utils
@@ -29,6 +28,6 @@ target_link_libraries(milvus_common
         yaml-cpp
         boost_bitset_ext
         ${CONAN_LIBS}
-        )
+)
 
 install(TARGETS milvus_common DESTINATION "${CMAKE_INSTALL_LIBDIR}")

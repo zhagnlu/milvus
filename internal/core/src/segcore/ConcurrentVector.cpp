@@ -11,6 +11,8 @@
 
 #include "segcore/ConcurrentVector.h"
 
+#include "log/Log.h"
+
 namespace milvus::segcore {
 
 void

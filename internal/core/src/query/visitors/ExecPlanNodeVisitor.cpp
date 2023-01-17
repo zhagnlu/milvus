@@ -11,12 +11,20 @@
 
 #include <utility>
 
+#include <velox/exec/tests/utils/Cursor.h>
+#include <velox/exec/tests/utils/PlanBuilder.h>
+#include <velox/exec/tests/utils/QueryAssertions.h>
+#include <velox/exec/tests/utils/AssertQueryBuilder.h>
+
+#include "common/Consts.h"
 #include "query/PlanImpl.h"
 #include "query/generated/ExecPlanNodeVisitor.h"
 #include "query/generated/ExecExprVisitor.h"
 #include "query/SubSearchResult.h"
 #include "segcore/SegmentGrowing.h"
 #include "utils/Json.h"
+
+#include "segcore/engine/SegmentConnector.h"
 
 namespace milvus::query {
 
@@ -90,8 +98,25 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
 
     std::unique_ptr<BitsetType> bitset_holder;
     if (node.predicate_.has_value()) {
-        bitset_holder = std::make_unique<BitsetType>(
-            ExecExprVisitor(*segment, active_count, timestamp_).call_child(*node.predicate_.value()));
+        facebook::velox::core::PlanNodeId plan_node_id;
+        auto plan = milvus::engine::PlanBuilder()
+                        .tableScan(segment)
+                        .capturePlanNodeId(plan_node_id)
+                        .filter(node.expr_str_)
+                        .planNode();
+        // facebook::velox::exec::test::CursorParameters expr_params;
+        // expr_params.planNode = plan;
+        // auto result = facebook::velox::exec::test::readCursor(expr_params, [](facebook::velox::exec::Task*) {});
+        auto split = std::make_shared<milvus::engine::SegmentConnectorSplit>(SEGMENT_CONNECTOR_ID, segment);
+        auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                          .split(plan_node_id, split)
+                          .copyResults(milvus::engine::GetDefaultMemoryPool().get());
+        // bitset_holder = ExecExprVisitor(*segment, active_count, timestamp_).call_child(*(node.predicate_));
+        auto bool_vec = result->childAt(0)->template asFlatVector<bool>();
+        bitset_holder = std::make_unique<BitsetType>(); 
+        for (int i = 0; i < result->size(); ++i) {
+            bitset_holder->push_back(bool_vec->valueAtFast(i));
+        }
         bitset_holder->flip();
     } else {
         bitset_holder = std::make_unique<BitsetType>(active_count, false);
@@ -126,7 +151,27 @@ ExecPlanNodeVisitor::visit(RetrievePlanNode& node) {
 
     BitsetType bitset_holder;
     if (node.predicate_ != nullptr) {
-        bitset_holder = ExecExprVisitor(*segment, active_count, timestamp_).call_child(*(node.predicate_));
+        facebook::velox::core::PlanNodeId plan_node_id;
+        auto plan = milvus::engine::PlanBuilder()
+                        .tableScan(segment)
+                        .capturePlanNodeId(plan_node_id)
+                        .filter(node.expr_str_)
+                        .planNode();
+        // facebook::velox::exec::test::CursorParameters expr_params;
+        // expr_params.planNode = plan;
+        // auto result = facebook::velox::exec::test::readCursor(expr_params, [](facebook::velox::exec::Task*) {});
+        auto split = std::make_shared<milvus::engine::SegmentConnectorSplit>(SEGMENT_CONNECTOR_ID, segment);
+        auto result = facebook::velox::exec::test::AssertQueryBuilder(plan)
+                          .split(plan_node_id, split)
+                          .copyResults(milvus::engine::GetDefaultMemoryPool().get());
+        // bitset_holder = ExecExprVisitor(*segment, active_count, timestamp_).call_child(*(node.predicate_));
+        auto bool_vec = result->childAt(0)->template asFlatVector<bool>();
+        for (int i = 0; i < result->size(); ++i) {
+            bitset_holder.push_back(bool_vec->valueAtFast(i));
+        }
+        std::string s;
+        boost::to_string(bitset_holder, s);
+        std::cout << "sssss" << s << std::endl;
         bitset_holder.flip();
     }
 

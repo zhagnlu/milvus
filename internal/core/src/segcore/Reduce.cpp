@@ -12,12 +12,13 @@
 #include <cstdint>
 #include <vector>
 #include <algorithm>
-#include <log/Log.h>
 
 #include "Reduce.h"
 #include "pkVisitor.h"
 #include "SegmentInterface.h"
 #include "Utils.h"
+
+#include <log/Log.h>
 
 namespace milvus::segcore {
 

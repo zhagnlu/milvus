@@ -13,7 +13,6 @@
 #include "common/LoadInfo.h"
 #include "common/Types.h"
 #include "common/type_c.h"
-#include "log/Log.h"
 
 #include "segcore/Collection.h"
 #include "segcore/SegmentGrowingImpl.h"
@@ -21,6 +20,7 @@
 #include "segcore/segment_c.h"
 #include "index/IndexInfo.h"
 #include "google/protobuf/text_format.h"
+#include "log/Log.h"
 
 //////////////////////////////    common interfaces    //////////////////////////////
 CSegmentInterface

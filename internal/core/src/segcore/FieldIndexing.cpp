@@ -32,10 +32,10 @@ VectorFieldIndexing::BuildIndexRange(int64_t ack_beg, int64_t ack_end, const Vec
     auto conf = get_build_params();
     data_.grow_to_at_least(ack_end);
     for (int chunk_id = ack_beg; chunk_id < ack_end; chunk_id++) {
-        const auto& chunk = source->get_chunk(chunk_id);
+        const auto* chunk_data = source->get_chunk_data(chunk_id);
         auto indexing = std::make_unique<index::VectorMemNMIndex>(knowhere::IndexEnum::INDEX_FAISS_IVFFLAT,
                                                                   knowhere::metric::L2, IndexMode::MODE_CPU);
-        auto dataset = knowhere::GenDataset(source->get_size_per_chunk(), dim, chunk.data());
+        auto dataset = knowhere::GenDataset(source->get_size_per_chunk(), dim, chunk_data);
         indexing->BuildWithDataset(dataset, conf);
         data_[chunk_id] = std::move(indexing);
     }
@@ -82,16 +82,16 @@ ScalarFieldIndexing<T>::BuildIndexRange(int64_t ack_beg, int64_t ack_end, const 
     AssertInfo(ack_end <= num_chunk, "Ack_end is bigger than num_chunk");
     data_.grow_to_at_least(ack_end);
     for (int chunk_id = ack_beg; chunk_id < ack_end; chunk_id++) {
-        const auto& chunk = source->get_chunk(chunk_id);
+        const auto* chunk_data = source->get_chunk_data(chunk_id);
         // build index for chunk
         // TODO
         if constexpr (std::is_same_v<T, std::string>) {
             auto indexing = index::CreateStringIndexSort();
-            indexing->Build(vec_base->get_size_per_chunk(), chunk.data());
+            indexing->Build(vec_base->get_size_per_chunk(), (T*)chunk_data);
             data_[chunk_id] = std::move(indexing);
         } else {
             auto indexing = index::CreateScalarIndexSort<T>();
-            indexing->Build(vec_base->get_size_per_chunk(), chunk.data());
+            indexing->Build(vec_base->get_size_per_chunk(), (T*)chunk_data);
             data_[chunk_id] = std::move(indexing);
         }
     }

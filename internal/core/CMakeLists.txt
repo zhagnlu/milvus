@@ -15,6 +15,7 @@
 # limitations under the License.
 
 cmake_minimum_required( VERSION 3.18 )
+set(CMAKE_VERBOSE_MAKEFILE ON)
 
 if ( APPLE )
     set( CMAKE_CROSSCOMPILING TRUE )
