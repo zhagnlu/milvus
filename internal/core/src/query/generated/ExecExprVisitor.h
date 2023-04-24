@@ -22,6 +22,10 @@
 #include "ExprVisitor.h"
 
 namespace milvus::query {
+
+void
+AppendOneChunk(BitsetType& result, const FixedVector<bool>& chunk_res);
+
 class ExecExprVisitor : public ExprVisitor {
  public:
     void
@@ -100,6 +104,23 @@ class ExecExprVisitor : public ExprVisitor {
     template <typename CmpFunc>
     auto
     ExecCompareExprDispatcher(CompareExpr& expr, CmpFunc cmp_func) -> BitsetType;
+
+    template <typename CmpFunc>
+    auto
+    ExecCompareExprDispatcherForSealedSegment(CompareExpr& expr, CmpFunc cmp_func) -> BitsetType;
+
+    // This function only used to compare sealed segment
+    // which has only one chunk.
+    template <typename T, typename U, typename CmpFunc>
+    TargetBitmap
+    ExecCompareRightType(const T* left_raw_data, const FieldId& right_field_id, CmpFunc cmp_func);
+
+    template <typename T, typename CmpFunc>
+    TargetBitmap
+    ExecCompareLeftType(const FieldId& left_field_id,
+                        const FieldId& right_field_id,
+                        const DataType& right_field_type,
+                        CmpFunc cmp_func);
 
  private:
     const segcore::SegmentInternalInterface& segment_;
