@@ -29,6 +29,7 @@
 
 #include "storage/MinioChunkManager.h"
 #include "exceptions/EasyAssert.h"
+#include "storage/AwsSegcoreLogger.h"
 #include "log/Log.h"
 
 #define THROWS3ERROR(FUNCTION)                                                                         \
@@ -74,6 +75,9 @@ MinioChunkManager::InitSDKAPI(RemoteStorageType type) {
     const size_t initCount = init_count_++;
     if (initCount == 0) {
         sdk_options_.httpOptions.installSigPipeHandler = true;
+        sdk_options_.loggingOptions.logger_create_fn = []() {
+            return Aws::MakeShared<AwsSegcoreLogger>("AwsSegcoreLogger", Aws::Utils::Logging::LogLevel::Debug);
+        };
 #ifdef BUILD_GCP
         if (type == STORAGE_GOOGLE_CLOUD) {
             sdk_options_.httpOptions.httpClientFactory_create_fn = []() {
@@ -112,10 +116,12 @@ MinioChunkManager::BuildS3Client(const StorageConfig& storage_config, const Aws:
         AssertInfo(!storage_config.access_key_id.empty(), "if not use iam, access key should not be empty");
         AssertInfo(!storage_config.access_key_value.empty(), "if not use iam, access value should not be empty");
 
+        LOG_SEGCORE_INFO_C << "build S3 Client start";
         client_ = std::make_shared<Aws::S3::S3Client>(
             Aws::Auth::AWSCredentials(ConvertToAwsString(storage_config.access_key_id),
                                       ConvertToAwsString(storage_config.access_key_value)),
             config, Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never, false);
+        LOG_SEGCORE_INFO_C << "build S3 Client done";
     }
 }
 
@@ -133,6 +139,11 @@ MinioChunkManager::BuildGoogleCloudClient(const StorageConfig& storage_config,
 
 MinioChunkManager::MinioChunkManager(const StorageConfig& storage_config)
     : default_bucket_name_(storage_config.bucket_name) {
+    LOG_SEGCORE_INFO_C << "init minio chunk manager, address:" << storage_config.address
+                       << "access info:" << storage_config.access_key_id << "||" << storage_config.access_key_value
+                       << "storage type:" << storage_config.storage_type
+                       << "remote_root_path:" << storage_config.remote_root_path;
+
     remote_root_path_ = storage_config.remote_root_path;
     RemoteStorageType storageType;
     if (storage_config.address.find("google") != std::string::npos) {
@@ -141,7 +152,9 @@ MinioChunkManager::MinioChunkManager(const StorageConfig& storage_config)
         storageType = STORAGE_S3;
     }
 
+    LOG_SEGCORE_INFO_C << "Init SDK API start";
     InitSDKAPI(storageType);
+    LOG_SEGCORE_INFO_C << "Init SDK API done";
 
     Aws::Client::ClientConfiguration config;
     config.endpointOverride = ConvertToAwsString(storage_config.address);

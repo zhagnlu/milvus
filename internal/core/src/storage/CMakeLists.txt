@@ -37,6 +37,7 @@ set(STORAGE_FILES
     Event.cpp
     ThreadPool.cpp
     storage_c.cpp
+    AwsSegcoreLogger.cpp
     LocalChunkManager.cpp
     MinioChunkManager.cpp
     DiskFileManagerImpl.cpp
