@@ -528,6 +528,7 @@ func (t *searchTask) Requery() error {
 		return err
 	}
 	ids := t.result.GetResults().GetIds()
+	log.Info("xxxxx", zap.Int("ids length", len(ids.GetIntId().GetData())))
 	expr := IDs2Expr(pkField.GetName(), ids)
 
 	queryReq := &milvuspb.QueryRequest{

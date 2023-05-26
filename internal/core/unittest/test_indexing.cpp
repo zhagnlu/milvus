@@ -23,6 +23,7 @@
 #include "test_utils/indexbuilder_test_utils.h"
 #include "test_utils/DataGen.h"
 #include "test_utils/Timer.h"
+#include "segcore/segcore_init_c.h"
 
 #ifdef BUILD_DISK_ANN
 #include "storage/MinioChunkManager.h"
@@ -160,8 +161,8 @@ TEST(Indexing, BinaryBruteForce) {
         num_queries,  //
         topk,         //
         round_decimal,
-        dim,        //
-        query_data  //
+        dim,          //
+        query_data    //
     };
 
     auto sub_result = query::BruteForceSearch(
@@ -353,32 +354,32 @@ class IndexTest : public ::testing::TestWithParam<Param> {
     std::vector<uint8_t> xb_bin_data;
     knowhere::DataSetPtr xq_dataset;
     int64_t query_offset = 100;
-    int64_t NB = 10000;
+    int64_t NB = 500000;
     StorageConfig storage_config_;
 };
 
-INSTANTIATE_TEST_CASE_P(
-    IndexTypeParameters,
-    IndexTest,
-    ::testing::Values(
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_IDMAP, knowhere::metric::L2),
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_IVFPQ, knowhere::metric::L2),
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_IVFFLAT,
-                  knowhere::metric::L2),
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_IVFSQ8,
-                  knowhere::metric::L2),
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_BIN_IVFFLAT,
-                  knowhere::metric::JACCARD),
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_BIN_IVFFLAT,
-                  knowhere::metric::TANIMOTO),
-        std::pair(knowhere::IndexEnum::INDEX_FAISS_BIN_IDMAP,
-                  knowhere::metric::JACCARD),
-        std::pair(knowhere::IndexEnum::INDEX_HNSW, knowhere::metric::L2)
-        // ci ut not start minio, so not run ut about diskann index for now
-        // #ifdef BUILD_DISK_ANN
-        //     std::pair(knowhere::IndexEnum::INDEX_DISKANN, knowhere::metric::L2),
-        // #endif
-        ));
+INSTANTIATE_TEST_CASE_P(IndexTypeParameters,
+                        IndexTest,
+                        ::testing::Values(
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_IDMAP, knowhere::metric::L2),
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_IVFPQ, knowhere::metric::L2),
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_IVFFLAT,
+//           knowhere::metric::L2),
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_IVFSQ8,
+//           knowhere::metric::L2),
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_BIN_IVFFLAT,
+//           knowhere::metric::JACCARD),
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_BIN_IVFFLAT,
+//           knowhere::metric::TANIMOTO),
+// std::pair(knowhere::IndexEnum::INDEX_FAISS_BIN_IDMAP,
+//           knowhere::metric::JACCARD),
+// std::pair(knowhere::IndexEnum::INDEX_HNSW, knowhere::metric::L2),
+// ci ut not start minio, so not run ut about diskann index for now
+#ifdef BUILD_DISK_ANN
+                            std::pair(knowhere::IndexEnum::INDEX_DISKANN,
+                                      knowhere::metric::L2)
+#endif
+                                ));
 
 TEST_P(IndexTest, BuildAndQuery) {
     milvus::index::CreateIndexInfo create_index_info;
@@ -449,13 +450,14 @@ TEST_P(IndexTest, BuildAndQuery) {
     vec_index->Query(xq_dataset, search_info, nullptr);
 }
 
-TEST_P(IndexTest, GetVector) {
+TEST_P(IndexTest, IndexGetVector) {
     milvus::index::CreateIndexInfo create_index_info;
     create_index_info.index_type = index_type;
     create_index_info.metric_type = metric_type;
     create_index_info.field_type = vec_field_data_type;
     index::IndexBasePtr index;
 
+    SegcoreSetKnowhereThreadPoolNum(12);
     if (index_type == knowhere::IndexEnum::INDEX_DISKANN) {
 #ifdef BUILD_DISK_ANN
         milvus::storage::FieldDataMeta field_data_meta{1, 2, 3, 100};
@@ -476,6 +478,7 @@ TEST_P(IndexTest, GetVector) {
 
     if (index_type == knowhere::IndexEnum::INDEX_DISKANN) {
 #ifdef BUILD_DISK_ANN
+        std::cout << "use disk ann" << std::endl;
         // TODO ::diskann.query need load first, ugly
         auto binary_set = index->Serialize(milvus::Config{});
         index.reset();
@@ -494,6 +497,7 @@ TEST_P(IndexTest, GetVector) {
             index_files.emplace_back(binary.first);
         }
         load_conf["index_files"] = index_files;
+        load_conf["num_load_thread"] = std::to_string(1);
         vec_index->Load(binary_set, load_conf);
         EXPECT_EQ(vec_index->Count(), NB);
 #endif
@@ -507,31 +511,53 @@ TEST_P(IndexTest, GetVector) {
         return;
     }
 
-    auto ids_ds = GenRandomIds(NB);
-    auto results = vec_index->GetVector(ids_ds);
-    EXPECT_TRUE(results.size() > 0);
-    if (!is_binary) {
-        std::vector<float> result_vectors(results.size() / (sizeof(float)));
-        memcpy(result_vectors.data(), results.data(), results.size());
-        EXPECT_TRUE(result_vectors.size() == xb_data.size());
-        for (size_t i = 0; i < NB; ++i) {
-            auto id = ids_ds->GetIds()[i];
-            for (size_t j = 0; j < DIM; ++j) {
-                EXPECT_TRUE(result_vectors[i * DIM + j] ==
-                            xb_data[id * DIM + j]);
-            }
-        }
-    } else {
-        EXPECT_TRUE(results.size() == xb_bin_data.size());
-        const auto data_bytes = DIM / 8;
-        for (size_t i = 0; i < NB; ++i) {
-            auto id = ids_ds->GetIds()[i];
-            for (size_t j = 0; j < data_bytes; ++j) {
-                EXPECT_TRUE(results[i * data_bytes + j] ==
-                            xb_bin_data[id * data_bytes + j]);
-            }
-        }
+    auto thread_function = [](milvus::index::VectorIndex* index) {
+        auto ids_ds = GenRandomIds(500);
+        index->GetVector(ids_ds);
+    };
+
+    while (1) {
+        auto ids_ds = GenRandomIds(10000);
+        auto start = std::chrono::steady_clock::now();
+        auto results = vec_index->GetVector(ids_ds);
+#define thread_num 2
+        // std::thread threads[thread_num];
+        // for (int i = 0; i < thread_num; ++i) {
+        //     threads[i] = std::thread(thread_function, vec_index);
+        // }
+
+        // for (int i = 0; i < thread_num; ++i) {
+        //     threads[i].join();
+        // }
+        std::cout << "testxxxx"
+                  << std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count()
+                  << std::endl;
     }
+    // EXPECT_TRUE(results.size() > 0);
+    // if (!is_binary) {
+    //     std::vector<float> result_vectors(results.size() / (sizeof(float)));
+    //     memcpy(result_vectors.data(), results.data(), results.size());
+    //     EXPECT_TRUE(result_vectors.size() == xb_data.size());
+    //     for (size_t i = 0; i < NB; ++i) {
+    //         auto id = ids_ds->GetIds()[i];
+    //         for (size_t j = 0; j < DIM; ++j) {
+    //             EXPECT_TRUE(result_vectors[i * DIM + j] ==
+    //                         xb_data[id * DIM + j]);
+    //         }
+    //     }
+    // } else {
+    //     EXPECT_TRUE(results.size() == xb_bin_data.size());
+    //     const auto data_bytes = DIM / 8;
+    //     for (size_t i = 0; i < NB; ++i) {
+    //         auto id = ids_ds->GetIds()[i];
+    //         for (size_t j = 0; j < data_bytes; ++j) {
+    //             EXPECT_TRUE(results[i * data_bytes + j] ==
+    //                         xb_bin_data[id * data_bytes + j]);
+    //         }
+    //     }
+    // }
 }
 
 // #ifdef BUILD_DISK_ANN

@@ -166,7 +166,13 @@ VectorMemIndex::HasRawData() const {
 
 const std::vector<uint8_t>
 VectorMemIndex::GetVector(const DatasetPtr dataset) const {
+    auto start = std::chrono::steady_clock::now();
     auto res = index_.GetVectorByIds(*dataset);
+    std::cout << "get memory vector by id result cost:"
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
     if (!res.has_value()) {
         PanicCodeInfo(
             ErrorCodeEnum::UnexpectedError,

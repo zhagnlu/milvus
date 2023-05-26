@@ -29,7 +29,7 @@
 #include "pb/index_cgo_msg.pb.h"
 #include "storage/Types.h"
 
-constexpr int64_t DIM = 16;
+constexpr int64_t DIM = 256;
 constexpr int64_t NQ = 10;
 constexpr int64_t K = 4;
 
@@ -249,7 +249,8 @@ generate_build_conf(const milvus::IndexType& index_type,
             {milvus::index::DISK_ANN_SEARCH_LIST_SIZE, std::to_string(128)},
             {milvus::index::DISK_ANN_PQ_CODE_BUDGET, std::to_string(0.001)},
             {milvus::index::DISK_ANN_BUILD_DRAM_BUDGET, std::to_string(32)},
-        };
+            {milvus::index::DISK_ANN_BUILD_THREAD_NUM, std::to_string(1)},
+            {milvus::index::DISK_ANN_LOAD_THREAD_NUM, std::to_string(2)}};
     }
     return knowhere::Json();
 }

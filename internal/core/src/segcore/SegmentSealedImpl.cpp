@@ -467,6 +467,7 @@ std::unique_ptr<DataArray>
 SegmentSealedImpl::get_vector(FieldId field_id,
                               const int64_t* ids,
                               int64_t count) const {
+    auto start = std::chrono::steady_clock::now();
     auto& filed_meta = schema_->operator[](field_id);
     AssertInfo(filed_meta.is_vector(), "vector field is not vector type");
 
@@ -484,6 +485,11 @@ SegmentSealedImpl::get_vector(FieldId field_id,
         if (has_raw_data) {
             auto ids_ds = GenIdsDataset(count, ids);
             auto& vector = vec_index->GetVector(ids_ds);
+            std::cout << "get vector result: " << count << " cost:"
+                      << std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - start)
+                             .count()
+                      << "us" << std::endl;
             return segcore::CreateVectorDataArrayFrom(
                 vector.data(), count, filed_meta);
         }

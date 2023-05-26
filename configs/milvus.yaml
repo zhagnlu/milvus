@@ -203,7 +203,7 @@ queryNode:
   stats:
     publishInterval: 1000 # Interval for querynode to report node information (milliseconds)
   segcore:
-    knowhereThreadPoolNumRatio: 4 
+    knowhereThreadPoolNumRatio: 4
     # Use more threads to make better use of SSD throughput in disk index.
     # This parameter is only useful when enable-disk = true.
     # And this value should be a number greater than 1 and less than 32.
@@ -329,7 +329,7 @@ dataNode:
 
 # Configures the system log output.
 log:
-  level: info # Only supports debug, info, warn, error, panic, or fatal. Default 'info'.
+  level: debug # Only supports debug, info, warn, error, panic, or fatal. Default 'info'.
   file:
     rootPath:  # root dir path to put logs, default "" means no log file will print. please adjust in embedded Milvus: /tmp/milvus/logs
     maxSize: 300 # MB

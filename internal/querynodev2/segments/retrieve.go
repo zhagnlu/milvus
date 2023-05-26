@@ -20,6 +20,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/milvus-io/milvus/pkg/log"
 
 	"github.com/milvus-io/milvus-proto/go-api/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/segcorepb"
@@ -27,6 +30,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/timerecord"
 	. "github.com/milvus-io/milvus/pkg/util/typeutil"
+	"go.uber.org/zap"
 )
 
 // retrieveOnSegments performs retrieve on listed segments
@@ -37,7 +41,7 @@ func retrieveOnSegments(ctx context.Context, manager *Manager, segType SegmentTy
 		errs     = make([]error, len(segIDs))
 		wg       sync.WaitGroup
 	)
-
+	start := time.Now()
 	label := metrics.SealedSegmentLabel
 	if segType == commonpb.SegmentState_Growing {
 		label = metrics.GrowingSegmentLabel
@@ -81,7 +85,8 @@ func retrieveOnSegments(ctx context.Context, manager *Manager, segType SegmentTy
 	for result := range resultCh {
 		retrieveResults = append(retrieveResults, result)
 	}
-
+	cost := time.Since(start).Microseconds()
+	log.Debug("xxx", zap.Int64("retrieveOnSegments", cost))
 	return retrieveResults, nil
 }
 

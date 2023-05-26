@@ -87,6 +87,7 @@ template <typename T>
 void
 VectorDiskAnnIndex<T>::BuildWithDataset(const DatasetPtr& dataset,
                                         const Config& config) {
+    std::cout << config << std::endl;
     auto& local_chunk_manager = storage::LocalChunkManager::GetInstance();
     knowhere::Json build_config;
     build_config.update(config);
@@ -239,7 +240,13 @@ VectorDiskAnnIndex<T>::HasRawData() const {
 template <typename T>
 const std::vector<uint8_t>
 VectorDiskAnnIndex<T>::GetVector(const DatasetPtr dataset) const {
+    auto start = std::chrono::steady_clock::now();
     auto res = index_.GetVectorByIds(*dataset);
+    std::cout << "get vector by id result cost:"
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
     if (!res.has_value()) {
         PanicCodeInfo(
             ErrorCodeEnum::UnexpectedError,
