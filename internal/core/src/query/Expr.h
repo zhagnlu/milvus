@@ -264,4 +264,9 @@ struct ExistsExpr : Expr {
     accept(ExprVisitor&) override;
 };
 
+inline bool
+IsTermExpr(const Expr& expr) {
+    return typeid(expr) == typeid(TermExpr);
+}
+
 }  // namespace milvus::query
