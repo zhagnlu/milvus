@@ -25,8 +25,7 @@ extern "C" {
 
 typedef void* CSegmentInterface;
 typedef void* CSearchResult;
-typedef void* CRetrieveResult;
-typedef void* CDataArray;
+typedef CProto CRetrieveResult;
 
 //////////////////////////////    common interfaces    //////////////////////////////
 CSegmentInterface
@@ -45,6 +44,9 @@ Search(CSegmentInterface c_segment,
        CTraceContext c_trace,
        uint64_t timestamp,
        CSearchResult* result);
+
+void
+DeleteRetrieveResult(CRetrieveResult* retrieve_result);
 
 CStatus
 Retrieve(CSegmentInterface c_segment,
@@ -111,97 +113,6 @@ Delete(CSegmentInterface c_segment,
 
 int64_t
 PreDelete(CSegmentInterface c_segment, int64_t size);
-
-//////////////////////////////    interfaces for RetrieveResult    //////////////////////////////
-void
-DeleteRetrieveResult(CRetrieveResult retrieve_result);
-
-bool
-RetrieveResultIsCount(CRetrieveResult retrieve_result);
-
-int64_t
-GetRetrieveResultRowCount(CRetrieveResult result);
-
-int64_t
-GetRetrieveResultFieldSize(CRetrieveResult retrieve_result);
-
-CStatus
-GetRetrieveResultOffsets(CRetrieveResult result, int64_t* dest, int64_t size);
-
-bool
-RetrieveResultHasIds(CRetrieveResult retrieve_result);
-
-CDataType
-GetRetrieveResultPkType(CRetrieveResult result);
-
-CStatus
-GetRetrieveResultFieldMeta(CRetrieveResult retrieve_result,
-                           int64_t index,
-                           CFieldMeta* meta);
-
-CStatus
-GetRetrieveResultPkDataForInt(CRetrieveResult retrieve_result,
-                              int64_t* data,
-                              int64_t size);
-
-CStatus
-GetRetrieveResultPkDataForString(CRetrieveResult retrieve_result,
-                                 char** data,
-                                 int64_t size);
-
-CStatus
-GetRetrieveResultFieldDataForBool(CRetrieveResult retrieve_result,
-                                  int64_t index,
-                                  bool* data,
-                                  int64_t size);
-CStatus
-GetRetrieveResultFieldDataForInt(CRetrieveResult retrieve_result,
-                                 int64_t index,
-                                 int32_t* data,
-                                 int64_t size);
-CStatus
-GetRetrieveResultFieldDataForLong(CRetrieveResult retrieve_result,
-                                  int64_t index,
-                                  int64_t* data,
-                                  int64_t size);
-
-CStatus
-GetRetrieveResultFieldDataForFloat(CRetrieveResult retrieve_result,
-                                   int64_t index,
-                                   float* data,
-                                   int64_t size);
-
-CStatus
-GetRetrieveResultFieldDataForDouble(CRetrieveResult retrieve_result,
-                                    int64_t index,
-                                    double* data,
-                                    int64_t size);
-
-CStatus
-GetRetrieveResultFieldDataForVarChar(CRetrieveResult retrieve_result,
-                                     int64_t index,
-                                     char** data,
-                                     int64_t size);
-CStatus
-GetRetrieveResultFieldDataForFloatVector(CRetrieveResult retrieve_result,
-                                         int64_t index,
-                                         float* data,
-                                         int64_t dim,
-                                         int64_t size);
-
-CStatus
-GetRetrieveResultFieldDataForBinaryVector(CRetrieveResult retrieve_result,
-                                          int64_t index,
-                                          char* data,
-                                          int64_t dim,
-                                          int64_t size);
-
-CStatus
-GetRetrieveResultFieldDataForJson(CRetrieveResult retrieve_result,
-                                  int64_t index,
-                                  char** data,
-                                  int64_t size);
-
 #ifdef __cplusplus
 }
 #endif

@@ -241,8 +241,9 @@ GetDataSize(const FieldMeta& field, size_t row_count, const DataArray* data) {
 inline void*
 FillField(DataType data_type,
           size_t size,
-          const milvus::DataArray* data,
+          const LoadFieldDataInfo& info,
           void* dst) {
+    auto data = info.field_data;
     switch (data_type) {
         case DataType::BOOL: {
             return memcpy(dst, FIELD_DATA(data, bool).data(), size);
@@ -400,7 +401,7 @@ CreateMap(int64_t segment_id,
         AssertInfo(
             map != MAP_FAILED,
             fmt::format("failed to create anon map, err: {}", strerror(errno)));
-        FillField(data_type, data_size, info.field_data, map);
+        FillField(data_type, data_size, info, map);
         return map;
     }
 

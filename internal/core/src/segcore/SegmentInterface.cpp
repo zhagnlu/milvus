@@ -75,31 +75,37 @@ SegmentInternalInterface::Search(
     return results;
 }
 
-std::unique_ptr<RetrieveResult>
+std::unique_ptr<proto::segcore::RetrieveResults>
 SegmentInternalInterface::Retrieve(const query::RetrievePlan* plan,
                                    Timestamp timestamp) const {
     std::shared_lock lck(mutex_);
-    auto result = std::make_unique<RetrieveResult>();
+    auto results = std::make_unique<proto::segcore::RetrieveResults>();
     query::ExecPlanNodeVisitor visitor(*this, timestamp);
-    *result = visitor.get_retrieve_result(*plan->plan_node_);
-    result->segment_ = (void*)this;
+    auto retrieve_results = visitor.get_retrieve_result(*plan->plan_node_);
+    retrieve_results.segment_ = (void*)this;
 
     if (plan->plan_node_->is_count) {
-        AssertInfo(result->field_data_.size() == 1,
+        AssertInfo(retrieve_results.field_data_.size() == 1,
                    "count result should only have one column");
-        return result;
+        *results->add_fields_data() = retrieve_results.field_data_[0];
+        return results;
     }
 
+    results->mutable_offset()->Add(retrieve_results.result_offsets_.begin(),
+                                   retrieve_results.result_offsets_.end());
+
+    auto fields_data = results->mutable_fields_data();
+    auto ids = results->mutable_ids();
     auto pk_field_id = plan->schema_.get_primary_field_id();
     for (auto field_id : plan->field_ids_) {
         if (SystemProperty::Instance().IsSystem(field_id)) {
             auto system_type =
                 SystemProperty::Instance().GetSystemFieldType(field_id);
 
-            auto size = result->result_offsets_.size();
+            auto size = retrieve_results.result_offsets_.size();
             FixedVector<int64_t> output(size);
             bulk_subscript(system_type,
-                           result->result_offsets_.data(),
+                           retrieve_results.result_offsets_.data(),
                            size,
                            output.data());
 
@@ -111,27 +117,29 @@ SegmentInternalInterface::Retrieve(const query::RetrievePlan* plan,
             auto data = reinterpret_cast<const int64_t*>(output.data());
             auto obj = scalar_array->mutable_long_data();
             obj->mutable_data()->Add(data, data + size);
-            result->field_data_.push_back(std::move(data_array));
+            fields_data->AddAllocated(data_array.release());
             continue;
         }
 
+        auto& field_meta = plan->schema_[field_id];
+
         auto col = bulk_subscript(field_id,
-                                  result->result_offsets_.data(),
-                                  result->result_offsets_.size());
+                                  retrieve_results.result_offsets_.data(),
+                                  retrieve_results.result_offsets_.size());
+        auto col_data = col.release();
+        fields_data->AddAllocated(col_data);
         if (pk_field_id.has_value() && pk_field_id.value() == field_id) {
-            result->pk_type_ = plan->schema_[field_id].get_data_type();
-            auto ids = std::make_unique<IdArray>();
-            switch (plan->schema_[field_id].get_data_type()) {
+            switch (field_meta.get_data_type()) {
                 case DataType::INT64: {
                     auto int_ids = ids->mutable_int_id();
-                    auto& src_data = col->scalars().long_data();
+                    auto& src_data = col_data->scalars().long_data();
                     int_ids->mutable_data()->Add(src_data.data().begin(),
                                                  src_data.data().end());
                     break;
                 }
                 case DataType::VARCHAR: {
                     auto str_ids = ids->mutable_str_id();
-                    auto& src_data = col->scalars().string_data();
+                    auto& src_data = col_data->scalars().string_data();
                     for (auto i = 0; i < src_data.data_size(); ++i) {
                         *(str_ids->mutable_data()->Add()) = src_data.data(i);
                     }
@@ -141,11 +149,9 @@ SegmentInternalInterface::Retrieve(const query::RetrievePlan* plan,
                     PanicInfo("unsupported data type");
                 }
             }
-            result->ids_ = std::move(ids);
         }
-        result->field_data_.push_back(std::move(col));
     }
-    return result;
+    return results;
 }
 
 int64_t
@@ -161,15 +167,15 @@ SegmentInternalInterface::get_real_count() const {
     plan->plan_node_ = std::make_unique<query::RetrievePlanNode>();
     plan->plan_node_->is_count = true;
     auto res = Retrieve(plan.get(), MAX_TIMESTAMP);
-    AssertInfo(res->field_data_.size() == 1,
+    AssertInfo(res->fields_data().size() == 1,
                "count result should only have one column");
-    AssertInfo(res->field_data_[0]->has_scalars(),
+    AssertInfo(res->fields_data()[0].has_scalars(),
                "count result should match scalar");
-    AssertInfo(res->field_data_[0]->scalars().has_long_data(),
+    AssertInfo(res->fields_data()[0].scalars().has_long_data(),
                "count result should match long data");
-    AssertInfo(res->field_data_[0]->scalars().long_data().data_size() == 1,
+    AssertInfo(res->fields_data()[0].scalars().long_data().data_size() == 1,
                "count result should only have one row");
-    return res->field_data_[0]->scalars().long_data().data(0);
+    return res->fields_data()[0].scalars().long_data().data(0);
 }
 
 }  // namespace milvus::segcore
