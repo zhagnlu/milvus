@@ -11,7 +11,7 @@
 # or implied. See the License for the specific language governing permissions and limitations under the License.
 #-------------------------------------------------------------------------------
 
-set( KNOWHERE_VERSION da168800f )
+set( KNOWHERE_VERSION diskann_get_vector_pipeline )
 
 message(STATUS "Building knowhere-${KNOWHERE_SOURCE_VER} from source")
 message(STATUS ${CMAKE_BUILD_TYPE})
