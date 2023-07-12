@@ -31,6 +31,11 @@ extern FindTermPtr<int64_t> find_term_int64;
 extern FindTermPtr<float> find_term_float;
 extern FindTermPtr<double> find_term_double;
 
+template <typename T>
+using EqualValPtr = void (*)(const T* src, size_t size, T val, bool* res);
+
+extern EqualValPtr<int64_t> equal_val_int64;
+
 #if defined(__x86_64__)
 // Flags that indicate whether runtime can choose
 // these simd type or not when hook starts.
@@ -90,6 +95,14 @@ find_term_func(const T* data, size_t size, T val) {
     }
     if constexpr (std::is_same_v<T, double>) {
         return milvus::simd::find_term_double(data, size, val);
+    }
+}
+
+template <typename T>
+void
+equal_func(const T* data, int64_t size, T val, bool* res) {
+    if constexpr (std::is_same_v<T, int64_t>) {
+        return milvus::simd::equal_val_int64(data, size, val, res);
     }
 }
 

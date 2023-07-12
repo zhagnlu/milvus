@@ -37,5 +37,14 @@ FindTermSSE4(const int64_t* src, size_t vec_size, int64_t val);
 int
 StrCmpSSE4(const char* s1, const char* s2);
 
+template <typename T>
+void
+EqualValSSE4(const T* src, size_t size, T val, bool* res) {
+}
+
+template <>
+void
+EqualValSSE4(const int64_t* src, size_t size, int64_t val, bool* res);
+
 }  // namespace simd
 }  // namespace milvus

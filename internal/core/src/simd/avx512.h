@@ -55,5 +55,15 @@ template <>
 bool
 FindTermAVX512(const double* src, size_t vec_size, double val);
 
+template <typename T>
+void
+EqualValAVX512(const T* src, size_t size, T val, bool* res){
+
+};
+
+template <>
+void
+EqualValAVX512(const int64_t* src, size_t size, int64_t val, bool* res);
+
 }  // namespace simd
 }  // namespace milvus

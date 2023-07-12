@@ -52,6 +52,8 @@ FindTermPtr<int64_t> find_term_int64 = FindTermRef<int64_t>;
 FindTermPtr<float> find_term_float = FindTermRef<float>;
 FindTermPtr<double> find_term_double = FindTermRef<double>;
 
+EqualValPtr<int64_t> equal_val_int64 = EqualValRef<int64_t>;
+
 #if defined(__x86_64__)
 bool
 cpu_support_avx512() {
@@ -161,9 +163,30 @@ find_term_hook() {
     LOG_SEGCORE_INFO_ << "find term hook simd type: " << simd_type;
 }
 
+void
+equal_val_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        equal_val_int64 = EqualValAVX512<int64_t>;
+    } else if (use_avx2 && cpu_support_avx2()) {
+        simd_type = "AVX2";
+        equal_val_int64 = EqualValAVX2<int64_t>;
+    } else if (use_sse4_2 && cpu_support_sse4_2()) {
+        simd_type = "AVX2";
+    } else if (use_sse2 && cpu_support_sse2()) {
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "find term hook simd type: " << simd_type;
+}
 static int init_hook_ = []() {
     bitset_hook();
     find_term_hook();
+    equal_val_hook();
     return 0;
 }();
 
