@@ -22,14 +22,38 @@ extern BitsetBlockType (*get_bitset_block)(const bool* src);
 
 template <typename T>
 using FindTermPtr = bool (*)(const T* src, size_t size, T val);
+#define EXTERN_FIND_TERM_PTR(type) extern FindTermPtr<type> find_term_##type;
 
-extern FindTermPtr<bool> find_term_bool;
-extern FindTermPtr<int8_t> find_term_int8;
-extern FindTermPtr<int16_t> find_term_int16;
-extern FindTermPtr<int32_t> find_term_int32;
-extern FindTermPtr<int64_t> find_term_int64;
-extern FindTermPtr<float> find_term_float;
-extern FindTermPtr<double> find_term_double;
+EXTERN_FIND_TERM_PTR(bool)
+EXTERN_FIND_TERM_PTR(int8_t)
+EXTERN_FIND_TERM_PTR(int16_t)
+EXTERN_FIND_TERM_PTR(int32_t)
+EXTERN_FIND_TERM_PTR(int64_t)
+EXTERN_FIND_TERM_PTR(float)
+EXTERN_FIND_TERM_PTR(double)
+
+// Compare val function register
+// Such as A == 10, A < 10...
+template <typename T>
+using CompareValPtr = void (*)(const T* src, size_t size, T val, bool* res);
+#define EXTERN_COMPARE_VAL_PTR(prefix, type) \
+    extern CompareValPtr<type> prefix##_##type;
+
+EXTERN_COMPARE_VAL_PTR(equal_val, bool)
+EXTERN_COMPARE_VAL_PTR(equal_val, int8_t)
+EXTERN_COMPARE_VAL_PTR(equal_val, int16_t)
+EXTERN_COMPARE_VAL_PTR(equal_val, int32_t)
+EXTERN_COMPARE_VAL_PTR(equal_val, int64_t)
+EXTERN_COMPARE_VAL_PTR(equal_val, float)
+EXTERN_COMPARE_VAL_PTR(equal_val, double)
+
+EXTERN_COMPARE_VAL_PTR(less_val, bool)
+EXTERN_COMPARE_VAL_PTR(less_val, int8_t)
+EXTERN_COMPARE_VAL_PTR(less_val, int16_t)
+EXTERN_COMPARE_VAL_PTR(less_val, int32_t)
+EXTERN_COMPARE_VAL_PTR(less_val, int64_t)
+EXTERN_COMPARE_VAL_PTR(less_val, float)
+EXTERN_COMPARE_VAL_PTR(less_val, double)
 
 #if defined(__x86_64__)
 // Flags that indicate whether runtime can choose
@@ -39,13 +63,6 @@ extern bool use_avx2;
 extern bool use_sse4_2;
 extern bool use_sse2;
 
-// Flags that indicate which kind of simd for
-// different function when hook ends.
-extern bool use_bitset_sse2;
-extern bool use_find_term_sse2;
-extern bool use_find_term_sse4_2;
-extern bool use_find_term_avx2;
-extern bool use_find_term_avx512;
 #endif
 
 #if defined(__x86_64__)
@@ -57,11 +74,10 @@ bool
 cpu_support_sse4_2();
 #endif
 
-void
-bitset_hook();
-
-void
-find_term_hook();
+#define DISPATCH_FIND_TERM_SIMD_FUNC(type)                      \
+    if constexpr (std::is_same_v<T, type>) {                    \
+        return milvus::simd::find_term_##type(data, size, val); \
+    }
 
 template <typename T>
 bool
@@ -70,27 +86,50 @@ find_term_func(const T* data, size_t size, T val) {
         std::is_integral<T>::value || std::is_floating_point<T>::value,
         "T must be integral or float/double type");
 
-    if constexpr (std::is_same_v<T, bool>) {
-        return milvus::simd::find_term_bool(data, size, val);
+    DISPATCH_FIND_TERM_SIMD_FUNC(bool)
+    DISPATCH_FIND_TERM_SIMD_FUNC(int8_t)
+    DISPATCH_FIND_TERM_SIMD_FUNC(int16_t)
+    DISPATCH_FIND_TERM_SIMD_FUNC(int32_t)
+    DISPATCH_FIND_TERM_SIMD_FUNC(int64_t)
+    DISPATCH_FIND_TERM_SIMD_FUNC(float)
+    DISPATCH_FIND_TERM_SIMD_FUNC(double)
+}
+
+#define DISPATCH_COMPARE_VAL_SIMD_FUNC(prefix, type)                \
+    if constexpr (std::is_same_v<T, type>) {                        \
+        return milvus::simd::prefix##_##type(data, size, val, res); \
     }
-    if constexpr (std::is_same_v<T, int8_t>) {
-        return milvus::simd::find_term_int8(data, size, val);
-    }
-    if constexpr (std::is_same_v<T, int16_t>) {
-        return milvus::simd::find_term_int16(data, size, val);
-    }
-    if constexpr (std::is_same_v<T, int32_t>) {
-        return milvus::simd::find_term_int32(data, size, val);
-    }
-    if constexpr (std::is_same_v<T, int64_t>) {
-        return milvus::simd::find_term_int64(data, size, val);
-    }
-    if constexpr (std::is_same_v<T, float>) {
-        return milvus::simd::find_term_float(data, size, val);
-    }
-    if constexpr (std::is_same_v<T, double>) {
-        return milvus::simd::find_term_double(data, size, val);
-    }
+
+template <typename T>
+void
+equal_val_func(const T* data, int64_t size, T val, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, bool)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, int8_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, int16_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, int32_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, int64_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, float)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(equal_val, double)
+}
+
+template <typename T>
+void
+less_val_func(const T* data, int64_t size, T val, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, bool)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, int8_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, int16_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, int32_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, int64_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, float)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, double)
 }
 
 }  // namespace simd

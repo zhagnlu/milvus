@@ -26,6 +26,7 @@
 #include "simd/sse4.h"
 #include "simd/avx2.h"
 #include "simd/avx512.h"
+#include "simd/ref.h"
 
 using namespace std;
 using namespace milvus::simd;
@@ -104,6 +105,30 @@ TEST(GetBitSetBlock, base_test_sse) {
     res = GetBitsetBlockSSE2(src.data());
     std::cout << std::hex << res << std::endl;
     ASSERT_EQ(res, 0x1084210842108421);
+}
+
+TEST(GetBitsetBlockPerf, bitset) {
+    FixedVector<bool> srcs;
+    for (size_t i = 0; i < 100000000; ++i) {
+        srcs.push_back(i % 2 == 0);
+    }
+    std::cout << "start test" << std::endl;
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 10000000; ++i)
+        auto result = GetBitsetBlockSSE2(srcs.data() + i);
+    std::cout << "cost: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
+    start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 10000000; ++i)
+        auto result = GetBitsetBlockAVX2(srcs.data() + i);
+    std::cout << "cost: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
 }
 
 TEST(GetBitSetBlock, base_test_avx2) {
@@ -748,6 +773,387 @@ TEST(FindTermAVX512, double_type) {
     vecs.push_back(12700.01);
     res = FindTermAVX512(vecs.data(), vecs.size(), 12700.01);
     ASSERT_EQ(res, true);
+}
+
+// Function to allocate aligned memory
+void*
+alignedMalloc(size_t size, size_t alignment) {
+    void* ptr;
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        ptr = nullptr;
+    }
+    return ptr;
+}
+
+TEST(EqualVal, perf_int8) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int8_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i % 128;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, perf_int16) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int16_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, pref_int32) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int32_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, perf_int64) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int64_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, perf_float) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<float> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = float(i);
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, perf_double) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<double> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = double(i);
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (double)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (double)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, avx512_int8) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int8_t> vecs;
+    for (int i = 0; i < 100; ++i) {
+        vecs.push_back(i);
+    }
+    FixedVector<bool> res(1000);
+    FixedVector<bool> expect(1000);
+
+    int8_t target = 10;
+    EqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 99;
+    EqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+}
+
+TEST(EqualVal, avx512_int16) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int16_t> vecs;
+    for (int i = 0; i < 100; ++i) {
+        vecs.push_back(i);
+    }
+    FixedVector<bool> res(1000);
+    FixedVector<bool> expect(1000);
+
+    int16_t target = 10;
+    EqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 99;
+    EqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+}
+
+TEST(EqualVal, avx512_int32) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int32_t> vecs;
+    for (int i = 0; i < 1000; ++i) {
+        vecs.push_back(i);
+    }
+    FixedVector<bool> res(1000);
+    FixedVector<bool> expect(1000);
+
+    int32_t target = 10;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 99;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 999;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+}
+TEST(EqualVal, avx512_int64) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int64_t> vecs;
+    for (int i = 0; i < 1000; ++i) {
+        vecs.push_back(i);
+    }
+    FixedVector<bool> res(1000);
+    FixedVector<bool> expect(1000);
+
+    int64_t target = 10;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 99;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 999;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+}
+
+TEST(EqualVal, avx512_float) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<float> vecs;
+    for (int i = 0; i < 1000; ++i) {
+        vecs.push_back(float(i + 0.01));
+    }
+    FixedVector<bool> res(1000);
+    FixedVector<bool> expect(1000);
+
+    float target = 10.01;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 99.01;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 999.01;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+}
+
+TEST(EqualVal, avx512_double) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<double> vecs;
+    for (int i = 0; i < 1000; ++i) {
+        vecs.push_back(i + 0.001);
+    }
+    FixedVector<bool> res(1000);
+    FixedVector<bool> expect(1000);
+
+    double target = 10.001;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 99.001;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+
+    target = 999.001;
+    EqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 }
 
 #endif
