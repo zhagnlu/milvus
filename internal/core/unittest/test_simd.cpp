@@ -26,6 +26,7 @@
 #include "simd/sse4.h"
 #include "simd/avx2.h"
 #include "simd/avx512.h"
+#include "simd/ref.h"
 
 using namespace std;
 using namespace milvus::simd;
@@ -104,6 +105,30 @@ TEST(GetBitSetBlock, base_test_sse) {
     res = GetBitsetBlockSSE2(src.data());
     std::cout << std::hex << res << std::endl;
     ASSERT_EQ(res, 0x1084210842108421);
+}
+
+TEST(GetBitsetBlockPerf, bitset) {
+    FixedVector<bool> srcs;
+    for (size_t i = 0; i < 100000000; ++i) {
+        srcs.push_back(i % 2 == 0);
+    }
+    std::cout << "start test" << std::endl;
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 10000000; ++i)
+        auto result = GetBitsetBlockSSE2(srcs.data() + i);
+    std::cout << "cost: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
+    start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 10000000; ++i)
+        auto result = GetBitsetBlockAVX2(srcs.data() + i);
+    std::cout << "cost: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
 }
 
 TEST(GetBitSetBlock, base_test_avx2) {
@@ -748,6 +773,183 @@ TEST(FindTermAVX512, double_type) {
     vecs.push_back(12700.01);
     res = FindTermAVX512(vecs.data(), vecs.size(), 12700.01);
     ASSERT_EQ(res, true);
+}
+
+TEST(EqualVal, int64) {
+    std::vector<int64_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+// Function to allocate aligned memory
+void*
+alignedMalloc(size_t size, size_t alignment) {
+    void* ptr;
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        ptr = nullptr;
+    }
+    return ptr;
+}
+
+TEST(EqualVal, int32) {
+    std::vector<int32_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    if (!cpu_support_avx2()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, int8) {
+    std::vector<int8_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i % 128;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, int16) {
+    std::vector<int16_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    if (!cpu_support_avx2()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, float) {
+    std::vector<float> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = float(i);
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX512(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(xxx, xxx) {
+    FixedVector<bool> res(100);
+    bool* src = res.data();
+    src[0] = 0xff;
+    std::cout << res[0] << std::endl;
+    src[1] = 0x0;
+    std::cout << res[1] << std::endl;
+    src[2] = 0xFF;
+    std::cout << res[2] << std::endl;
 }
 
 #endif

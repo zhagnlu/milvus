@@ -30,5 +30,13 @@ FindTermRef(const T* src, size_t size, T val) {
     return false;
 }
 
+template <typename T>
+void
+EqualValRef(const T* src, size_t size, T val, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = src[i] < val;
+    }
+}
+
 }  // namespace simd
 }  // namespace milvus

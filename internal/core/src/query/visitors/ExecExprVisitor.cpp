@@ -234,7 +234,13 @@ AppendOneChunk(BitsetType& result, const FixedVector<bool>& chunk_res) {
     size_t n_block = (chunk_len - n_prefix) / BITSET_BLOCK_BIT_SIZE;
     size_t n_suffix = (chunk_len - n_prefix) % BITSET_BLOCK_BIT_SIZE;
 
+    auto start = std::chrono::steady_clock::now();
     AppendBlock(chunk_ptr + n_prefix, n_block);
+    std::cout << "append cost: "
+              << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << "us" << std::endl;
 
     AppendBit(chunk_ptr + n_prefix + n_block * BITSET_BLOCK_BIT_SIZE, n_suffix);
 
@@ -288,6 +294,56 @@ ExecExprVisitor::ExecRangeVisitorImpl(FieldId field_id,
         for (int index = 0; index < this_size; ++index) {
             chunk_res[index] = element_func(data[index]);
         }
+        results.emplace_back(std::move(chunk_res));
+    }
+    auto final_result = AssembleChunk(results);
+    AssertInfo(final_result.size() == row_count_,
+               "[ExecExprVisitor]Final result size not equal to row count");
+    return final_result;
+}
+
+template <typename T, typename IndexFunc, typename ElementFunc>
+auto
+ExecExprVisitor::ExecRangeVisitorImplTest(FieldId field_id,
+                                          IndexFunc index_func,
+                                          ElementFunc element_func)
+    -> BitsetType {
+    auto& schema = segment_.get_schema();
+    auto& field_meta = schema[field_id];
+    auto indexing_barrier = segment_.num_chunk_index(field_id);
+    auto size_per_chunk = segment_.size_per_chunk();
+    auto num_chunk = upper_div(row_count_, size_per_chunk);
+    std::vector<FixedVector<bool>> results;
+    results.reserve(num_chunk);
+
+    typedef std::
+        conditional_t<std::is_same_v<T, std::string_view>, std::string, T>
+            IndexInnerType;
+    using Index = index::ScalarIndex<IndexInnerType>;
+    for (auto chunk_id = 0; chunk_id < indexing_barrier; ++chunk_id) {
+        const Index& indexing =
+            segment_.chunk_scalar_index<IndexInnerType>(field_id, chunk_id);
+        // NOTE: knowhere is not const-ready
+        // This is a dirty workaround
+        auto data = index_func(const_cast<Index*>(&indexing));
+        AssertInfo(data.size() == size_per_chunk,
+                   "[ExecExprVisitor]Data size not equal to size_per_chunk");
+        results.emplace_back(std::move(data));
+    }
+    for (auto chunk_id = indexing_barrier; chunk_id < num_chunk; ++chunk_id) {
+        auto this_size = chunk_id == num_chunk - 1
+                             ? row_count_ - chunk_id * size_per_chunk
+                             : size_per_chunk;
+        //FixedVector<bool> chunk_res(this_size);
+        auto chunk = segment_.chunk_data<T>(field_id, chunk_id);
+        const T* data = chunk.data();
+        // Can use CPU SIMD optimazation to speed up
+        auto start = std::chrono::steady_clock::now();
+        auto&& chunk_res = element_func(data, this_size);
+        std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count()
+                  << std::endl;
         results.emplace_back(std::move(chunk_res));
     }
     auto final_result = AssembleChunk(results);
@@ -375,43 +431,92 @@ ExecExprVisitor::ExecUnaryRangeVisitorDispatcherImpl(UnaryRangeExpr& expr_raw)
     switch (op) {
         case OpType::Equal: {
             auto index_func = [&](Index* index) { return index->In(1, &val); };
-            auto elem_func = [&](MayConstRef<T> x) { return (x == val); };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+#if defined(USE_DYNAMIC_SIMD)
+                if constexpr (std::is_integral<T>::value ||
+                              std::is_floating_point<T>::value) {
+                    milvus::simd::equal_func(data, size, val, res.data());
+                }
+#else
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = data[i] == val;
+                }
+#endif
+                return std::move(res);
+            };
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         case OpType::NotEqual: {
             auto index_func = [&](Index* index) {
                 return index->NotIn(1, &val);
             };
-            auto elem_func = [&](MayConstRef<T> x) { return (x != val); };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = data[i] != val;
+                }
+                return res;
+            };
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         case OpType::GreaterEqual: {
             auto index_func = [&](Index* index) {
                 return index->Range(val, OpType::GreaterEqual);
             };
-            auto elem_func = [&](MayConstRef<T> x) { return (x >= val); };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = data[i] >= val;
+                }
+                return res;
+            };
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         case OpType::GreaterThan: {
             auto index_func = [&](Index* index) {
                 return index->Range(val, OpType::GreaterThan);
             };
-            auto elem_func = [&](MayConstRef<T> x) { return (x > val); };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = data[i] > val;
+                }
+                return res;
+            };
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         case OpType::LessEqual: {
             auto index_func = [&](Index* index) {
                 return index->Range(val, OpType::LessEqual);
             };
-            auto elem_func = [&](MayConstRef<T> x) { return (x <= val); };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = data[i] <= val;
+                }
+                return res;
+            };
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         case OpType::LessThan: {
             auto index_func = [&](Index* index) {
                 return index->Range(val, OpType::LessThan);
             };
-            auto elem_func = [&](MayConstRef<T> x) { return (x < val); };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = data[i] < val;
+                }
+                return res;
+            };
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         case OpType::PrefixMatch: {
             auto index_func = [&](Index* index) {
@@ -420,10 +525,15 @@ ExecExprVisitor::ExecUnaryRangeVisitorDispatcherImpl(UnaryRangeExpr& expr_raw)
                 dataset->Set(milvus::index::PREFIX_VALUE, val);
                 return index->Query(std::move(dataset));
             };
-            auto elem_func = [&](MayConstRef<T> x) {
-                return Match(x, val, op);
+            auto elem_func = [&](const T* data,
+                                 int64_t size) -> FixedVector<bool> {
+                FixedVector<bool> res(size);
+                for (size_t i = 0; i < size; ++i) {
+                    res[i] = Match(data[i], val, op);
+                }
+                return res;
             };
-            return ExecRangeVisitorImpl<T>(field_id, index_func, elem_func);
+            return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
         }
         // TODO: PostfixMatch
         default: {
