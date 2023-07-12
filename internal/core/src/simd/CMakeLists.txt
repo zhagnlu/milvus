@@ -26,11 +26,27 @@ if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "x86_64")
     set_source_files_properties(sse4.cpp PROPERTIES COMPILE_FLAGS "-msse4.2")
     set_source_files_properties(avx2.cpp PROPERTIES COMPILE_FLAGS "-mavx2")
     set_source_files_properties(avx512.cpp PROPERTIES COMPILE_FLAGS "-mavx512f  -mavx512dq -mavx512bw")
+
+
+    # set(CMAKE_ASM_NASM_COMPILER "/usr/bin/nasm")
+    # set(CMAKE_ASM_NASM_FLAGS "-f elf64")
+
+    # set(ASM_SOURCE_FILE sse2.asm)
+    # add_custom_command(
+    #     OUTPUT sse2_asm.o
+    #     COMMAND ${CMAKE_ASM_NASM_COMPILER} ${NASM_FLAGS} -o sse2_asm.o ${CMAKE_CURRENT_SOURCE_DIR}/${ASM_SOURCE_FILE}
+    #     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${ASM_SOURCE_FILE}
+    #     COMMENT "Assembling ${ASM_SOURCE_FILE}"
+    # )
+    # add_custom_target(asm_target DEPENDS sse2_asm.o)
+
 elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm*")
     # TODO: add arm cpu simd
 endif()
 
 add_library(milvus_simd ${MILVUS_SIMD_SRCS})
+# add_dependencies(milvus_simd asm_target)
+# target_link_libraries(milvus_simd sse2_asm.o)
 
 # Link the milvus_simd library with other libraries as needed
 target_link_libraries(milvus_simd milvus_log)

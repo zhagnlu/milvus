@@ -231,6 +231,31 @@ FindTermAVX2(const double* src, size_t vec_size, double val) {
     return false;
 }
 
+template <>
+void
+EqualValAVX2(const int64_t* src, size_t size, int64_t val, bool* res) {
+    __m256i target = _mm256_set1_epi64x(val);
+    int num_chunk = size / 4;
+    int index = 0;
+    for (size_t i = 0; i < num_chunk; ++i) {
+        __m256i data =
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 4 * i));
+        __m256i cmp_res = _mm256_cmpeq_epi64(data, target);
+
+        int32_t mask = _mm256_movemask_pd(_mm256_castsi256_pd(cmp_res));
+
+        // // Store the comparison results in the res array
+        res[i] = (mask & 0x1) != 0;
+        // res[i + 1] = (mask & 0x2) != 0;
+        // res[i + 2] = (mask & 0x4) != 0;
+        // res[i + 3] = (mask & 0x8) != 0;
+    }
+
+    for (size_t i = 4 * num_chunk; i < size; ++i) {
+        res[i] = src[i] == val;
+    }
+}
+
 }  // namespace simd
 }  // namespace milvus
 
