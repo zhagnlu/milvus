@@ -92,6 +92,12 @@ class ExecExprVisitor : public ExprVisitor {
 
     template <typename T, typename IndexFunc, typename ElementFunc>
     auto
+    ExecRangeVisitorImplTest(FieldId field_id,
+                             IndexFunc func,
+                             ElementFunc element_func) -> BitsetType;
+
+    template <typename T, typename IndexFunc, typename ElementFunc>
+    auto
     ExecDataRangeVisitorImpl(FieldId field_id,
                              IndexFunc index_func,
                              ElementFunc element_func) -> BitsetType;

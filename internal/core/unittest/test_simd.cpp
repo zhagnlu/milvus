@@ -26,6 +26,7 @@
 #include "simd/sse4.h"
 #include "simd/avx2.h"
 #include "simd/avx512.h"
+#include "simd/ref.h"
 
 using namespace std;
 using namespace milvus::simd;
@@ -748,6 +749,36 @@ TEST(FindTermAVX512, double_type) {
     vecs.push_back(12700.01);
     res = FindTermAVX512(vecs.data(), vecs.size(), 12700.01);
     ASSERT_EQ(res, true);
+}
+
+TEST(EqualVal, int64) {
+    std::vector<int64_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    if (!cpu_support_avx2()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
 }
 
 #endif
