@@ -238,24 +238,21 @@ EqualValAVX2(const int64_t* src, size_t size, int64_t val, bool* res) {
     int num_chunk = size / 4;
     int index = 0;
     int mask = 0;
-    for (size_t i = 0; i < num_chunk; ++i) {
+    for (size_t i = 0; i < num_chunk; i += 4) {
         // _mm_prefetch(reinterpret_cast<const char*>(src + 4 * (i + 1)),
         //              _MM_HINT_T0);
-        // __m256i data =
-        //     _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 4 * i));
-        __m256i data = _mm256_set1_epi64x(src[i]);
+        __m256i data =
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + i));
         __m256i cmp_res = _mm256_cmpeq_epi64(data, target);
 
-        // //mask = _mm256_movemask_pd(_mm256_castsi256_pd(data));
-        mask = _mm256_movemask_epi8(data);
+        mask = _mm256_movemask_pd(_mm256_castsi256_pd(data));
 
         // Store the comparison results in the res array
-        res[i] = (mask & 0x1) != 0;
-        res[i + 1] = (mask & 0x2) != 0;
-        res[i + 2] = (mask & 0x4) != 0;
-        res[i + 3] = (mask & 0x8) != 0;
+        res[index++] = mask & 0x1;
+        res[index++] = mask & 0x2;
+        res[index++] = mask & 0x4;
+        res[index++] = mask & 0x8;
     }
-    std::cout << mask << std::endl;
 
     for (size_t i = 4 * num_chunk; i < size; ++i) {
         res[i] = src[i] == val;

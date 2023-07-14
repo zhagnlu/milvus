@@ -106,6 +106,64 @@ StrCmpSSE4(const char* s1, const char* s2) {
 
 template <>
 void
+EqualValSSE4(const int16_t* src, size_t size, int16_t val, bool* res) {
+    int num_chunk = size / 8;
+    __m128i xmm_val = _mm_set1_epi16(val);  // Load val into xmm_val
+
+    int index = 0;
+    for (size_t i = 0; i < num_chunk; i += 8) {
+        __m128i xmm_src =
+            _mm_loadu_si128((__m128i*)&src[i]);  // Load 128 bits from src array
+
+        __m128i xmm_cmp = _mm_cmpeq_epi16(
+            xmm_src, xmm_val);  // Perform packed comparison between src and val
+
+        // Store the comparison results in the res array
+        uint16_t mask = _mm_movemask_epi8(xmm_cmp);
+        res[index++] = (mask & 0x0003);
+        res[index++] = (mask & 0x000C);
+        res[index++] = (mask & 0x0030);
+        res[index++] = (mask & 0x00C0);
+        res[index++] = (mask & 0x0300);
+        res[index++] = (mask & 0x0C00);
+        res[index++] = (mask & 0x3000);
+        res[index++] = (mask & 0xC000);
+    }
+
+    for (size_t i = 8 * num_chunk; i < size; ++i) {
+        res[i] = src[i] == val;
+    }
+}
+
+template <>
+void
+EqualValSSE4(const int32_t* src, size_t size, int32_t val, bool* res) {
+    int num_chunk = size / 4;
+    __m128i xmm_val = _mm_set1_epi32(val);  // Load val into xmm_val
+
+    int index = 0;
+    for (size_t i = 0; i < num_chunk; i += 4) {
+        __m128i xmm_src =
+            _mm_loadu_si128((__m128i*)&src[i]);  // Load 128 bits from src array
+
+        __m128i xmm_cmp = _mm_cmpeq_epi32(
+            xmm_src, xmm_val);  // Perform packed comparison between src and val
+
+        // Store the comparison results in the res array
+        uint16_t mask = _mm_movemask_epi8(xmm_cmp);
+        res[index++] = (mask & 0x000F);
+        res[index++] = (mask & 0x00F0);
+        res[index++] = (mask & 0x0F00);
+        res[index++] = (mask & 0xF000);
+    }
+
+    for (size_t i = 4 * num_chunk; i < size; ++i) {
+        res[i] = src[i] == val;
+    }
+}
+
+template <>
+void
 EqualValSSE4(const int64_t* src, size_t size, int64_t val, bool* res) {
     // __m128i target = _mm_set1_epi64x(val);
     int num_chunk = size / 2;
@@ -120,21 +178,10 @@ EqualValSSE4(const int64_t* src, size_t size, int64_t val, bool* res) {
             xmm_src, xmm_val);  // Perform packed comparison between src and val
 
         // Store the comparison results in the res array
-        res[index++] = (_mm_movemask_epi8(xmm_cmp) == 0xFFFF);
-        res[index++] =
-            (_mm_movemask_epi8(_mm_unpackhi_epi64(xmm_cmp, xmm_cmp)) == 0xFFFF);
+        uint16_t mask = _mm_movemask_epi8(xmm_cmp);
+        res[index++] = (mask & 0x0001) != 0;
+        res[index++] = (mask & 0x0100) != 0;
     }
-
-    // int index = 0;
-    // for (size_t i = 0; i < num_chunk; ++i) {
-    //     __m128i data =
-    //         _mm_load_si128(reinterpret_cast<const __m128i*>(src + 2 * i));
-    //     __m128i cmp_res = _mm_cmpeq_epi64(data, target);
-
-    //     int mask = _mm_movemask_pd(_mm_castsi128_pd(cmp_res));
-    //     res[index++] = mask >> 1 & 1;
-    //     res[index++] = mask >> 2 & 1;
-    // }
 
     for (size_t i = 2 * num_chunk; i < size; ++i) {
         res[i] = src[i] == val;

@@ -189,21 +189,20 @@ void
 EqualValAVX512(const int64_t* src, size_t size, int64_t val, bool* res) {
     __m512i target = _mm512_set1_epi64(val);
     int num_chunk = size / 8;
-    int remaining_size = size % 8;
     int index = 0;
-    for (size_t i = 0; i < num_chunk; ++i) {
+    for (size_t i = 0; i < num_chunk; i += 8) {
         __m512i data =
-            _mm512_loadu_si512(reinterpret_cast<const __m512i*>(src + 8 * i));
+            _mm512_loadu_si512(reinterpret_cast<const __m512i*>(src + i));
         __mmask8 mask = _mm512_cmpeq_epi64_mask(data, target);
 
-        res[index++] = (mask >> 0) & 1;
-        res[index++] = (mask >> 1) & 1;
-        res[index++] = (mask >> 2) & 1;
-        res[index++] = (mask >> 3) & 1;
-        res[index++] = (mask >> 4) & 1;
-        res[index++] = (mask >> 5) & 1;
-        res[index++] = (mask >> 6) & 1;
-        res[index++] = (mask >> 7) & 1;
+        res[index++] = mask & 0x01;
+        res[index++] = mask & 0x02;
+        res[index++] = mask & 0x04;
+        res[index++] = mask & 0x08;
+        res[index++] = mask & 0x10;
+        res[index++] = mask & 0x20;
+        res[index++] = mask & 0x40;
+        res[index++] = mask & 0x80;
     }
 
     for (size_t i = 8 * num_chunk; i < size; ++i) {

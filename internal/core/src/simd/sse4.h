@@ -44,6 +44,14 @@ EqualValSSE4(const T* src, size_t size, T val, bool* res) {
 
 template <>
 void
+EqualValSSE4(const int16_t* src, size_t size, int16_t val, bool* res);
+
+template <>
+void
+EqualValSSE4(const int32_t* src, size_t size, int32_t val, bool* res);
+
+template <>
+void
 EqualValSSE4(const int64_t* src, size_t size, int64_t val, bool* res);
 
 }  // namespace simd

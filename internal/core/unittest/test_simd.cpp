@@ -768,17 +768,92 @@ TEST(EqualVal, int64) {
                      .count()
               << std::endl;
     start = std::chrono::steady_clock::now();
-    EqualValAVX2(srcs.data(), 1000000, (int64_t)10, res.data());
-    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
-                     std::chrono::steady_clock::now() - start)
-                     .count()
-              << std::endl;
-    start = std::chrono::steady_clock::now();
     EqualValSSE4(srcs.data(), 1000000, (int64_t)10, res.data());
     std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
                      std::chrono::steady_clock::now() - start)
                      .count()
               << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+// Function to allocate aligned memory
+void*
+alignedMalloc(size_t size, size_t alignment) {
+    void* ptr;
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        ptr = nullptr;
+    }
+    return ptr;
+}
+
+TEST(EqualVal, int32) {
+    std::vector<int32_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    if (!cpu_support_avx2()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValAVX2(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(EqualVal, int16) {
+    std::vector<int16_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    if (!cpu_support_avx2()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    auto start = std::chrono::steady_clock::now();
+    EqualValRef(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    EqualValSSE4(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(xxx, xxx) {
+    FixedVector<bool> res(100);
+    bool* src = res.data();
+    src[0] = 0xff;
+    std::cout << res[0] << std::endl;
+    src[1] = 0x0;
+    std::cout << res[1] << std::endl;
+    src[2] = 0xFF;
+    std::cout << res[2] << std::endl;
 }
 
 #endif
