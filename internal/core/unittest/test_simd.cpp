@@ -935,7 +935,7 @@ TEST(EqualVal, perf_double) {
               << std::endl;
 }
 
-TEST(EqualVal, avx512_int8) {
+TEST(CompareVal, avx512_int8) {
     if (!cpu_support_avx512()) {
         PRINT_SKPI_TEST
         return;
@@ -955,6 +955,41 @@ TEST(EqualVal, avx512_int8) {
     for (int i = 0; i < 100; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 
     target = 99;
     EqualValAVX512(vecs.data(), 100, target, res.data());
@@ -964,9 +999,44 @@ TEST(EqualVal, avx512_int8) {
     for (int i = 0; i < 100; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 }
 
-TEST(EqualVal, avx512_int16) {
+TEST(CompareVal, avx512_int16) {
     if (!cpu_support_avx512()) {
         PRINT_SKPI_TEST
         return;
@@ -986,6 +1056,41 @@ TEST(EqualVal, avx512_int16) {
     for (int i = 0; i < 100; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 
     target = 99;
     EqualValAVX512(vecs.data(), 100, target, res.data());
@@ -995,9 +1100,44 @@ TEST(EqualVal, avx512_int16) {
     for (int i = 0; i < 100; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 100, target, res.data());
+    for (int i = 0; i < 100; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 100; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 }
 
-TEST(EqualVal, avx512_int32) {
+TEST(CompareVal, avx512_int32) {
     if (!cpu_support_avx512()) {
         PRINT_SKPI_TEST
         return;
@@ -1017,11 +1157,81 @@ TEST(EqualVal, avx512_int32) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 
     target = 99;
     EqualValAVX512(vecs.data(), 1000, target, res.data());
     for (int i = 0; i < 1000; i++) {
         expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
     }
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
@@ -1035,8 +1245,44 @@ TEST(EqualVal, avx512_int32) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 }
-TEST(EqualVal, avx512_int64) {
+
+TEST(CompareVal, avx512_int64) {
     if (!cpu_support_avx512()) {
         PRINT_SKPI_TEST
         return;
@@ -1056,11 +1302,81 @@ TEST(EqualVal, avx512_int64) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 
     target = 99;
     EqualValAVX512(vecs.data(), 1000, target, res.data());
     for (int i = 0; i < 1000; i++) {
         expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
     }
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
@@ -1074,9 +1390,44 @@ TEST(EqualVal, avx512_int64) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 }
 
-TEST(EqualVal, avx512_float) {
+TEST(CompareVal, avx512_float) {
     if (!cpu_support_avx512()) {
         PRINT_SKPI_TEST
         return;
@@ -1096,11 +1447,81 @@ TEST(EqualVal, avx512_float) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 
     target = 99.01;
     EqualValAVX512(vecs.data(), 1000, target, res.data());
     for (int i = 0; i < 1000; i++) {
         expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
     }
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
@@ -1114,9 +1535,44 @@ TEST(EqualVal, avx512_float) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 }
 
-TEST(EqualVal, avx512_double) {
+TEST(CompareVal, avx512_double) {
     if (!cpu_support_avx512()) {
         PRINT_SKPI_TEST
         return;
@@ -1136,11 +1592,81 @@ TEST(EqualVal, avx512_double) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
 
     target = 99.001;
     EqualValAVX512(vecs.data(), 1000, target, res.data());
     for (int i = 0; i < 1000; i++) {
         expect[i] = vecs[i] == target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
     }
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
@@ -1154,6 +1680,185 @@ TEST(EqualVal, avx512_double) {
     for (int i = 0; i < 1000; i++) {
         ASSERT_EQ(res[i], expect[i]) << i;
     }
+    LessValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] < target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    LessEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] <= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] >= target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    GreaterValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] > target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+    NotEqualValAVX512(vecs.data(), 1000, target, res.data());
+    for (int i = 0; i < 1000; i++) {
+        expect[i] = vecs[i] != target;
+    }
+    for (int i = 0; i < 1000; i++) {
+        ASSERT_EQ(res[i], expect[i]) << i;
+    }
+}
+
+TEST(LessVal, perf_int8) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int8_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i % 128;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    LessValRef(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    LessValAVX512(srcs.data(), 1000000, (int8_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(LessVal, perf_int16) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int16_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    LessValRef(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    LessValAVX512(srcs.data(), 1000000, (int16_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(LessVal, pref_int32) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int32_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    LessValRef(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    LessValAVX512(srcs.data(), 1000000, (int32_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(LessVal, perf_int64) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<int64_t> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = i;
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    LessValRef(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    LessValAVX512(srcs.data(), 1000000, (int64_t)10, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(LessVal, perf_float) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<float> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = float(i);
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    LessValRef(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    LessValAVX512(srcs.data(), 1000000, (float)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+}
+
+TEST(LessVal, perf_double) {
+    if (!cpu_support_avx512()) {
+        PRINT_SKPI_TEST
+        return;
+    }
+    std::vector<double> srcs(1000000);
+    for (int i = 0; i < 1000000; ++i) {
+        srcs[i] = double(i);
+    }
+    FixedVector<bool> res(1000000);
+    auto start = std::chrono::steady_clock::now();
+    LessValRef(srcs.data(), 1000000, (double)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
+    start = std::chrono::steady_clock::now();
+    LessValAVX512(srcs.data(), 1000000, (double)100.1, res.data());
+    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start)
+                     .count()
+              << std::endl;
 }
 
 #endif

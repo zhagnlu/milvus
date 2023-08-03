@@ -68,6 +68,38 @@ DECLARE_COMPARE_VAL_PTR(less_val, LessValRef, int64_t)
 DECLARE_COMPARE_VAL_PTR(less_val, LessValRef, float)
 DECLARE_COMPARE_VAL_PTR(less_val, LessValRef, double)
 
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, bool)
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, int8_t)
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, int16_t)
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, int32_t)
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, int64_t)
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, float)
+DECLARE_COMPARE_VAL_PTR(greater_val, GreaterValRef, double)
+
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, bool)
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, int8_t)
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, int16_t)
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, int32_t)
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, int64_t)
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, float)
+DECLARE_COMPARE_VAL_PTR(less_equal_val, LessEqualValRef, double)
+
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, bool)
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, int8_t)
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, int16_t)
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, int32_t)
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, int64_t)
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, float)
+DECLARE_COMPARE_VAL_PTR(greater_equal_val, GreaterEqualValRef, double)
+
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, bool)
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, int8_t)
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, int16_t)
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, int32_t)
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, int64_t)
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, float)
+DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, double)
+
 #if defined(__x86_64__)
 bool
 cpu_support_avx512() {
@@ -211,11 +243,99 @@ less_val_hook() {
     LOG_SEGCORE_INFO_ << "less than val hook simd type: " << simd_type;
 }
 
+void
+greater_val_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        greater_val_int8_t = GreaterValAVX512<int8_t>;
+        greater_val_int16_t = GreaterValAVX512<int16_t>;
+        greater_val_int32_t = GreaterValAVX512<int32_t>;
+        greater_val_int64_t = GreaterValAVX512<int64_t>;
+        greater_val_float = GreaterValAVX512<float>;
+        greater_val_double = GreaterValAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "greater than val hook simd type: " << simd_type;
+}
+
+void
+less_equal_val_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        less_equal_val_int8_t = LessEqualValAVX512<int8_t>;
+        less_equal_val_int16_t = LessEqualValAVX512<int16_t>;
+        less_equal_val_int32_t = LessEqualValAVX512<int32_t>;
+        less_equal_val_int64_t = LessEqualValAVX512<int64_t>;
+        less_equal_val_float = LessEqualValAVX512<float>;
+        less_equal_val_double = LessEqualValAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "less equal than val hook simd type: " << simd_type;
+}
+
+void
+greater_equal_val_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        greater_equal_val_int8_t = GreaterEqualValAVX512<int8_t>;
+        greater_equal_val_int16_t = GreaterEqualValAVX512<int16_t>;
+        greater_equal_val_int32_t = GreaterEqualValAVX512<int32_t>;
+        greater_equal_val_int64_t = GreaterEqualValAVX512<int64_t>;
+        greater_equal_val_float = GreaterEqualValAVX512<float>;
+        greater_equal_val_double = GreaterEqualValAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "greater equal than val hook simd type: " << simd_type;
+}
+
+void
+not_equal_val_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        not_equal_val_int8_t = NotEqualValAVX512<int8_t>;
+        not_equal_val_int16_t = NotEqualValAVX512<int16_t>;
+        not_equal_val_int32_t = NotEqualValAVX512<int32_t>;
+        not_equal_val_int64_t = NotEqualValAVX512<int64_t>;
+        not_equal_val_float = NotEqualValAVX512<float>;
+        not_equal_val_double = NotEqualValAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "not equal val hook simd type: " << simd_type;
+}
+
 static int init_hook_ = []() {
     bitset_hook();
     find_term_hook();
     equal_val_hook();
     less_val_hook();
+    greater_val_hook();
+    less_equal_val_hook();
+    greater_equal_val_hook();
+    not_equal_val_hook();
     return 0;
 }();
 

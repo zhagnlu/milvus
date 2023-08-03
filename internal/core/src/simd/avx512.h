@@ -17,6 +17,10 @@
 
 #include "common.h"
 
+#if defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 namespace milvus {
 namespace simd {
 
@@ -57,62 +61,27 @@ FindTermAVX512(const double* src, size_t vec_size, double val);
 
 template <typename T>
 void
-EqualValAVX512(const T* src, size_t size, T val, bool* res) {
-    CHECK_SUPPORTED_TYPE(T, "unsupported type for EqualValAVX512");
-};
-
-template <>
-void
-EqualValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
-
-template <>
-void
-EqualValAVX512(const int16_t* src, size_t size, int16_t val, bool* res);
-
-template <>
-void
-EqualValAVX512(const int32_t* src, size_t size, int32_t val, bool* res);
-
-template <>
-void
-EqualValAVX512(const int64_t* src, size_t size, int64_t val, bool* res);
-
-template <>
-void
-EqualValAVX512(const float* src, size_t size, float val, bool* res);
-
-template <>
-void
-EqualValAVX512(const double* src, size_t size, double val, bool* res);
+EqualValAVX512(const T* src, size_t size, T val, bool* res);
 
 template <typename T>
 void
-LessValAVX512(const T* src, size_t size, T val, bool* res) {
-    CHECK_SUPPORTED_TYPE(T, "unsupported type for LessValAVX512");
-};
+LessValAVX512(const T* src, size_t size, T val, bool* res);
 
-template <>
+template <typename T>
 void
-LessValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
+GreaterValAVX512(const T* src, size_t size, T val, bool* res);
 
-template <>
+template <typename T>
 void
-LessValAVX512(const int16_t* src, size_t size, int16_t val, bool* res);
+NotEqualValAVX512(const T* src, size_t size, T val, bool* res);
 
-template <>
+template <typename T>
 void
-LessValAVX512(const int32_t* src, size_t size, int32_t val, bool* res);
+LessEqualValAVX512(const T* src, size_t size, T val, bool* res);
 
-template <>
+template <typename T>
 void
-LessValAVX512(const int64_t* src, size_t size, int64_t val, bool* res);
+GreaterEqualValAVX512(const T* src, size_t size, T val, bool* res);
 
-template <>
-void
-LessValAVX512(const float* src, size_t size, float val, bool* res);
-
-template <>
-void
-LessValAVX512(const double* src, size_t size, double val, bool* res);
 }  // namespace simd
 }  // namespace milvus

@@ -55,6 +55,38 @@ EXTERN_COMPARE_VAL_PTR(less_val, int64_t)
 EXTERN_COMPARE_VAL_PTR(less_val, float)
 EXTERN_COMPARE_VAL_PTR(less_val, double)
 
+EXTERN_COMPARE_VAL_PTR(greater_val, bool)
+EXTERN_COMPARE_VAL_PTR(greater_val, int8_t)
+EXTERN_COMPARE_VAL_PTR(greater_val, int16_t)
+EXTERN_COMPARE_VAL_PTR(greater_val, int32_t)
+EXTERN_COMPARE_VAL_PTR(greater_val, int64_t)
+EXTERN_COMPARE_VAL_PTR(greater_val, float)
+EXTERN_COMPARE_VAL_PTR(greater_val, double)
+
+EXTERN_COMPARE_VAL_PTR(less_equal_val, bool)
+EXTERN_COMPARE_VAL_PTR(less_equal_val, int8_t)
+EXTERN_COMPARE_VAL_PTR(less_equal_val, int16_t)
+EXTERN_COMPARE_VAL_PTR(less_equal_val, int32_t)
+EXTERN_COMPARE_VAL_PTR(less_equal_val, int64_t)
+EXTERN_COMPARE_VAL_PTR(less_equal_val, float)
+EXTERN_COMPARE_VAL_PTR(less_equal_val, double)
+
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, bool)
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, int8_t)
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, int16_t)
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, int32_t)
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, int64_t)
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, float)
+EXTERN_COMPARE_VAL_PTR(greater_equal_val, double)
+
+EXTERN_COMPARE_VAL_PTR(not_equal_val, bool)
+EXTERN_COMPARE_VAL_PTR(not_equal_val, int8_t)
+EXTERN_COMPARE_VAL_PTR(not_equal_val, int16_t)
+EXTERN_COMPARE_VAL_PTR(not_equal_val, int32_t)
+EXTERN_COMPARE_VAL_PTR(not_equal_val, int64_t)
+EXTERN_COMPARE_VAL_PTR(not_equal_val, float)
+EXTERN_COMPARE_VAL_PTR(not_equal_val, double)
+
 #if defined(__x86_64__)
 // Flags that indicate whether runtime can choose
 // these simd type or not when hook starts.
@@ -130,6 +162,70 @@ less_val_func(const T* data, int64_t size, T val, bool* res) {
     DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, int64_t)
     DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, float)
     DISPATCH_COMPARE_VAL_SIMD_FUNC(less_val, double)
+}
+
+template <typename T>
+void
+greater_val_func(const T* data, int64_t size, T val, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, bool)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, int8_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, int16_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, int32_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, int64_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, float)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_val, double)
+}
+
+template <typename T>
+void
+less_equal_val_func(const T* data, int64_t size, T val, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, bool)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, int8_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, int16_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, int32_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, int64_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, float)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(less_equal_val, double)
+}
+
+template <typename T>
+void
+greater_equal_val_func(const T* data, int64_t size, T val, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, bool)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, int8_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, int16_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, int32_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, int64_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, float)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(greater_equal_val, double)
+}
+
+template <typename T>
+void
+not_equal_val_func(const T* data, int64_t size, T val, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, bool)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, int8_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, int16_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, int32_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, int64_t)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, float)
+    DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, double)
 }
 
 }  // namespace simd

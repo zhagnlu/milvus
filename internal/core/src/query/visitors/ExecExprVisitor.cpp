@@ -438,6 +438,10 @@ ExecExprVisitor::ExecUnaryRangeVisitorDispatcherImpl(UnaryRangeExpr& expr_raw)
                 if constexpr (std::is_integral<T>::value ||
                               std::is_floating_point<T>::value) {
                     milvus::simd::equal_val_func(data, size, val, res.data());
+                } else {
+                    for (size_t i = 0; i < size; ++i) {
+                        res[i] = data[i] == val;
+                    }
                 }
 #else
                 for (size_t i = 0; i < size; ++i) {
@@ -455,9 +459,21 @@ ExecExprVisitor::ExecUnaryRangeVisitorDispatcherImpl(UnaryRangeExpr& expr_raw)
             auto elem_func = [&](const T* data,
                                  int64_t size) -> FixedVector<bool> {
                 FixedVector<bool> res(size);
+#if defined(USE_DYNAMIC_SIMD)
+                if constexpr (std::is_integral<T>::value ||
+                              std::is_floating_point<T>::value) {
+                    milvus::simd::not_equal_val_func(
+                        data, size, val, res.data());
+                } else {
+                    for (size_t i = 0; i < size; ++i) {
+                        res[i] = data[i] != val;
+                    }
+                }
+#else
                 for (size_t i = 0; i < size; ++i) {
                     res[i] = data[i] != val;
                 }
+#endif
                 return res;
             };
             return ExecRangeVisitorImplTest<T>(field_id, index_func, elem_func);
