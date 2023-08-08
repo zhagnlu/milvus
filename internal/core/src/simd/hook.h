@@ -39,6 +39,14 @@ using CompareValPtr = void (*)(const T* src, size_t size, T val, bool* res);
 #define EXTERN_COMPARE_VAL_PTR(prefix, type) \
     extern CompareValPtr<type> prefix##_##type;
 
+// Compare column function register
+// Such as A == B, A < B...
+template <typename T>
+using CompareColPtr =
+    void (*)(const T* left, const T* right, size_t size, bool* res);
+#define EXTERN_COMPARE_COL_PTR(prefix, type) \
+    extern CompareColPtr<type> prefix##_##type;
+
 EXTERN_COMPARE_VAL_PTR(equal_val, bool)
 EXTERN_COMPARE_VAL_PTR(equal_val, int8_t)
 EXTERN_COMPARE_VAL_PTR(equal_val, int16_t)
@@ -87,6 +95,53 @@ EXTERN_COMPARE_VAL_PTR(not_equal_val, int64_t)
 EXTERN_COMPARE_VAL_PTR(not_equal_val, float)
 EXTERN_COMPARE_VAL_PTR(not_equal_val, double)
 
+EXTERN_COMPARE_COL_PTR(equal_col, bool)
+EXTERN_COMPARE_COL_PTR(equal_col, int8_t)
+EXTERN_COMPARE_COL_PTR(equal_col, int16_t)
+EXTERN_COMPARE_COL_PTR(equal_col, int32_t)
+EXTERN_COMPARE_COL_PTR(equal_col, int64_t)
+EXTERN_COMPARE_COL_PTR(equal_col, float)
+EXTERN_COMPARE_COL_PTR(equal_col, double)
+
+EXTERN_COMPARE_COL_PTR(less_col, bool)
+EXTERN_COMPARE_COL_PTR(less_col, int8_t)
+EXTERN_COMPARE_COL_PTR(less_col, int16_t)
+EXTERN_COMPARE_COL_PTR(less_col, int32_t)
+EXTERN_COMPARE_COL_PTR(less_col, int64_t)
+EXTERN_COMPARE_COL_PTR(less_col, float)
+EXTERN_COMPARE_COL_PTR(less_col, double)
+
+EXTERN_COMPARE_COL_PTR(greater_col, bool)
+EXTERN_COMPARE_COL_PTR(greater_col, int8_t)
+EXTERN_COMPARE_COL_PTR(greater_col, int16_t)
+EXTERN_COMPARE_COL_PTR(greater_col, int32_t)
+EXTERN_COMPARE_COL_PTR(greater_col, int64_t)
+EXTERN_COMPARE_COL_PTR(greater_col, float)
+EXTERN_COMPARE_COL_PTR(greater_col, double)
+
+EXTERN_COMPARE_COL_PTR(less_equal_col, bool)
+EXTERN_COMPARE_COL_PTR(less_equal_col, int8_t)
+EXTERN_COMPARE_COL_PTR(less_equal_col, int16_t)
+EXTERN_COMPARE_COL_PTR(less_equal_col, int32_t)
+EXTERN_COMPARE_COL_PTR(less_equal_col, int64_t)
+EXTERN_COMPARE_COL_PTR(less_equal_col, float)
+EXTERN_COMPARE_COL_PTR(less_equal_col, double)
+
+EXTERN_COMPARE_COL_PTR(greater_equal_col, bool)
+EXTERN_COMPARE_COL_PTR(greater_equal_col, int8_t)
+EXTERN_COMPARE_COL_PTR(greater_equal_col, int16_t)
+EXTERN_COMPARE_COL_PTR(greater_equal_col, int32_t)
+EXTERN_COMPARE_COL_PTR(greater_equal_col, int64_t)
+EXTERN_COMPARE_COL_PTR(greater_equal_col, float)
+EXTERN_COMPARE_COL_PTR(greater_equal_col, double)
+
+EXTERN_COMPARE_COL_PTR(not_equal_col, bool)
+EXTERN_COMPARE_COL_PTR(not_equal_col, int8_t)
+EXTERN_COMPARE_COL_PTR(not_equal_col, int16_t)
+EXTERN_COMPARE_COL_PTR(not_equal_col, int32_t)
+EXTERN_COMPARE_COL_PTR(not_equal_col, int64_t)
+EXTERN_COMPARE_COL_PTR(not_equal_col, float)
+EXTERN_COMPARE_COL_PTR(not_equal_col, double)
 #if defined(__x86_64__)
 // Flags that indicate whether runtime can choose
 // these simd type or not when hook starts.
@@ -111,6 +166,16 @@ cpu_support_sse4_2();
         return milvus::simd::find_term_##type(data, size, val); \
     }
 
+#define DISPATCH_COMPARE_VAL_SIMD_FUNC(prefix, type)                \
+    if constexpr (std::is_same_v<T, type>) {                        \
+        return milvus::simd::prefix##_##type(data, size, val, res); \
+    }
+
+#define DISPATCH_COMPARE_COL_SIMD_FUNC(prefix, type)                  \
+    if constexpr (std::is_same_v<T, type>) {                          \
+        return milvus::simd::prefix##_##type(left, right, size, res); \
+    }
+
 template <typename T>
 bool
 find_term_func(const T* data, size_t size, T val) {
@@ -126,11 +191,6 @@ find_term_func(const T* data, size_t size, T val) {
     DISPATCH_FIND_TERM_SIMD_FUNC(float)
     DISPATCH_FIND_TERM_SIMD_FUNC(double)
 }
-
-#define DISPATCH_COMPARE_VAL_SIMD_FUNC(prefix, type)                \
-    if constexpr (std::is_same_v<T, type>) {                        \
-        return milvus::simd::prefix##_##type(data, size, val, res); \
-    }
 
 template <typename T>
 void
@@ -226,6 +286,102 @@ not_equal_val_func(const T* data, int64_t size, T val, bool* res) {
     DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, int64_t)
     DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, float)
     DISPATCH_COMPARE_VAL_SIMD_FUNC(not_equal_val, double)
+}
+
+template <typename T>
+void
+equal_col_func(const T* left, const T* right, int64_t size, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, bool)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, int8_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, int16_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, int32_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, int64_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, float)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(equal_col, double)
+}
+
+template <typename T>
+void
+less_col_func(const T* left, const T* right, int64_t size, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, bool)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, int8_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, int16_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, int32_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, int64_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, float)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_col, double)
+}
+
+template <typename T>
+void
+greater_col_func(const T* left, const T* right, int64_t size, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, bool)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, int8_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, int16_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, int32_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, int64_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, float)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_col, double)
+}
+
+template <typename T>
+void
+less_equal_col_func(const T* left, const T* right, int64_t size, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, bool)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, int8_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, int16_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, int32_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, int64_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, float)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(less_equal_col, double)
+}
+
+template <typename T>
+void
+greater_equal_col_func(const T* left, const T* right, int64_t size, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, bool)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, int8_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, int16_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, int32_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, int64_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, float)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(greater_equal_col, double)
+}
+
+template <typename T>
+void
+not_equal_col_func(const T* left, const T* right, int64_t size, bool* res) {
+    static_assert(
+        std::is_integral<T>::value || std::is_floating_point<T>::value,
+        "T must be integral or float/double type");
+
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, bool)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, int8_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, int16_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, int32_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, int64_t)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, float)
+    DISPATCH_COMPARE_COL_SIMD_FUNC(not_equal_col, double)
 }
 
 }  // namespace simd

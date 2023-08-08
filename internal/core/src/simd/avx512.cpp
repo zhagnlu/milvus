@@ -184,7 +184,72 @@ FindTermAVX512(const double* src, size_t vec_size, double val) {
     return false;
 }
 
-template <typename T, int ComparisonPredicate>
+enum class CompareType { EQ = 0, NEQ, LT, GT, LE, GE };
+
+template <typename T, CompareType type>
+struct CompareOperator;
+
+template <typename T>
+struct CompareOperator<T, CompareType::EQ> {
+    static constexpr int ComparePredicate =
+        std::is_floating_point_v<T> ? _CMP_EQ_OQ : _MM_CMPINT_EQ;
+    static constexpr bool
+    Op(T a, T b) {
+        return a == b;
+    }
+};
+
+template <typename T>
+struct CompareOperator<T, CompareType::NEQ> {
+    static constexpr int ComparePredicate =
+        std::is_floating_point_v<T> ? _CMP_NEQ_OQ : _MM_CMPINT_NE;
+    static constexpr bool
+    Op(T a, T b) {
+        return a != b;
+    }
+};
+
+template <typename T>
+struct CompareOperator<T, CompareType::LT> {
+    static constexpr int ComparePredicate =
+        std::is_floating_point_v<T> ? _CMP_LT_OQ : _MM_CMPINT_LT;
+    static constexpr bool
+    Op(T a, T b) {
+        return a < b;
+    }
+};
+
+template <typename T>
+struct CompareOperator<T, CompareType::LE> {
+    static constexpr int ComparePredicate =
+        std::is_floating_point_v<T> ? _CMP_LE_OQ : _MM_CMPINT_LE;
+    static constexpr bool
+    Op(T a, T b) {
+        return a <= b;
+    }
+};
+
+template <typename T>
+struct CompareOperator<T, CompareType::GT> {
+    static constexpr int ComparePredicate =
+        std::is_floating_point_v<T> ? _CMP_GT_OQ : _MM_CMPINT_NLE;
+    static constexpr bool
+    Op(T a, T b) {
+        return a > b;
+    }
+};
+
+template <typename T>
+struct CompareOperator<T, CompareType::GE> {
+    static constexpr int ComparePredicate =
+        std::is_floating_point_v<T> ? _CMP_GE_OQ : _MM_CMPINT_NLT;
+    static constexpr bool
+    Op(T a, T b) {
+        return a >= b;
+    }
+};
+
+template <typename T, CompareType type>
 struct CompareValAVX512Impl {
     static void
     Compare(const T* src, size_t size, T val, bool* res) {
@@ -193,15 +258,8 @@ struct CompareValAVX512Impl {
     }
 };
 
-template <typename T, int ComparisonPredicate>
-void
-CompareValAVX512(const T* src, size_t size, T val, bool* res) {
-    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
-                  "T must be integral or float/double type");
-}
-
-template <int ComparisonPredicate>
-struct CompareValAVX512Impl<int8_t, ComparisonPredicate> {
+template <CompareType type>
+struct CompareValAVX512Impl<int8_t, type> {
     static void
     Compare(const int8_t* src, size_t size, int8_t val, bool* res) {
         __m512i target = _mm512_set1_epi8(val);
@@ -212,43 +270,20 @@ struct CompareValAVX512Impl<int8_t, ComparisonPredicate> {
             __m512i data =
                 _mm512_loadu_si512(reinterpret_cast<const __m512i*>(src + i));
 
-            __mmask64 cmp_res_mask =
-                _mm512_cmp_epi8_mask(data, target, ComparisonPredicate);
+            __mmask64 cmp_res_mask = _mm512_cmp_epi8_mask(
+                data, target, CompareOperator<int8_t, type>::ComparePredicate);
             __m512i cmp_res = _mm512_maskz_set1_epi8(cmp_res_mask, 0x01);
             _mm512_storeu_si512(res + i, cmp_res);
         }
 
         for (size_t i = middle; i < size; ++i) {
-            if constexpr (ComparisonPredicate == _CMP_EQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_EQ) {
-                res[i] = src[i] == val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_NEQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NE) {
-                res[i] = src[i] != val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LT) {
-                res[i] = src[i] < val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLE) {
-                res[i] = src[i] > val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LE) {
-                res[i] = src[i] <= val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLT) {
-                res[i] = src[i] >= val;
-            }
+            res[i] = CompareOperator<int8_t, type>::Op(src[i], val);
         }
     }
 };
 
-template <int ComparisonPredicate>
-struct CompareValAVX512Impl<int16_t, ComparisonPredicate> {
+template <CompareType type>
+struct CompareValAVX512Impl<int16_t, type> {
     static void
     Compare(const int16_t* src, size_t size, int16_t val, bool* res) {
         __m512i target = _mm512_set1_epi16(val);
@@ -259,43 +294,20 @@ struct CompareValAVX512Impl<int16_t, ComparisonPredicate> {
             __m512i data =
                 _mm512_loadu_si512(reinterpret_cast<const __m512i*>(src + i));
 
-            __mmask32 cmp_res_mask =
-                _mm512_cmp_epi16_mask(data, target, ComparisonPredicate);
+            __mmask32 cmp_res_mask = _mm512_cmp_epi16_mask(
+                data, target, CompareOperator<int16_t, type>::ComparePredicate);
             __m256i cmp_res = _mm256_maskz_set1_epi8(cmp_res_mask, 0x01);
             _mm256_storeu_si256((__m256i*)(res + i), cmp_res);
         }
 
         for (size_t i = middle; i < size; ++i) {
-            if constexpr (ComparisonPredicate == _CMP_EQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_EQ) {
-                res[i] = src[i] == val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_NEQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NE) {
-                res[i] = src[i] != val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LT) {
-                res[i] = src[i] < val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLE) {
-                res[i] = src[i] > val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LE) {
-                res[i] = src[i] <= val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLT) {
-                res[i] = src[i] >= val;
-            }
+            res[i] = CompareOperator<int16_t, type>::Op(src[i], val);
         }
     }
 };
 
-template <int ComparisonPredicate>
-struct CompareValAVX512Impl<int32_t, ComparisonPredicate> {
+template <CompareType type>
+struct CompareValAVX512Impl<int32_t, type> {
     static void
     Compare(const int32_t* src, size_t size, int32_t val, bool* res) {
         __m512i target = _mm512_set1_epi32(val);
@@ -306,43 +318,20 @@ struct CompareValAVX512Impl<int32_t, ComparisonPredicate> {
             __m512i data =
                 _mm512_loadu_si512(reinterpret_cast<const __m512i*>(src + i));
 
-            __mmask16 cmp_res_mask =
-                _mm512_cmp_epi32_mask(data, target, ComparisonPredicate);
+            __mmask16 cmp_res_mask = _mm512_cmp_epi32_mask(
+                data, target, CompareOperator<int32_t, type>::ComparePredicate);
             __m128i cmp_res = _mm_maskz_set1_epi8(cmp_res_mask, 0x01);
             _mm_storeu_si128((__m128i*)(res + i), cmp_res);
         }
 
         for (size_t i = middle; i < size; ++i) {
-            if constexpr (ComparisonPredicate == _CMP_EQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_EQ) {
-                res[i] = src[i] == val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_NEQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NE) {
-                res[i] = src[i] != val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LT) {
-                res[i] = src[i] < val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLE) {
-                res[i] = src[i] > val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LE) {
-                res[i] = src[i] <= val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLT) {
-                res[i] = src[i] >= val;
-            }
+            res[i] = CompareOperator<int32_t, type>::Op(src[i], val);
         }
     }
 };
 
-template <int ComparisonPredicate>
-struct CompareValAVX512Impl<int64_t, ComparisonPredicate> {
+template <CompareType type>
+struct CompareValAVX512Impl<int64_t, type> {
     static void
     Compare(const int64_t* src, size_t size, int64_t val, bool* res) {
         __m512i target = _mm512_set1_epi64(val);
@@ -351,43 +340,20 @@ struct CompareValAVX512Impl<int64_t, ComparisonPredicate> {
         for (size_t i = 0; i < middle; i += 8) {
             __m512i data =
                 _mm512_loadu_si512(reinterpret_cast<const __m512i*>(src + i));
-            __mmask8 mask =
-                _mm512_cmp_epi64_mask(data, target, ComparisonPredicate);
+            __mmask8 mask = _mm512_cmp_epi64_mask(
+                data, target, CompareOperator<int64_t, type>::ComparePredicate);
             __m128i cmp_res = _mm_maskz_set1_epi8(mask, 0x01);
             _mm_storeu_si64((__m128i*)(res + i), cmp_res);
         }
 
         for (size_t i = middle; i < size; ++i) {
-            if constexpr (ComparisonPredicate == _CMP_EQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_EQ) {
-                res[i] = src[i] == val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_NEQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NE) {
-                res[i] = src[i] != val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LT) {
-                res[i] = src[i] < val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLE) {
-                res[i] = src[i] > val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LE) {
-                res[i] = src[i] <= val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLT) {
-                res[i] = src[i] >= val;
-            }
+            res[i] = CompareOperator<int64_t, type>::Op(src[i], val);
         }
     }
 };
 
-template <int ComparisonPredicate>
-struct CompareValAVX512Impl<float, ComparisonPredicate> {
+template <CompareType type>
+struct CompareValAVX512Impl<float, type> {
     static void
     Compare(const float* src, size_t size, float val, bool* res) {
         __m512 target = _mm512_set1_ps(val);
@@ -397,43 +363,20 @@ struct CompareValAVX512Impl<float, ComparisonPredicate> {
         for (size_t i = 0; i < middle; i += 16) {
             __m512 data = _mm512_loadu_ps(src + i);
 
-            __mmask16 cmp_res_mask =
-                _mm512_cmp_ps_mask(data, target, ComparisonPredicate);
+            __mmask16 cmp_res_mask = _mm512_cmp_ps_mask(
+                data, target, CompareOperator<float, type>::ComparePredicate);
             __m128i cmp_res = _mm_maskz_set1_epi8(cmp_res_mask, 0x01);
             _mm_storeu_si128((__m128i*)(res + i), cmp_res);
         }
 
         for (size_t i = middle; i < size; ++i) {
-            if constexpr (ComparisonPredicate == _CMP_EQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_EQ) {
-                res[i] = src[i] == val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_NEQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NE) {
-                res[i] = src[i] != val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LT) {
-                res[i] = src[i] < val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLE) {
-                res[i] = src[i] > val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LE) {
-                res[i] = src[i] <= val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLT) {
-                res[i] = src[i] >= val;
-            }
+            res[i] = CompareOperator<float, type>::Op(src[i], val);
         }
     }
 };
 
-template <int ComparisonPredicate>
-struct CompareValAVX512Impl<double, ComparisonPredicate> {
+template <CompareType type>
+struct CompareValAVX512Impl<double, type> {
     static void
     Compare(const double* src, size_t size, double val, bool* res) {
         __m512d target = _mm512_set1_pd(val);
@@ -443,37 +386,14 @@ struct CompareValAVX512Impl<double, ComparisonPredicate> {
         for (size_t i = 0; i < middle; i += 8) {
             __m512d data = _mm512_loadu_pd(src + i);
 
-            __mmask8 cmp_res_mask =
-                _mm512_cmp_pd_mask(data, target, ComparisonPredicate);
+            __mmask8 cmp_res_mask = _mm512_cmp_pd_mask(
+                data, target, CompareOperator<double, type>::ComparePredicate);
             __m128i cmp_res = _mm_maskz_set1_epi8(cmp_res_mask, 0x01);
             _mm_storeu_si64((res + i), cmp_res);
         }
 
         for (size_t i = middle; i < size; ++i) {
-            if constexpr (ComparisonPredicate == _CMP_EQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_EQ) {
-                res[i] = src[i] == val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_NEQ_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NE) {
-                res[i] = src[i] != val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LT) {
-                res[i] = src[i] < val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GT_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLE) {
-                res[i] = src[i] > val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_LE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_LE) {
-                res[i] = src[i] <= val;
-            }
-            if constexpr (ComparisonPredicate == _CMP_GE_OQ ||
-                          ComparisonPredicate == _MM_CMPINT_NLT) {
-                res[i] = src[i] >= val;
-            }
+            res[i] = CompareOperator<double, type>::Op(src[i], val);
         }
     }
 };
@@ -483,12 +403,7 @@ void
 EqualValAVX512(const T* src, size_t size, T val, bool* res) {
     static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
                   "T must be integral or float/double type");
-    if constexpr (std::is_integral_v<T>) {
-        CompareValAVX512Impl<T, _MM_CMPINT_EQ>::Compare(src, size, val, res);
-    }
-    if constexpr (std::is_floating_point_v<T>) {
-        CompareValAVX512Impl<T, _CMP_EQ_OQ>::Compare(src, size, val, res);
-    }
+    CompareValAVX512Impl<T, CompareType::EQ>::Compare(src, size, val, res);
 };
 template void
 EqualValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
@@ -508,12 +423,7 @@ void
 LessValAVX512(const T* src, size_t size, T val, bool* res) {
     static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
                   "T must be integral or float/double type");
-    if constexpr (std::is_integral_v<T>) {
-        CompareValAVX512Impl<T, _MM_CMPINT_LT>::Compare(src, size, val, res);
-    }
-    if constexpr (std::is_floating_point_v<T>) {
-        CompareValAVX512Impl<T, _CMP_LT_OQ>::Compare(src, size, val, res);
-    }
+    CompareValAVX512Impl<T, CompareType::LT>::Compare(src, size, val, res);
 };
 template void
 LessValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
@@ -533,12 +443,7 @@ void
 GreaterValAVX512(const T* src, size_t size, T val, bool* res) {
     static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
                   "T must be integral or float/double type");
-    if constexpr (std::is_integral_v<T>) {
-        CompareValAVX512Impl<T, _MM_CMPINT_NLE>::Compare(src, size, val, res);
-    }
-    if constexpr (std::is_floating_point_v<T>) {
-        CompareValAVX512Impl<T, _CMP_GT_OQ>::Compare(src, size, val, res);
-    }
+    CompareValAVX512Impl<T, CompareType::GT>::Compare(src, size, val, res);
 };
 template void
 GreaterValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
@@ -558,12 +463,7 @@ void
 NotEqualValAVX512(const T* src, size_t size, T val, bool* res) {
     static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
                   "T must be integral or float/double type");
-    if constexpr (std::is_integral_v<T>) {
-        CompareValAVX512Impl<T, _MM_CMPINT_NE>::Compare(src, size, val, res);
-    }
-    if constexpr (std::is_floating_point_v<T>) {
-        CompareValAVX512Impl<T, _CMP_NEQ_OQ>::Compare(src, size, val, res);
-    }
+    CompareValAVX512Impl<T, CompareType::NEQ>::Compare(src, size, val, res);
 };
 template void
 NotEqualValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
@@ -583,12 +483,7 @@ void
 LessEqualValAVX512(const T* src, size_t size, T val, bool* res) {
     static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
                   "T must be integral or float/double type");
-    if constexpr (std::is_integral_v<T>) {
-        CompareValAVX512Impl<T, _MM_CMPINT_LE>::Compare(src, size, val, res);
-    }
-    if constexpr (std::is_floating_point_v<T>) {
-        CompareValAVX512Impl<T, _CMP_LE_OQ>::Compare(src, size, val, res);
-    }
+    CompareValAVX512Impl<T, CompareType::LE>::Compare(src, size, val, res);
 };
 template void
 LessEqualValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
@@ -608,12 +503,7 @@ void
 GreaterEqualValAVX512(const T* src, size_t size, T val, bool* res) {
     static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
                   "T must be integral or float/double type");
-    if constexpr (std::is_integral_v<T>) {
-        CompareValAVX512Impl<T, _MM_CMPINT_NLT>::Compare(src, size, val, res);
-    }
-    if constexpr (std::is_floating_point_v<T>) {
-        CompareValAVX512Impl<T, _CMP_GE_OQ>::Compare(src, size, val, res);
-    }
+    CompareValAVX512Impl<T, CompareType::GE>::Compare(src, size, val, res);
 };
 template void
 GreaterEqualValAVX512(const int8_t* src, size_t size, int8_t val, bool* res);
@@ -627,6 +517,360 @@ template void
 GreaterEqualValAVX512(const float* src, size_t size, float val, bool* res);
 template void
 GreaterEqualValAVX512(const double* src, size_t size, double val, bool* res);
+
+template <typename T>
+void
+CompareColumnAVX512(const T* left, const T* right, size_t size, bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+}
+
+template <typename T, CompareType type>
+struct CompareColumnAVX512Impl {
+    static void
+    Compare(const T* left, const T* right, size_t size, bool* res) {
+        static_assert(std::is_integral_v<T>, "T must be integral type");
+
+        int batch_size = 512 / (sizeof(T) * 8);
+        int middle = size / batch_size * batch_size;
+
+        for (size_t i = 0; i < middle; i += batch_size) {
+            __m512i left_reg =
+                _mm512_loadu_si512(reinterpret_cast<const __m512i*>(left + i));
+            __m512i right_reg =
+                _mm512_loadu_si512(reinterpret_cast<const __m512i*>(right + i));
+
+            if constexpr (std::is_same_v<T, int8_t>) {
+                __mmask64 cmp_res_mask = _mm512_cmp_epi8_mask(
+                    left_reg,
+                    right_reg,
+                    CompareOperator<T, type>::ComparePredicate);
+
+                __m512i cmp_res = _mm512_maskz_set1_epi8(cmp_res_mask, 0x01);
+                _mm512_storeu_si512(res + i, cmp_res);
+            } else if constexpr (std::is_same_v<T, int16_t>) {
+                __mmask32 cmp_res_mask = _mm512_cmp_epi16_mask(
+                    left_reg,
+                    right_reg,
+                    CompareOperator<T, type>::ComparePredicate);
+
+                __m256i cmp_res = _mm256_maskz_set1_epi8(cmp_res_mask, 0x01);
+                _mm256_storeu_si256((__m256i*)(res + i), cmp_res);
+            } else if constexpr (std::is_same_v<T, int32_t>) {
+                __mmask16 cmp_res_mask = _mm512_cmp_epi32_mask(
+                    left_reg,
+                    right_reg,
+                    CompareOperator<T, type>::ComparePredicate);
+
+                __m128i cmp_res = _mm_maskz_set1_epi8(cmp_res_mask, 0x01);
+                _mm_storeu_si128((__m128i*)(res + i), cmp_res);
+            } else if constexpr (std::is_same_v<T, int64_t>) {
+                __mmask8 mask = _mm512_cmp_epi64_mask(
+                    left_reg,
+                    right_reg,
+                    CompareOperator<T, type>::ComparePredicate);
+
+                __m128i cmp_res = _mm_maskz_set1_epi8(mask, 0x01);
+                _mm_storeu_si64((__m128i*)(res + i), cmp_res);
+            }
+        }
+
+        for (size_t i = middle; i < size; ++i) {
+            res[i] = CompareOperator<T, type>::Op(left[i], right[i]);
+        }
+    }
+};
+
+template <CompareType type>
+struct CompareColumnAVX512Impl<float, type> {
+    static void
+    Compare(const float* left, const float* right, size_t size, bool* res) {
+        int batch_size = 512 / (sizeof(float) * 8);
+        int middle = size / batch_size * batch_size;
+
+        for (size_t i = 0; i < middle; i += batch_size) {
+            __m512 left_reg =
+                _mm512_loadu_ps(reinterpret_cast<const __m512*>(left + i));
+            __m512 right_reg =
+                _mm512_loadu_ps(reinterpret_cast<const __m512*>(right + i));
+
+            __mmask16 cmp_res_mask = _mm512_cmp_ps_mask(
+                left_reg,
+                right_reg,
+                CompareOperator<float, type>::ComparePredicate);
+
+            __m128i cmp_res = _mm_maskz_set1_epi8(cmp_res_mask, 0x01);
+            _mm_storeu_si128((__m128i*)(res + i), cmp_res);
+        }
+
+        for (size_t i = middle; i < size; ++i) {
+            res[i] = CompareOperator<float, type>::Op(left[i], right[i]);
+        }
+    }
+};
+
+template <CompareType type>
+struct CompareColumnAVX512Impl<double, type> {
+    static void
+    Compare(const double* left, const double* right, size_t size, bool* res) {
+        int batch_size = 512 / (sizeof(double) * 8);
+        int middle = size / batch_size * batch_size;
+
+        for (size_t i = 0; i < middle; i += batch_size) {
+            __m512d left_reg =
+                _mm512_loadu_pd(reinterpret_cast<const __m512d*>(left + i));
+            __m512d right_reg =
+                _mm512_loadu_pd(reinterpret_cast<const __m512d*>(right + i));
+
+            __mmask8 cmp_res_mask = _mm512_cmp_pd_mask(
+                left_reg,
+                right_reg,
+                CompareOperator<double, type>::ComparePredicate);
+
+            __m128i cmp_res = _mm_maskz_set1_epi8(cmp_res_mask, 0x01);
+            _mm_storeu_si64((res + i), cmp_res);
+        }
+
+        for (size_t i = middle; i < size; ++i) {
+            res[i] = CompareOperator<double, type>::Op(left[i], right[i]);
+        }
+    }
+};
+
+template <typename T>
+void
+EqualColumnAVX512(const T* left, const T* right, size_t size, bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+    CompareColumnAVX512Impl<T, CompareType::EQ>::Compare(
+        left, right, size, res);
+};
+
+template void
+EqualColumnAVX512(const int8_t* left,
+                  const int8_t* right,
+                  size_t size,
+                  bool* res);
+template void
+EqualColumnAVX512(const int16_t* left,
+                  const int16_t* right,
+                  size_t size,
+                  bool* res);
+template void
+EqualColumnAVX512(const int32_t* left,
+                  const int32_t* right,
+                  size_t size,
+                  bool* res);
+template void
+EqualColumnAVX512(const int64_t* left,
+                  const int64_t* right,
+                  size_t size,
+                  bool* res);
+template void
+EqualColumnAVX512(const float* left,
+                  const float* right,
+                  size_t size,
+                  bool* res);
+template void
+EqualColumnAVX512(const double* left,
+                  const double* right,
+                  size_t size,
+                  bool* res);
+
+template <typename T>
+void
+LessColumnAVX512(const T* left, const T* right, size_t size, bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+    CompareColumnAVX512Impl<T, CompareType::LT>::Compare(
+        left, right, size, res);
+};
+template void
+LessColumnAVX512(const int8_t* left,
+                 const int8_t* right,
+                 size_t size,
+                 bool* res);
+template void
+LessColumnAVX512(const int16_t* left,
+                 const int16_t* right,
+                 size_t size,
+                 bool* res);
+template void
+LessColumnAVX512(const int32_t* left,
+                 const int32_t* right,
+                 size_t size,
+                 bool* res);
+template void
+LessColumnAVX512(const int64_t* left,
+                 const int64_t* right,
+                 size_t size,
+                 bool* res);
+template void
+LessColumnAVX512(const float* left, const float* right, size_t size, bool* res);
+template void
+LessColumnAVX512(const double* left,
+                 const double* right,
+                 size_t size,
+                 bool* res);
+
+template <typename T>
+void
+GreaterColumnAVX512(const T* left, const T* right, size_t size, bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+    CompareColumnAVX512Impl<T, CompareType::GT>::Compare(
+        left, right, size, res);
+};
+template void
+GreaterColumnAVX512(const int8_t* left,
+                    const int8_t* right,
+                    size_t size,
+                    bool* res);
+template void
+GreaterColumnAVX512(const int16_t* left,
+                    const int16_t* right,
+                    size_t size,
+                    bool* res);
+template void
+GreaterColumnAVX512(const int32_t* left,
+                    const int32_t* right,
+                    size_t size,
+                    bool* res);
+template void
+GreaterColumnAVX512(const int64_t* left,
+                    const int64_t* right,
+                    size_t size,
+                    bool* res);
+template void
+GreaterColumnAVX512(const float* left,
+                    const float* right,
+                    size_t size,
+                    bool* res);
+template void
+GreaterColumnAVX512(const double* left,
+                    const double* right,
+                    size_t size,
+                    bool* res);
+
+template <typename T>
+void
+LessEqualColumnAVX512(const T* left, const T* right, size_t size, bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+    CompareColumnAVX512Impl<T, CompareType::LE>::Compare(
+        left, right, size, res);
+};
+template void
+LessEqualColumnAVX512(const int8_t* left,
+                      const int8_t* right,
+                      size_t size,
+                      bool* res);
+template void
+LessEqualColumnAVX512(const int16_t* left,
+                      const int16_t* right,
+                      size_t size,
+                      bool* res);
+template void
+LessEqualColumnAVX512(const int32_t* left,
+                      const int32_t* right,
+                      size_t size,
+                      bool* res);
+template void
+LessEqualColumnAVX512(const int64_t* left,
+                      const int64_t* right,
+                      size_t size,
+                      bool* res);
+template void
+LessEqualColumnAVX512(const float* left,
+                      const float* right,
+                      size_t size,
+                      bool* res);
+template void
+LessEqualColumnAVX512(const double* left,
+                      const double* right,
+                      size_t size,
+                      bool* res);
+
+template <typename T>
+void
+GreaterEqualColumnAVX512(const T* left,
+                         const T* right,
+                         size_t size,
+                         bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+    CompareColumnAVX512Impl<T, CompareType::GE>::Compare(
+        left, right, size, res);
+};
+template void
+GreaterEqualColumnAVX512(const int8_t* left,
+                         const int8_t* right,
+                         size_t size,
+                         bool* res);
+template void
+GreaterEqualColumnAVX512(const int16_t* left,
+                         const int16_t* right,
+                         size_t size,
+                         bool* res);
+template void
+GreaterEqualColumnAVX512(const int32_t* left,
+                         const int32_t* right,
+                         size_t size,
+                         bool* res);
+template void
+GreaterEqualColumnAVX512(const int64_t* left,
+                         const int64_t* right,
+                         size_t size,
+                         bool* res);
+template void
+GreaterEqualColumnAVX512(const float* left,
+                         const float* right,
+                         size_t size,
+                         bool* res);
+template void
+GreaterEqualColumnAVX512(const double* left,
+                         const double* right,
+                         size_t size,
+                         bool* res);
+
+template <typename T>
+void
+NotEqualColumnAVX512(const T* left, const T* right, size_t size, bool* res) {
+    static_assert(std::is_integral_v<T> || std::is_floating_point_v<T>,
+                  "T must be integral or float/double type");
+    CompareColumnAVX512Impl<T, CompareType::NEQ>::Compare(
+        left, right, size, res);
+};
+template void
+NotEqualColumnAVX512(const int8_t* left,
+                     const int8_t* right,
+                     size_t size,
+                     bool* res);
+template void
+NotEqualColumnAVX512(const int16_t* left,
+                     const int16_t* right,
+                     size_t size,
+                     bool* res);
+template void
+NotEqualColumnAVX512(const int32_t* left,
+                     const int32_t* right,
+                     size_t size,
+                     bool* res);
+template void
+NotEqualColumnAVX512(const int64_t* left,
+                     const int64_t* right,
+                     size_t size,
+                     bool* res);
+template void
+NotEqualColumnAVX512(const float* left,
+                     const float* right,
+                     size_t size,
+                     bool* res);
+template void
+NotEqualColumnAVX512(const double* left,
+                     const double* right,
+                     size_t size,
+                     bool* res);
 
 }  // namespace simd
 }  // namespace milvus

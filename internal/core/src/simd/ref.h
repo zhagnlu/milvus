@@ -76,5 +76,53 @@ NotEqualValRef(const T* src, size_t size, T val, bool* res) {
     }
 }
 
+template <typename T>
+void
+EqualColumnRef(const T* left, const T* right, size_t size, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = left[i] == right[i];
+    }
+}
+
+template <typename T>
+void
+LessColumnRef(const T* left, const T* right, size_t size, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = left[i] < right[i];
+    }
+}
+
+template <typename T>
+void
+LessEqualColumnRef(const T* left, const T* right, size_t size, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = left[i] <= right[i];
+    }
+}
+
+template <typename T>
+void
+GreaterColumnRef(const T* left, const T* right, size_t size, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = left[i] > right[i];
+    }
+}
+
+template <typename T>
+void
+GreaterEqualColumnRef(const T* left, const T* right, size_t size, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = left[i] >= right[i];
+    }
+}
+
+template <typename T>
+void
+NotEqualColumnRef(const T* left, const T* right, size_t size, bool* res) {
+    for (size_t i = 0; i < size; ++i) {
+        res[i] = left[i] != right[i];
+    }
+}
+
 }  // namespace simd
 }  // namespace milvus

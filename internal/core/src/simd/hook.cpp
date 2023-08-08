@@ -100,6 +100,57 @@ DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, int64_t)
 DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, float)
 DECLARE_COMPARE_VAL_PTR(not_equal_val, NotEqualValRef, double)
 
+#define DECLARE_COMPARE_COL_PTR(prefix, RefFunc, type) \
+    CompareColPtr<type> prefix##_##type = RefFunc<type>;
+
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, bool)
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, int8_t)
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, int16_t)
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, int32_t)
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, int64_t)
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, float)
+DECLARE_COMPARE_COL_PTR(equal_col, EqualColumnRef, double)
+
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, bool)
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, int8_t)
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, int16_t)
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, int32_t)
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, int64_t)
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, float)
+DECLARE_COMPARE_COL_PTR(less_col, LessColumnRef, double)
+
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, bool)
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, int8_t)
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, int16_t)
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, int32_t)
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, int64_t)
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, float)
+DECLARE_COMPARE_COL_PTR(greater_col, GreaterColumnRef, double)
+
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, bool)
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, int8_t)
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, int16_t)
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, int32_t)
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, int64_t)
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, float)
+DECLARE_COMPARE_COL_PTR(less_equal_col, LessEqualColumnRef, double)
+
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, bool)
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, int8_t)
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, int16_t)
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, int32_t)
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, int64_t)
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, float)
+DECLARE_COMPARE_COL_PTR(greater_equal_col, GreaterEqualColumnRef, double)
+
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, bool)
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, int8_t)
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, int16_t)
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, int32_t)
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, int64_t)
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, float)
+DECLARE_COMPARE_COL_PTR(not_equal_col, NotEqualColumnRef, double)
+
 #if defined(__x86_64__)
 bool
 cpu_support_avx512() {
@@ -327,6 +378,133 @@ not_equal_val_hook() {
     LOG_SEGCORE_INFO_ << "not equal val hook simd type: " << simd_type;
 }
 
+void
+equal_col_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        equal_col_int8_t = EqualColumnAVX512<int8_t>;
+        equal_col_int16_t = EqualColumnAVX512<int16_t>;
+        equal_col_int32_t = EqualColumnAVX512<int32_t>;
+        equal_col_int64_t = EqualColumnAVX512<int64_t>;
+        equal_col_float = EqualColumnAVX512<float>;
+        equal_col_double = EqualColumnAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "equal column hook simd type: " << simd_type;
+}
+
+void
+less_col_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        less_col_int8_t = LessColumnAVX512<int8_t>;
+        less_col_int16_t = LessColumnAVX512<int16_t>;
+        less_col_int32_t = LessColumnAVX512<int32_t>;
+        less_col_int64_t = LessColumnAVX512<int64_t>;
+        less_col_float = LessColumnAVX512<float>;
+        less_col_double = LessColumnAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "less than column hook simd type: " << simd_type;
+}
+
+void
+greater_col_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        greater_col_int8_t = GreaterColumnAVX512<int8_t>;
+        greater_col_int16_t = GreaterColumnAVX512<int16_t>;
+        greater_col_int32_t = GreaterColumnAVX512<int32_t>;
+        greater_col_int64_t = GreaterColumnAVX512<int64_t>;
+        greater_col_float = GreaterColumnAVX512<float>;
+        greater_col_double = GreaterColumnAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "greater than column hook simd type: " << simd_type;
+}
+
+void
+less_equal_col_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        less_equal_col_int8_t = LessEqualColumnAVX512<int8_t>;
+        less_equal_col_int16_t = LessEqualColumnAVX512<int16_t>;
+        less_equal_col_int32_t = LessEqualColumnAVX512<int32_t>;
+        less_equal_col_int64_t = LessEqualColumnAVX512<int64_t>;
+        less_equal_col_float = LessEqualColumnAVX512<float>;
+        less_equal_col_double = LessEqualColumnAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "less equal than column hook simd type: " << simd_type;
+}
+
+void
+greater_equal_col_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        greater_equal_col_int8_t = GreaterEqualColumnAVX512<int8_t>;
+        greater_equal_col_int16_t = GreaterEqualColumnAVX512<int16_t>;
+        greater_equal_col_int32_t = GreaterEqualColumnAVX512<int32_t>;
+        greater_equal_col_int64_t = GreaterEqualColumnAVX512<int64_t>;
+        greater_equal_col_float = GreaterEqualColumnAVX512<float>;
+        greater_equal_col_double = GreaterEqualColumnAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "greater equal than column hook simd type: "
+                      << simd_type;
+}
+
+void
+not_equal_col_hook() {
+    static std::mutex hook_mutex;
+    std::lock_guard<std::mutex> lock(hook_mutex);
+    std::string simd_type = "REF";
+#if defined(__x86_64__)
+    // Only support avx512 for now
+    if (use_avx512 && cpu_support_avx512()) {
+        simd_type = "AVX512";
+        not_equal_col_int8_t = NotEqualColumnAVX512<int8_t>;
+        not_equal_col_int16_t = NotEqualColumnAVX512<int16_t>;
+        not_equal_col_int32_t = NotEqualColumnAVX512<int32_t>;
+        not_equal_col_int64_t = NotEqualColumnAVX512<int64_t>;
+        not_equal_col_float = NotEqualColumnAVX512<float>;
+        not_equal_col_double = NotEqualColumnAVX512<double>;
+    }
+#endif
+    // TODO: support arm cpu
+    LOG_SEGCORE_INFO_ << "not equal column hook simd type: " << simd_type;
+}
+
 static int init_hook_ = []() {
     bitset_hook();
     find_term_hook();
@@ -336,6 +514,12 @@ static int init_hook_ = []() {
     less_equal_val_hook();
     greater_equal_val_hook();
     not_equal_val_hook();
+    equal_col_hook();
+    less_col_hook();
+    greater_col_hook();
+    less_equal_col_hook();
+    greater_equal_col_hook();
+    not_equal_col_hook();
     return 0;
 }();
 
