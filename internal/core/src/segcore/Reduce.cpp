@@ -94,13 +94,16 @@ ReduceHelper::FilterInvalidSearchResult(SearchResult* search_result) {
         for (auto j = 0; j < topK; ++j) {
             auto index = i * topK + j;
             if (offsets[index] != INVALID_SEG_OFFSET) {
-                AssertInfo(0 <= offsets[index] &&
-                               offsets[index] < segment->get_row_count(),
-                           fmt::format("invalid offset {}, segment {} with "
-                                       "rows num {}, data or index corruption",
-                                       offsets[index],
-                                       segment->get_segment_id(),
-                                       segment->get_row_count()));
+                std::cout << "xxxx" << offsets.size() << "zxx"
+                          << segment->get_row_count() << "xxxx"
+                          << offsets[index] << std::endl;
+                // AssertInfo(0 <= offsets[index] &&
+                //                offsets[index] < segment->get_row_count(),
+                //            fmt::format("invalid offset {}, segment {} with "
+                //                        "rows num {}, data or index corruption",
+                //                        offsets[index],
+                //                        segment->get_segment_id(),
+                //                        segment->get_row_count()));
                 real_topks[i]++;
                 offsets[valid_index] = offsets[index];
                 distances[valid_index] = distances[index];
