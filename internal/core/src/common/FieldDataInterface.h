@@ -29,9 +29,8 @@
 #include "common/Utils.h"
 #include "common/VectorTrait.h"
 #include "exceptions/EasyAssert.h"
-#include "storage/Exception.h"
 
-namespace milvus::storage {
+namespace milvus {
 
 using DataType = milvus::DataType;
 
@@ -257,4 +256,4 @@ class FieldDataJsonImpl : public FieldDataImpl<Json, true> {
     }
 };
 
-}  // namespace milvus::storage
+}  // namespace milvus

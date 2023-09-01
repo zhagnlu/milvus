@@ -14,10 +14,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "storage/FieldData.h"
+#include "common/FieldData.h"
 #include "common/Json.h"
+#include "exceptions/Exception.h"
 
-namespace milvus::storage {
+namespace milvus {
 
 template <typename Type, bool is_scalar>
 void
@@ -160,4 +161,4 @@ template class FieldDataImpl<Json, true>;
 template class FieldDataImpl<int8_t, false>;
 template class FieldDataImpl<float, false>;
 
-}  // namespace milvus::storage
+}  // namespace milvus
