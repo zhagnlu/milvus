@@ -225,7 +225,7 @@ class SegmentGrowingImpl : public SegmentGrowing {
 
     bool
     HasIndex(FieldId field_id) const override {
-        return true;
+        return false;
     }
 
     bool

@@ -22,11 +22,12 @@
 #include <fcntl.h>
 
 #include "common/EasyAssert.h"
+#include "common/Exception.h"
+#include "common/Utils.h"
+#include "common/Slice.h"
 #include "index/StringIndexMarisa.h"
 #include "index/Utils.h"
 #include "index/Index.h"
-#include "common/Utils.h"
-#include "common/Slice.h"
 
 namespace milvus::index {
 
