@@ -20,6 +20,37 @@
 
 namespace milvus {
 
+class ExecDriverException : public std::exception {
+ public:
+    explicit ExecDriverException(const std::string& msg)
+        : std::exception(), exception_message_(msg) {
+    }
+    const char*
+    what() const noexcept {
+        return exception_message_.c_str();
+    }
+    virtual ~ExecDriverException() {
+    }
+
+ private:
+    std::string exception_message_;
+};
+class ExecOperatorException : public std::exception {
+ public:
+    explicit ExecOperatorException(const std::string& msg)
+        : std::exception(), exception_message_(msg) {
+    }
+    const char*
+    what() const noexcept {
+        return exception_message_.c_str();
+    }
+    virtual ~ExecOperatorException() {
+    }
+
+ private:
+    std::string exception_message_;
+};
+
 class NotImplementedException : public std::exception {
  public:
     explicit NotImplementedException(const std::string& msg)

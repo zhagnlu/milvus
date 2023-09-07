@@ -93,6 +93,11 @@ class ExecPlanNodeVisitor : public PlanNodeVisitor {
         return expr_use_pk_index_;
     }
 
+    void
+    ExecuteExprNode(const std::shared_ptr<milvus::plan::PlanNode>& plannode,
+                    const milvus::segcore::SegmentInternalInterface* segment,
+                    BitsetType* result);
+
  private:
     template <typename VectorType>
     void

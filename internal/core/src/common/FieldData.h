@@ -34,6 +34,11 @@ class FieldData : public FieldDataImpl<Type, true> {
         : FieldDataImpl<Type, true>::FieldDataImpl(
               1, data_type, buffered_num_rows) {
     }
+    static_assert(IsScalar<Type> || std::is_same_v<Type, PkType>);
+    explicit FieldData(DataType data_type, FixedVector<Type>&& inner_data)
+        : FieldDataImpl<Type, true>::FieldDataImpl(
+              1, data_type, std::move(inner_data)) {
+    }
 };
 
 template <>
@@ -88,5 +93,8 @@ class FieldData<BinaryVector> : public FieldDataImpl<uint8_t, false> {
 using FieldDataPtr = std::shared_ptr<FieldDataBase>;
 using FieldDataChannel = Channel<FieldDataPtr>;
 using FieldDataChannelPtr = std::shared_ptr<FieldDataChannel>;
+
+FieldDataPtr
+InitScalarFieldData(const DataType& type, int64_t cap_rows);
 
 }  // namespace milvus

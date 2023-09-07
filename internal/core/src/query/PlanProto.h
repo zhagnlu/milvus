@@ -18,6 +18,7 @@
 #include "PlanNode.h"
 #include "common/Schema.h"
 #include "pb/plan.pb.h"
+#include "plan/PlanNode.h"
 
 namespace milvus::query {
 
@@ -71,6 +72,12 @@ class ProtoParser {
 
     std::unique_ptr<RetrievePlan>
     CreateRetrievePlan(const proto::plan::PlanNode& plan_node_proto);
+
+    plan::PlanNodePtr
+    ParseUnaryRangeExprs(const proto::plan::UnaryRangeExpr& expr_pb);
+
+    plan::PlanNodePtr
+    ParseExprs(const proto::plan::Expr& expr_pb);
 
  private:
     const Schema& schema;

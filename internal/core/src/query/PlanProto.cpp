@@ -68,6 +68,17 @@ ExtractTermExprImpl(FieldId field_id,
         expr_proto.column_info(), terms, val_case, expr_proto.is_in_field());
 }
 
+plan::PlanNodePtr
+ExtractUnaryRangeExprImpl(FieldId field_id,
+                          DataType data_type,
+                          const planpb::UnaryRangeExpr& expr_proto) {
+    auto logical_expr = std::make_shared<milvus::expr::UnaryRangeFilterExpr>(
+        expr::ColumnInfo(expr_proto.column_info()),
+        expr_proto.op(),
+        expr_proto.value());
+    return std::make_shared<plan::FilterBitsNode>("1", logical_expr);
+}
+
 template <typename T>
 std::unique_ptr<UnaryRangeExprImpl<T>>
 ExtractUnaryRangeExprImpl(FieldId field_id,
@@ -173,6 +184,14 @@ ProtoParser::PlanNodeFromProto(const planpb::PlanNode& plan_node_proto) {
         }
     }();
 
+    auto expr_parser = [&]() -> std::optional<plan::PlanNodePtr> {
+        if (!anns_proto.has_predicates()) {
+            return std::nullopt;
+        } else {
+            return ParseExprs(anns_proto.predicates());
+        }
+    }();
+
     auto& query_info_proto = anns_proto.query_info();
 
     SearchInfo search_info;
@@ -193,6 +212,7 @@ ProtoParser::PlanNodeFromProto(const planpb::PlanNode& plan_node_proto) {
     }();
     plan_node->placeholder_tag_ = anns_proto.placeholder_tag();
     plan_node->predicate_ = std::move(expr_opt);
+    plan_node->filter_plannode_ = std::move(expr_parser);
     plan_node->search_info_ = std::move(search_info);
     return plan_node;
 }
@@ -210,7 +230,11 @@ ProtoParser::RetrievePlanNodeFromProto(
             auto expr_opt = [&]() -> ExprPtr {
                 return ParseExpr(predicate_proto);
             }();
+            auto expr_parser = [&]() -> plan::PlanNodePtr {
+                return ParseExprs(predicate_proto);
+            }();
             node->predicate_ = std::move(expr_opt);
+            node->filter_plannode_ = std::move(expr_parser);
         } else {
             auto& query = plan_node_proto.query();
             if (query.has_predicates()) {
@@ -218,7 +242,11 @@ ProtoParser::RetrievePlanNodeFromProto(
                 auto expr_opt = [&]() -> ExprPtr {
                     return ParseExpr(predicate_proto);
                 }();
+                auto expr_parser = [&]() -> plan::PlanNodePtr {
+                    return ParseExprs(predicate_proto);
+                }();
                 node->predicate_ = std::move(expr_opt);
+                node->filter_plannode_ = std::move(expr_parser);
             }
             node->is_count_ = query.is_count();
             node->limit_ = query.limit();
@@ -265,6 +293,16 @@ ProtoParser::CreateRetrievePlan(const proto::plan::PlanNode& plan_node_proto) {
         retrieve_plan->field_ids_.push_back(field_id);
     }
     return retrieve_plan;
+}
+
+plan::PlanNodePtr
+ProtoParser::ParseUnaryRangeExprs(const proto::plan::UnaryRangeExpr& expr_pb) {
+    auto& column_info = expr_pb.column_info();
+    auto field_id = FieldId(column_info.field_id());
+    auto data_type = schema[field_id].get_data_type();
+    Assert(data_type == static_cast<DataType>(column_info.data_type()));
+
+    return ExtractUnaryRangeExprImpl(field_id, data_type, expr_pb);
 }
 
 ExprPtr
@@ -662,6 +700,21 @@ ProtoParser::ParseJsonContainsExpr(
         return ExtractJsonContainsExprImpl<proto::plan::GenericValue>(expr_pb);
     }();
     return result;
+}
+
+plan::PlanNodePtr
+ProtoParser::ParseExprs(const proto::plan::Expr& expr_pb) {
+    using ppe = proto::plan::Expr;
+    switch (expr_pb.expr_case()) {
+        case ppe::kUnaryRangeExpr: {
+            return ParseUnaryRangeExprs(expr_pb.unary_range_expr());
+        }
+        default: {
+            std::string s;
+            google::protobuf::TextFormat::PrintToString(expr_pb, &s);
+            PanicInfo(std::string("unsupported expr proto node: ") + s);
+        }
+    }
 }
 
 ExprPtr
