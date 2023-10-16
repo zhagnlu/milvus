@@ -83,6 +83,12 @@ class FlatVector final : public BaseVector {
         return values_->Data();
     }
 
+    template <typename As>
+    const As*
+    RawAsValues() const {
+        return reinterpret_cast<const As*>(values_->Data());
+    }
+
  private:
     FieldDataPtr values_;
 };

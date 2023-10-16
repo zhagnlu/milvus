@@ -72,19 +72,138 @@ class SegmentExpr : public Expr {
     SegmentExpr(const std::vector<std::shared_ptr<Expr>>&& input,
                 const std::string& name,
                 const segcore::SegmentInternalInterface* segment,
+                const FieldId& field_id,
                 Timestamp query_timestamp,
                 int64_t batch_size)
         : Expr(DataType::BOOL, std::move(input), name),
           segment_(segment),
+          field_id_(field_id),
           query_timestamp_(query_timestamp),
           batch_size_(batch_size) {
         num_rows_ = segment_->get_active_count(query_timestamp_);
         size_per_chunk_ = segment_->size_per_chunk();
-        AssertInfo(batch_size_ > 0, "expr batch size should greater than zero");
+        AssertInfo(
+            batch_size_ > 0,
+            fmt::format("expr batch size should greater than zero, but now: {}",
+                        batch_size_));
+        if (segment_->type() == SegmentType::Growing) {
+            AssertInfo(
+                batch_size_ > size_per_chunk_,
+                fmt::format("expr batch size should greater than size per "
+                            "chunk {} for growing segment, but now {}",
+                            size_per_chunk_,
+                            batch_size_));
+        }
+        InitSegmentExpr();
+    }
+
+    void
+    InitSegmentExpr() {
+        is_index_mode_ = segment_->HasIndex(field_id_);
+        if (is_index_mode_) {
+            num_index_chunk_ = segment_->num_chunk_index(field_id_);
+        } else {
+            num_data_chunk_ = segment_->num_chunk_data(field_id_);
+        }
+    }
+
+    int64_t
+    GetNextBatchSize() {
+        auto current_chunk =
+            is_index_mode_ ? current_index_chunk_ : current_data_chunk_;
+        auto current_chunk_pos =
+            is_index_mode_ ? current_data_chunk_pos_ : current_index_chunk_pos_;
+        auto current_rows =
+            segment_->type() == SegmentType::Growing
+                ? current_chunk * size_per_chunk_ + current_chunk_pos
+                : current_chunk_pos;
+        return current_rows + batch_size_ >= num_rows_
+                   ? num_rows_ - current_rows
+                   : batch_size_;
+    }
+
+    template <typename T, typename FUNC, typename... ValTypes>
+    int64_t
+    ProcessDataChunks(FUNC func, bool* res, ValTypes... values) {
+        int processed_size = 0;
+
+        for (size_t i = current_data_chunk_; i < num_data_chunk_; i++) {
+            auto chunk = segment_->chunk_data<T>(field_id_, i);
+            auto data_pos =
+                (i == current_data_chunk_) ? current_data_chunk_pos_ : 0;
+            auto size = (i == (num_data_chunk_ - 1))
+                            ? (segment_->type() == SegmentType::Growing
+                                   ? num_rows_ % size_per_chunk_ - data_pos
+                                   : num_rows_ - data_pos)
+                            : size_per_chunk_ - data_pos;
+
+            if (processed_size + size >= batch_size_) {
+                size = batch_size_ - processed_size;
+            }
+
+            const T* data = chunk.data() + data_pos;
+            func(data, size, res + processed_size, values...);
+            processed_size += size;
+
+            if (processed_size >= batch_size_) {
+                current_data_chunk_ = i;
+                current_data_chunk_pos_ = data_pos + size;
+                break;
+            }
+        }
+
+        return processed_size;
+    }
+
+    int
+    ProcessIndexOneChunk(FixedVector<bool>& result,
+                         const FixedVector<bool>& chunk_res,
+                         int processed_rows) {
+        auto data_pos = current_index_chunk_ == num_index_chunk_
+                            ? current_index_chunk_pos_
+                            : 0;
+        auto size = std::min(
+            std::min(size_per_chunk_ - data_pos, batch_size_ - processed_rows),
+            int64_t(chunk_res.size()));
+
+        result.insert(result.end(),
+                      chunk_res.begin() + data_pos,
+                      chunk_res.begin() + data_pos + size);
+        current_index_chunk_pos_ = data_pos + size;
+        return size;
+    }
+
+    template <typename T, typename FUNC, typename... ValTypes>
+    FixedVector<bool>
+    ProcessIndexChunks(FUNC func, ValTypes... values) {
+        typedef std::
+            conditional_t<std::is_same_v<T, std::string_view>, std::string, T>
+                IndexInnerType;
+        using Index = index::ScalarIndex<IndexInnerType>;
+        FixedVector<bool> result;
+        int processed_rows = 0;
+
+        for (size_t i = current_index_chunk_; i < num_index_chunk_; i++) {
+            const Index& index =
+                segment_->chunk_scalar_index<IndexInnerType>(field_id_, i);
+            auto* index_ptr = const_cast<Index*>(&index);
+            FixedVector<bool> chunk_res = std::move(func(index_ptr, values...));
+
+            processed_rows +=
+                ProcessIndexOneChunk(result, chunk_res, processed_rows);
+
+            if (processed_rows >= batch_size_) {
+                current_index_chunk_ = i;
+                break;
+            }
+        }
+
+        return result;
     }
 
  protected:
     const segcore::SegmentInternalInterface* segment_;
+    const FieldId field_id_;
     Timestamp query_timestamp_;
     int64_t batch_size_;
 
@@ -93,14 +212,14 @@ class SegmentExpr : public Expr {
     bool is_index_mode_{false};
     bool is_data_mode_{false};
 
-    int32_t num_rows_{0};
-    int32_t current_num_rows_{0};
-    int32_t num_data_chunk_{0};
-    int32_t num_index_chunk_{0};
-    int32_t current_data_chunk_{0};
-    int32_t current_data_chunk_pos_{0};
-    int32_t current_index_chunk_{0};
-    int32_t size_per_chunk_{0};
+    int64_t num_rows_{0};
+    int64_t num_data_chunk_{0};
+    int64_t num_index_chunk_{0};
+    int64_t current_data_chunk_{0};
+    int64_t current_data_chunk_pos_{0};
+    int64_t current_index_chunk_{0};
+    int64_t current_index_chunk_pos_{0};
+    int64_t size_per_chunk_{0};
 };
 
 std::vector<ExprPtr>
@@ -191,6 +310,12 @@ GetValueFromProto(const milvus::proto::plan::GenericValue& value_proto) {
         Assert(value_proto.val_case() ==
                milvus::proto::plan::GenericValue::kStringVal);
         return static_cast<T>(value_proto.string_val());
+    } else if constexpr (std::is_same_v<T, proto::plan::Array>) {
+        Assert(value_proto.val_case() ==
+               milvus::proto::plan::GenericValue::kArrayVal);
+        return static_cast<T>(value_proto.array_val());
+    } else if constexpr (std::is_same_v<T, milvus::proto::plan::GenericValue>) {
+        return static_cast<T>(value_proto);
     } else {
         PanicInfo("unsupported generic value type");
     }

@@ -75,7 +75,7 @@ empty_search_result(int64_t num_queries, SearchInfo& search_info) {
     return final_result;
 }
 
-static void
+void
 AppendOneChunk(BitsetType* result, const bool* chunk_ptr, size_t chunk_len) {
     // Append a value once instead of BITSET_BLOCK_BIT_SIZE times.
     auto AppendBlock = [&result](const bool* ptr, int n) {
@@ -147,6 +147,8 @@ ExecPlanNodeVisitor::ExecuteExprNode(
             break;
         }
         auto childrens = result->childrens();
+        std::cout << "output result length:" << childrens[0]->size()
+                  << std::endl;
         assert(childrens.size() == 1);
         if (auto child = std::dynamic_pointer_cast<FlatVector>(childrens[0])) {
             AppendOneChunk(bitset_holder,
@@ -156,6 +158,9 @@ ExecPlanNodeVisitor::ExecuteExprNode(
             PanicInfo("expr return type not matched");
         }
     }
+    // std::string s;
+    // boost::to_string(*bitset_holder, s);
+    // std::cout << s << std::endl;
 }
 
 template <typename VectorType>
@@ -184,8 +189,10 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
 
     std::unique_ptr<BitsetType> bitset_holder;
     if (node.filter_plannode_.has_value()) {
-        ExecuteExprNode(
-            node.filter_plannode_.value(), segment, bitset_holder.get());
+        BitsetType expr_res;
+        ExecuteExprNode(node.filter_plannode_.value(), segment, &expr_res);
+        bitset_holder = std::make_unique<BitsetType>(expr_res);
+        bitset_holder->flip();
     } else {
         if (node.predicate_.has_value()) {
             bitset_holder = std::make_unique<BitsetType>(
@@ -196,7 +203,6 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
             bitset_holder = std::make_unique<BitsetType>(active_count, false);
         }
     }
-    std::cout << bitset_holder->size() << std::endl;
     segment->mask_with_timestamps(*bitset_holder, timestamp_);
 
     segment->mask_with_delete(*bitset_holder, active_count, timestamp_);
@@ -258,6 +264,7 @@ ExecPlanNodeVisitor::visit(RetrievePlanNode& node) {
 
     if (node.filter_plannode_.has_value()) {
         ExecuteExprNode(node.filter_plannode_.value(), segment, &bitset_holder);
+        bitset_holder.flip();
     } else {
         if (node.predicate_.has_value() && node.predicate_.value() != nullptr) {
             bitset_holder =

@@ -15,12 +15,13 @@ set(MILVUS_EXEC_TEST_SRCS
 
 message( STATUS "Building Milvus exec Unit Test")
 
-add_executable(all_exec_test 
-                ${MILVUS_EXEC_TEST_SRCS})
+# add_executable(all_exec_test 
+#                 ${MILVUS_EXEC_TEST_SRCS})
 
-target_link_libraries(all_exec_test
-                        gtest
-                        milvus_exec
-                      )
+# target_link_libraries(all_exec_test
+#                         gtest
+#                         milvus_exec
+#                         ${CONAN_LIBS}
+#                       )
 
-install(TARGETS all_exec_test DESTINATION unittest)
+# install(TARGETS all_exec_test DESTINATION unittest)

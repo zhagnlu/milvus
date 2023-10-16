@@ -19,6 +19,10 @@
 #include "PlanNodeVisitor.h"
 
 namespace milvus::query {
+
+void
+AppendOneChunk(BitsetType* result, const bool* chunk_ptr, size_t chunk_len);
+
 class ExecPlanNodeVisitor : public PlanNodeVisitor {
  public:
     void

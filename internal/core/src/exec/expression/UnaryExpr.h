@@ -21,8 +21,9 @@
 #include "common/Types.h"
 #include "common/Vector.h"
 #include "exec/expression/Expr.h"
-#include "segcore/SegmentInterface.h"
 #include "exceptions/EasyAssert.h"
+#include "segcore/SegmentInterface.h"
+#include "query/Utils.h"
 
 namespace milvus {
 namespace exec {
@@ -44,6 +45,8 @@ struct UnaryElementFunc {
                 res[i] = src[i] >= val;
             } else if constexpr (op == proto::plan::OpType::LessEqual) {
                 res[i] = src[i] <= val;
+            } else if constexpr (op == proto::plan::OpType::PrefixMatch) {
+                res[i] = Match(src[i], val, proto::plan::OpType::PrefixMatch);
             } else {
                 PanicInfo(fmt::format(
                     "unsupported op_type:{} for UnaryElementFunc", int(op)));
@@ -72,6 +75,12 @@ struct UnaryIndexFunc {
             return index->Range(val, OpType::GreaterEqual);
         } else if constexpr (op == proto::plan::OpType::LessEqual) {
             return index->Range(val, OpType::LessEqual);
+        } else if constexpr (op == proto::plan::OpType::PrefixMatch) {
+            auto dataset = std::make_unique<Dataset>();
+            dataset->Set(milvus::index::OPERATOR_TYPE,
+                         proto::plan::OpType::PrefixMatch);
+            dataset->Set(milvus::index::PREFIX_VALUE, val);
+            return index->Query(std::move(dataset));
         } else {
             PanicInfo(fmt::format("unsupported op_type:{} for UnaryIndexFunc",
                                   int(op)));
@@ -88,21 +97,13 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
         const segcore::SegmentInternalInterface* segment,
         Timestamp query_timestamp,
         int64_t batch_size)
-        : SegmentExpr(
-              std::move(input), name, segment, query_timestamp, batch_size),
+        : SegmentExpr(std::move(input),
+                      name,
+                      segment,
+                      expr->column_.field_id_,
+                      query_timestamp,
+                      batch_size),
           expr_(expr) {
-        field_id_ = expr_->column_.field_id_;
-        is_index_mode_ = segment_->HasIndex(field_id_);
-        if (is_index_mode_) {
-            num_index_chunk_ = segment->num_chunk_index(field_id_);
-        } else {
-            num_data_chunk_ = segment->num_chunk_data(field_id_);
-        }
-
-        auto& field_meta = segment_->get_schema()[field_id_];
-        AssertInfo(expr_->column_.data_type_ == field_meta.get_data_type(),
-                   fmt::format("DataType of expr:{} isn't field_meta data type",
-                               expr->ToString()));
     }
 
     void
@@ -121,9 +122,12 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
     VectorPtr
     ExecRangeVisitorImplForData();
 
+    template <typename ExprValueType>
+    VectorPtr
+    ExecUnaryRangeVisitorDispatcherJson();
+
  private:
     std::shared_ptr<const milvus::expr::UnaryRangeFilterExpr> expr_;
-    FieldId field_id_;
 };
 }  //namespace exec
 }  // namespace milvus
