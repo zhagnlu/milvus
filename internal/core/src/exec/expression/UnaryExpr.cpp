@@ -59,11 +59,6 @@ PhyUnaryRangeFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
             break;
         }
         case DataType::JSON: {
-            // switch (expr_->val_) {
-            //     default:
-            //         PanicInfo(
-            //             fmt::format("unknown data type: {}", expr_->val_));
-            // }
             break;
         }
         default:
@@ -89,125 +84,121 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForIndex() {
         conditional_t<std::is_same_v<T, std::string_view>, std::string, T>
             IndexInnerType;
     using Index = index::ScalarIndex<IndexInnerType>;
-
-    if (current_index_chunk_ == num_index_chunk_) {
+    auto real_batch_size = GetNextBatchSize();
+    if (real_batch_size == 0) {
         return nullptr;
     }
 
+    auto op_type = expr_->op_type_;
+    auto execute_sub_batch = [op_type](Index* index_ptr, IndexInnerType val) {
+        FixedVector<bool> res;
+        switch (op_type) {
+            case proto::plan::GreaterThan: {
+                UnaryIndexFunc<T, proto::plan::GreaterThan> func;
+                res = std::move(func(index_ptr, val));
+                break;
+            }
+            case proto::plan::GreaterEqual: {
+                UnaryIndexFunc<T, proto::plan::GreaterEqual> func;
+                res = std::move(func(index_ptr, val));
+                break;
+            }
+            case proto::plan::LessThan: {
+                UnaryIndexFunc<T, proto::plan::LessThan> func;
+                res = std::move(func(index_ptr, val));
+                break;
+            }
+            case proto::plan::LessEqual: {
+                UnaryIndexFunc<T, proto::plan::LessEqual> func;
+                res = std::move(func(index_ptr, val));
+                break;
+            }
+            case proto::plan::Equal: {
+                UnaryIndexFunc<T, proto::plan::Equal> func;
+                res = std::move(func(index_ptr, val));
+                break;
+            }
+            case proto::plan::NotEqual: {
+                UnaryIndexFunc<T, proto::plan::NotEqual> func;
+                res = std::move(func(index_ptr, val));
+                break;
+            }
+            default:
+                PanicInfo(
+                    fmt::format("unsupported operator type for unary expr: {}",
+                                int(op_type)));
+        }
+        return res;
+    };
     auto val = GetValueFromProto<IndexInnerType>(expr_->val_);
-    const Index& index = segment_->chunk_scalar_index<IndexInnerType>(
-        field_id_, current_index_chunk_++);
-    auto* index_ptr = const_cast<Index*>(&index);
-    FixedVector<bool> res;
-    switch (expr_->op_type_) {
-        case proto::plan::GreaterThan: {
-            UnaryIndexFunc<T, proto::plan::GreaterThan> func;
-            res = std::move(func(index_ptr, val));
-            break;
-        }
-        case proto::plan::GreaterEqual: {
-            UnaryIndexFunc<T, proto::plan::GreaterEqual> func;
-            res = std::move(func(index_ptr, val));
-            break;
-        }
-        case proto::plan::LessThan: {
-            UnaryIndexFunc<T, proto::plan::LessThan> func;
-            res = std::move(func(index_ptr, val));
-            break;
-        }
-        case proto::plan::LessEqual: {
-            UnaryIndexFunc<T, proto::plan::LessEqual> func;
-            res = std::move(func(index_ptr, val));
-            break;
-        }
-        case proto::plan::Equal: {
-            UnaryIndexFunc<T, proto::plan::Equal> func;
-            res = std::move(func(index_ptr, val));
-            break;
-        }
-        case proto::plan::NotEqual: {
-            UnaryIndexFunc<T, proto::plan::NotEqual> func;
-            res = std::move(func(index_ptr, val));
-            break;
-        }
-        default:
-            PanicInfo(
-                fmt::format("unsupported operator type for unary expr: {}",
-                            expr_->column_.data_type_));
-    }
-    AssertInfo(res.size() == size_per_chunk_,
-               "unary expr: size not equal to size_per_chunk");
+    auto res = ProcessIndexChunks<T>(execute_sub_batch, val);
+    AssertInfo(res.size() == real_batch_size,
+               fmt::format("internal error: expr processed rows {} not equal "
+                           "expect batch size {}",
+                           res.size(),
+                           real_batch_size));
     return std::make_shared<FlatVector>(std::move(res));
 }
 
 template <typename T>
 VectorPtr
 PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForData() {
-    int batch_size = batch_size_;
-    int chunk_id = 0;
-    int data_pos = 0;
-    if (segment_->type() == SegmentType::Growing) {
-        if (current_data_chunk_ > num_data_chunk_) {
-            return nullptr;
-        }
-        // Multi chunks, at most one chunk every loop
-        batch_size = current_data_chunk_ == num_data_chunk_
-                         ? num_rows_ % size_per_chunk_
-                         : size_per_chunk_;
-        chunk_id = current_data_chunk_++;
-    } else if (segment_->type() == SegmentType::Sealed) {
-        if (current_data_chunk_pos_ >= num_rows_) {
-            return nullptr;
-        }
-        // Only one chunk, get batch size for every loop
-        batch_size = current_data_chunk_pos_ + batch_size_ <= num_rows_
-                         ? batch_size_
-                         : num_rows_ - current_data_chunk_pos_;
-        data_pos = current_data_chunk_pos_;
-        current_data_chunk_pos_ += batch_size;
+    auto real_batch_size = GetNextBatchSize();
+    if (real_batch_size == 0) {
+        return nullptr;
     }
 
-    auto res_vec = std::make_shared<FlatVector>(DataType::BOOL, batch_size);
+    T val = GetValueFromProto<T>(expr_->val_);
+    // std::cout << " real batch size" << real_batch_size << std::endl;
+    auto res_vec =
+        std::make_shared<FlatVector>(DataType::BOOL, real_batch_size);
     bool* res = (bool*)res_vec->GetRawData();
-    auto val = GetValueFromProto<T>(expr_->val_);
-    auto chunk = segment_->chunk_data<T>(field_id_, chunk_id);
-    const T* data = chunk.data() + data_pos;
-    switch (expr_->op_type_) {
-        case proto::plan::GreaterThan: {
-            UnaryElementFunc<T, proto::plan::GreaterThan> func;
-            func(data, batch_size, val, res);
-            break;
-        }
-        case proto::plan::GreaterEqual: {
-            UnaryElementFunc<T, proto::plan::GreaterEqual> func;
-            func(data, batch_size, val, res);
-            break;
-        }
-        case proto::plan::LessThan: {
-            UnaryElementFunc<T, proto::plan::LessThan> func;
-            func(data, batch_size, val, res);
-            break;
-        }
-        case proto::plan::LessEqual: {
-            UnaryElementFunc<T, proto::plan::LessEqual> func;
-            func(data, batch_size, val, res);
-            break;
-        }
-        case proto::plan::Equal: {
-            UnaryElementFunc<T, proto::plan::Equal> func;
-            func(data, batch_size, val, res);
-            break;
-        }
-        case proto::plan::NotEqual: {
-            UnaryElementFunc<T, proto::plan::NotEqual> func;
-            func(data, batch_size, val, res);
-            break;
-        }
-        default:
-            PanicInfo(
-                fmt::format("unsupported operator type for unary expr: {}",
-                            expr_->column_.data_type_));
-    }
+    auto expr_type = expr_->op_type_;
+    auto execute_sub_batch =
+        [expr_type](const T* data, const int size, bool* res, T val) {
+            switch (expr_type) {
+                case proto::plan::GreaterThan: {
+                    UnaryElementFunc<T, proto::plan::GreaterThan> func;
+                    func(data, size, val, res);
+                    break;
+                }
+                case proto::plan::GreaterEqual: {
+                    UnaryElementFunc<T, proto::plan::GreaterEqual> func;
+                    func(data, size, val, res);
+                    break;
+                }
+                case proto::plan::LessThan: {
+                    UnaryElementFunc<T, proto::plan::LessThan> func;
+                    func(data, size, val, res);
+                    break;
+                }
+                case proto::plan::LessEqual: {
+                    UnaryElementFunc<T, proto::plan::LessEqual> func;
+                    func(data, size, val, res);
+                    break;
+                }
+                case proto::plan::Equal: {
+                    UnaryElementFunc<T, proto::plan::Equal> func;
+                    func(data, size, val, res);
+                    break;
+                }
+                case proto::plan::NotEqual: {
+                    UnaryElementFunc<T, proto::plan::NotEqual> func;
+                    func(data, size, val, res);
+                    break;
+                }
+                default:
+                    PanicInfo(fmt::format(
+                        "unsupported operator type for unary expr: {}",
+                        int(expr_type)));
+            }
+        };
+    int processed_size = ProcessDataChunks<T>(execute_sub_batch, res, val);
+    AssertInfo(processed_size == real_batch_size,
+               fmt::format("internal error: expr processed rows {} not equal "
+                           "expect batch size {}",
+                           processed_size,
+                           real_batch_size));
     return res_vec;
 }
 

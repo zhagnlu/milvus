@@ -21,6 +21,7 @@ set(COMMON_SRC
         RangeSearchHelper.cpp
         Tracer.cpp
         FieldData.cpp
+        BitUtil.cpp
         IndexMeta.cpp)
 
 add_library(milvus_common SHARED ${COMMON_SRC})

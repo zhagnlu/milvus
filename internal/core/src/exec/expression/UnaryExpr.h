@@ -88,21 +88,13 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
         const segcore::SegmentInternalInterface* segment,
         Timestamp query_timestamp,
         int64_t batch_size)
-        : SegmentExpr(
-              std::move(input), name, segment, query_timestamp, batch_size),
+        : SegmentExpr(std::move(input),
+                      name,
+                      segment,
+                      expr->column_.field_id_,
+                      query_timestamp,
+                      batch_size),
           expr_(expr) {
-        field_id_ = expr_->column_.field_id_;
-        is_index_mode_ = segment_->HasIndex(field_id_);
-        if (is_index_mode_) {
-            num_index_chunk_ = segment->num_chunk_index(field_id_);
-        } else {
-            num_data_chunk_ = segment->num_chunk_data(field_id_);
-        }
-
-        auto& field_meta = segment_->get_schema()[field_id_];
-        AssertInfo(expr_->column_.data_type_ == field_meta.get_data_type(),
-                   fmt::format("DataType of expr:{} isn't field_meta data type",
-                               expr->ToString()));
     }
 
     void
@@ -123,7 +115,6 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
 
  private:
     std::shared_ptr<const milvus::expr::UnaryRangeFilterExpr> expr_;
-    FieldId field_id_;
 };
 }  //namespace exec
 }  // namespace milvus

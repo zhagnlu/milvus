@@ -14,6 +14,14 @@ set(MILVUS_EXEC_SRCS
         expression/Expr.cpp
         expression/VectorFunction.cpp
         expression/UnaryExpr.cpp
+        expression/ConjunctExpr.cpp
+        expression/LogicalUnaryExpr.cpp
+        expression/LogicalBinaryExpr.cpp
+        expression/TermExpr.cpp
+        expression/BinaryArithOpEvalRangeExpr.cpp
+        expression/BinaryRangeExpr.cpp
+        expression/AlwaysTrueExpr.cpp
+        expression/CompareExpr.cpp
         operator/FilterBits.cpp
         operator/Operator.cpp
         Driver.cpp
