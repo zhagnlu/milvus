@@ -131,7 +131,7 @@ class QueryConfig : public MemConfig {
 
     int64_t
     get_expr_batch_size() const {
-        return BaseConfig::Get<int64_t>(kExprEvalBatchSize, 100000);
+        return BaseConfig::Get<int64_t>(kExprEvalBatchSize, 10000);
     }
 };
 

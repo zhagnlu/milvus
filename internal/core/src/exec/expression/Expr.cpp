@@ -16,8 +16,14 @@
 
 #include "Expr.h"
 
+#include "exec/expression/BinaryArithOpEvalRangeExpr.h"
+#include "exec/expression/BinaryRangeExpr.h"
+//#include "exec/expression/CompareExpr.h"
+#include "exec/expression/ConjunctExpr.h"
+#include "exec/expression/LogicalBinaryExpr.h"
+#include "exec/expression/LogicalUnaryExpr.h"
+#include "exec/expression/TermExpr.h"
 #include "exec/expression/UnaryExpr.h"
-
 namespace milvus {
 namespace exec {
 
@@ -55,12 +61,9 @@ static std::optional<std::string>
 ShouldFlatten(const expr::TypedExprPtr& expr,
               const std::unordered_set<std::string>& flat_candidates = {}) {
     if (auto call =
-            std::dynamic_pointer_cast<const expr::LogicalBinaryFilterExpr>(
-                expr)) {
-        if (call->op_type_ ==
-                expr::LogicalBinaryFilterExpr::LogicalOpType::And ||
-            call->op_type_ ==
-                expr::LogicalBinaryFilterExpr::LogicalOpType::Or) {
+            std::dynamic_pointer_cast<const expr::LogicalBinaryExpr>(expr)) {
+        if (call->op_type_ == expr::LogicalBinaryExpr::OpType::And ||
+            call->op_type_ == expr::LogicalBinaryExpr::OpType::Or) {
             return call->name();
         }
     }
@@ -70,8 +73,7 @@ ShouldFlatten(const expr::TypedExprPtr& expr,
 static bool
 IsCall(const expr::TypedExprPtr& expr, const std::string& name) {
     if (auto call =
-            std::dynamic_pointer_cast<const expr::LogicalBinaryFilterExpr>(
-                expr)) {
+            std::dynamic_pointer_cast<const expr::LogicalBinaryExpr>(expr)) {
         return call->name() == name;
     }
     return false;
@@ -153,12 +155,57 @@ CompileExpression(const expr::TypedExprPtr& expr,
         //     result = std::make_shared<Expr>(
         //         result_type, std::move(compiled_inputs), func, call->name());
         // }
-    } else if (auto unary_range_filter = std::dynamic_pointer_cast<
+    } else if (auto casted_expr = std::dynamic_pointer_cast<
                    const milvus::expr::UnaryRangeFilterExpr>(expr)) {
         result = std::make_shared<PhyUnaryRangeFilterExpr>(
             compiled_inputs,
-            unary_range_filter,
+            casted_expr,
             "PhyUnaryRangeFilterExpr",
+            context->get_segment(),
+            context->get_query_timestamp(),
+            context->query_config()->get_expr_batch_size());
+    } else if (auto casted_expr = std::dynamic_pointer_cast<
+                   const milvus::expr::LogicalUnaryExpr>(expr)) {
+        result = std::make_shared<PhyLogicalUnaryExpr>(
+            compiled_inputs, casted_expr, "PhyLogicalUnaryExpr");
+    } else if (auto casted_expr = std::dynamic_pointer_cast<
+                   const milvus::expr::TermFilterExpr>(expr)) {
+        result = std::make_shared<PhyTermFilterExpr>(
+            compiled_inputs,
+            casted_expr,
+            "PhyTermFilterExpr",
+            context->get_segment(),
+            context->get_query_timestamp(),
+            context->query_config()->get_expr_batch_size());
+    } else if (auto casted_expr = std::dynamic_pointer_cast<
+                   const milvus::expr::LogicalBinaryExpr>(expr)) {
+        if (casted_expr->op_type_ ==
+                milvus::expr::LogicalBinaryExpr::OpType::And ||
+            casted_expr->op_type_ ==
+                milvus::expr::LogicalBinaryExpr::OpType::Or) {
+            result = std::make_shared<PhyConjunctFilterExpr>(
+                std::move(compiled_inputs),
+                casted_expr->op_type_ ==
+                    milvus::expr::LogicalBinaryExpr::OpType::And);
+        } else {
+            result = std::make_shared<PhyLogicalBinaryExpr>(
+                compiled_inputs, casted_expr, "PhyLogicalBinaryExpr");
+        }
+    } else if (auto casted_expr = std::dynamic_pointer_cast<
+                   const milvus::expr::BinaryRangeFilterExpr>(expr)) {
+        result = std::make_shared<PhyBinaryRangeFilterExpr>(
+            compiled_inputs,
+            casted_expr,
+            "PhyBinaryRangeFilterExpr",
+            context->get_segment(),
+            context->get_query_timestamp(),
+            context->query_config()->get_expr_batch_size());
+    } else if (auto casted_expr = std::dynamic_pointer_cast<
+                   const milvus::expr::BinaryArithOpEvalRangeExpr>(expr)) {
+        result = std::make_shared<PhyBinaryArithOpEvalRangeExpr>(
+            compiled_inputs,
+            casted_expr,
+            "PhyBinaryArithOpEvalRangeExpr",
             context->get_segment(),
             context->get_query_timestamp(),
             context->query_config()->get_expr_batch_size());

@@ -243,63 +243,73 @@ class UnaryRangeFilterExpr : public ITypeFilterExpr {
     const proto::plan::GenericValue val_;
 };
 
+class LogicalUnaryExpr : public ITypeFilterExpr {
+ public:
+    enum class OpType { Invalid = 0, LogicalNot = 1 };
+
+    explicit LogicalUnaryExpr(const OpType op_type, TypedExprPtr& child)
+        : op_type_(op_type) {
+        inputs_.emplace_back(child);
+    }
+
+    const OpType op_type_;
+};
+
 class TermFilterExpr : public ITypeFilterExpr {
  public:
     explicit TermFilterExpr(const ColumnInfo& column,
-                            const proto::plan::GenericValue& val,
+                            const std::vector<proto::plan::GenericValue>& vals,
                             bool is_in_field)
         : ITypeFilterExpr(),
           column_(column),
-          val_(val),
+          vals_(vals),
           is_in_field_(is_in_field) {
     }
 
     std::string
     ToString() const override {
-        std::string value;
-        val_.SerializeToString(&value);
+        std::string values;
+        for (size_t i = 0; i < vals_.size(); ++i) {
+            std::string value;
+            vals_[i].SerializeToString(&value);
+            values += value;
+        }
         std::stringstream ss;
-        ss << "columnInfo:" << column_.ToString() << " val:" << value
+        ss << "columnInfo:" << column_.ToString() << " val:" << values
            << " is_in_field:" << is_in_field_;
         return ss.str();
     }
 
  public:
     const ColumnInfo column_;
-    const proto::plan::GenericValue val_;
+    const std::vector<proto::plan::GenericValue> vals_;
     const bool is_in_field_;
 };
 
-class LogicalBinaryFilterExpr : public ITypeFilterExpr {
+class LogicalBinaryExpr : public ITypeFilterExpr {
  public:
-    enum class LogicalOpType {
-        Invalid = 0,
-        And = 1,
-        Or = 2,
-        Xor = 3,
-        Minus = 4
-    };
+    enum class OpType { Invalid = 0, And = 1, Or = 2, Xor = 3, Minus = 4 };
 
-    explicit LogicalBinaryFilterExpr(proto::plan::BinaryExpr::BinaryOp op_type,
-                                     TypedExprPtr& left,
-                                     TypedExprPtr& right)
-        : ITypeFilterExpr(), op_type_(static_cast<LogicalOpType>(op_type)) {
+    explicit LogicalBinaryExpr(proto::plan::BinaryExpr::BinaryOp op_type,
+                               const TypedExprPtr& left,
+                               const TypedExprPtr& right)
+        : ITypeFilterExpr(), op_type_(static_cast<OpType>(op_type)) {
         inputs_.emplace_back(left);
         inputs_.emplace_back(right);
     }
 
     std::string
-    GetLogicalOpTypeString(LogicalOpType op) const {
+    GetOpTypeString(OpType op) const {
         switch (op) {
-            case LogicalOpType::Invalid:
+            case OpType::Invalid:
                 return "Invalid";
-            case LogicalOpType::And:
+            case OpType::And:
                 return "And";
-            case LogicalOpType::Or:
+            case OpType::Or:
                 return "Or";
-            case LogicalOpType::Xor:
+            case OpType::Xor:
                 return "Xor";
-            case LogicalOpType::Minus:
+            case OpType::Minus:
                 return "Minus";
             default:
                 return "Unknown";  // Handle the default case if necessary
@@ -313,10 +323,11 @@ class LogicalBinaryFilterExpr : public ITypeFilterExpr {
 
     std::string
     name() const {
-        return GetLogicalOpTypeString(op_type_);
+        return GetOpTypeString(op_type_);
     }
 
-    const LogicalOpType op_type_;
+ public:
+    const OpType op_type_;
 };
 
 class BinaryRangeFilterExpr : public ITypeFilterExpr {
@@ -344,6 +355,55 @@ class BinaryRangeFilterExpr : public ITypeFilterExpr {
     const proto::plan::GenericValue upper_val_;
     const bool lower_inclusive_;
     const bool upper_inclusive_;
+};
+
+class BinaryArithOpEvalRangeExpr : public ITypeFilterExpr {
+ public:
+    BinaryArithOpEvalRangeExpr(const ColumnInfo& column,
+                               const proto::plan::OpType op_type,
+                               const proto::plan::ArithOpType arith_op_type,
+                               const proto::plan::GenericValue right_operand,
+                               const proto::plan::GenericValue value)
+        : column_(column),
+          op_type_(op_type),
+          arith_op_type_(arith_op_type),
+          right_operand_(right_operand),
+          value_(value) {
+    }
+
+    std::string
+    ToString() const override {
+        return "";
+    }
+
+ public:
+    const ColumnInfo column_;
+    const proto::plan::OpType op_type_;
+    const proto::plan::ArithOpType arith_op_type_;
+    const proto::plan::GenericValue right_operand_;
+    const proto::plan::GenericValue value_;
+};
+
+class CompareExpr : public ITypeFilterExpr {
+ public:
+    CompareExpr(const FieldId& left_field,
+                const FieldId& right_field,
+                DataType left_data_type,
+                DataType right_data_type,
+                proto::plan::OpType op_type)
+        : left_field_id_(left_field),
+          right_field_id_(right_field),
+          left_data_type_(left_data_type),
+          right_data_type_(right_data_type),
+          op_type_(op_type) {
+    }
+
+ public:
+    const FieldId left_field_id_;
+    const FieldId right_field_id_;
+    DataType left_data_type_;
+    DataType right_data_type_;
+    proto::plan::OpType op_type_;
 };
 
 }  // namespace expr

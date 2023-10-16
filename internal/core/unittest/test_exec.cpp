@@ -124,7 +124,7 @@ TEST_F(TaskTest, UnaryExpr) {
     auto plan = plan::PlanFragment(filter_node);
     auto query_context = std::make_shared<milvus::exec::QueryContext>(
         "test1",
-        segment_,
+        segment_.get(),
         MAX_TIMESTAMP,
         std::make_shared<milvus::exec::QueryConfig>(
             std::unordered_map<std::string, std::string>{}));
@@ -132,12 +132,73 @@ TEST_F(TaskTest, UnaryExpr) {
     auto start = std::chrono::steady_clock::now();
     auto task = Task::Create("task_unary_expr", plan, 0, query_context);
     int64_t num_rows = 0;
+    int i = 0;
     for (;;) {
         auto result = task->Next();
         if (!result) {
             break;
         }
         num_rows += result->size();
+        auto childrens = result->childrens();
+        // if (auto child = std::dynamic_pointer_cast<FlatVector>(childrens[0])) {
+        //     std::cout << child->size() << std::endl;
+        //     std::cout << child->GetRawData() << std::endl;
+        //     i++;
+        // }
+        // std::cout << i << std::endl;
+    }
+    auto cost = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - start)
+                    .count();
+    std::cout << "cost: " << cost << "us" << std::endl;
+    EXPECT_EQ(num_rows, num_rows_);
+}
+
+TEST_F(TaskTest, LogicalExpr) {
+    ::milvus::proto::plan::GenericValue value;
+    value.set_int64_val(-1);
+    auto left = std::make_shared<milvus::expr::UnaryRangeFilterExpr>(
+        expr::ColumnInfo(field_map_["int64"], DataType::INT64),
+        proto::plan::OpType::LessThan,
+        value);
+    auto right = std::make_shared<milvus::expr::UnaryRangeFilterExpr>(
+        expr::ColumnInfo(field_map_["int64"], DataType::INT64),
+        proto::plan::OpType::LessThan,
+        value);
+
+    auto top = std::make_shared<milvus::expr::LogicalBinaryExpr>(
+        proto::plan::BinaryExpr::BinaryOp::BinaryExpr_BinaryOp_LogicalAnd,
+        left,
+        right);
+    std::vector<milvus::plan::PlanNodePtr> sources;
+    auto filter_node = std::make_shared<milvus::plan::FilterBitsNode>(
+        "plannode id 1", top, sources);
+    auto plan = plan::PlanFragment(filter_node);
+    auto query_context = std::make_shared<milvus::exec::QueryContext>(
+        "test1",
+        segment_.get(),
+        MAX_TIMESTAMP,
+        std::make_shared<milvus::exec::QueryConfig>(
+            std::unordered_map<std::string, std::string>{}));
+
+    auto start = std::chrono::steady_clock::now();
+    auto task =
+        Task::Create("task_logical_binary_expr", plan, 0, query_context);
+    int64_t num_rows = 0;
+    int i = 0;
+    for (;;) {
+        auto result = task->Next();
+        if (!result) {
+            break;
+        }
+        num_rows += result->size();
+        auto childrens = result->childrens();
+        // if (auto child = std::dynamic_pointer_cast<FlatVector>(childrens[0])) {
+        //     std::cout << child->size() << std::endl;
+        //     std::cout << child->GetRawData() << std::endl;
+        //     i++;
+        // }
+        // std::cout << i << std::endl;
     }
     auto cost = std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now() - start)

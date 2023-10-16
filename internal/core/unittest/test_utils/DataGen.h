@@ -270,7 +270,7 @@ DataGen(SchemaPtr schema,
             case DataType::INT64: {
                 vector<int64_t> data(N);
                 for (int i = 0; i < N; i++) {
-                    data[i] = i / repeat_count;
+                    data[i] = 1000;
                 }
                 insert_cols(data, N, field_meta);
                 break;

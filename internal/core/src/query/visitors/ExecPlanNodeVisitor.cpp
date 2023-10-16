@@ -147,6 +147,8 @@ ExecPlanNodeVisitor::ExecuteExprNode(
             break;
         }
         auto childrens = result->childrens();
+        std::cout << "output result length:" << childrens[0]->size()
+                  << std::endl;
         assert(childrens.size() == 1);
         if (auto child = std::dynamic_pointer_cast<FlatVector>(childrens[0])) {
             AppendOneChunk(bitset_holder,
@@ -196,7 +198,6 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
             bitset_holder = std::make_unique<BitsetType>(active_count, false);
         }
     }
-    std::cout << bitset_holder->size() << std::endl;
     segment->mask_with_timestamps(*bitset_holder, timestamp_);
 
     segment->mask_with_delete(*bitset_holder, active_count, timestamp_);
