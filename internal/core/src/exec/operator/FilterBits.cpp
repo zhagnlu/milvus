@@ -18,9 +18,10 @@
 
 namespace milvus {
 namespace exec {
-FilterBits::FilterBits(int32_t operator_id,
-                       DriverContext* driverctx,
-                       const std::shared_ptr<const plan::FilterBitsNode>& filter)
+FilterBits::FilterBits(
+    int32_t operator_id,
+    DriverContext* driverctx,
+    const std::shared_ptr<const plan::FilterBitsNode>& filter)
     : Operator(driverctx,
                filter->output_type(),
                operator_id,
@@ -65,6 +66,8 @@ FilterBits::GetOutput() {
         operator_context_->get_exec_context(), exprs_.get(), input_.get());
 
     exprs_->Eval(0, 1, true, eval_ctx, results_);
+
+    AssertInfo(results_.size() == 1, "FilterBits result size should be one");
 
     num_processed_rows_ += results_[0]->size();
 

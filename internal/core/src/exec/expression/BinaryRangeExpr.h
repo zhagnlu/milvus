@@ -50,6 +50,81 @@ struct BinaryRangeElementFunc {
     }
 };
 
+#define BinaryRangeJSONCompare(cmp)                           \
+    do {                                                      \
+        auto x = src[i].template at<GetType>(pointer);        \
+        if (x.error()) {                                      \
+            if constexpr (std::is_same_v<GetType, int64_t>) { \
+                auto x = src[i].template at<double>(pointer); \
+                if (!x.error()) {                             \
+                    auto value = x.value();                   \
+                    res[i] = (cmp);                           \
+                    break;                                    \
+                }                                             \
+            }                                                 \
+            res[i] = false;                                   \
+            break;                                            \
+        }                                                     \
+        auto value = x.value();                               \
+        res[i] = (cmp);                                       \
+    } while (false)
+
+template <typename ValueType, bool lower_inclusive, bool upper_inclusive>
+struct BinaryRangeElementFuncForJson {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    void
+    operator()(ValueType val1,
+               ValueType val2,
+               const std::string& pointer,
+               const milvus::Json* src,
+               size_t n,
+               bool* res) {
+        for (size_t i = 0; i < n; ++i) {
+            if constexpr (lower_inclusive && upper_inclusive) {
+                BinaryRangeJSONCompare(val1 <= value && value <= val2);
+            } else if constexpr (lower_inclusive && !upper_inclusive) {
+                BinaryRangeJSONCompare(val1 <= value && value < val2);
+            } else if constexpr (!lower_inclusive && upper_inclusive) {
+                BinaryRangeJSONCompare(val1 < value && value <= val2);
+            } else {
+                BinaryRangeJSONCompare(val1 < value && value < val2);
+            }
+        }
+    }
+};
+
+template <typename ValueType, bool lower_inclusive, bool upper_inclusive>
+struct BinaryRangeElementFuncForArray {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    void
+    operator()(ValueType val1,
+               ValueType val2,
+               int index,
+               const milvus::ArrayView* src,
+               size_t n,
+               bool* res) {
+        for (size_t i = 0; i < n; ++i) {
+            if constexpr (lower_inclusive && upper_inclusive) {
+                auto value = src[i].get_data<GetType>(index);
+                res[i] = val1 <= value && value <= val2;
+            } else if constexpr (lower_inclusive && !upper_inclusive) {
+                auto value = src[i].get_data<GetType>(index);
+                res[i] = val1 <= value && value < val2;
+            } else if constexpr (!lower_inclusive && upper_inclusive) {
+                auto value = src[i].get_data<GetType>(index);
+                res[i] = val1 < value && value <= val2;
+            } else {
+                auto value = src[i].get_data<GetType>(index);
+                res[i] = val1 < value && value < val2;
+            }
+        }
+    }
+};
+
 template <typename T>
 struct BinaryRangeIndexFunc {
     typedef std::
@@ -119,6 +194,14 @@ class PhyBinaryRangeFilterExpr : public SegmentExpr {
     template <typename T>
     VectorPtr
     ExecRangeVisitorImplForData();
+
+    template <typename ValueType>
+    VectorPtr
+    ExecRangeVisitorImplForJson();
+
+    template <typename ValueType>
+    VectorPtr
+    ExecRangeVisitorImplForArray();
 
  private:
     std::shared_ptr<const milvus::expr::BinaryRangeFilterExpr> expr_;

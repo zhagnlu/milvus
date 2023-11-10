@@ -19,64 +19,6 @@
 namespace milvus {
 namespace exec {
 
-template <typename T>
-bool
-CompareTwoJsonArray(T arr1, const proto::plan::Array& arr2) {
-    int json_array_length = 0;
-    if constexpr (std::is_same_v<
-                      T,
-                      simdjson::simdjson_result<simdjson::ondemand::array>>) {
-        json_array_length = arr1.count_elements();
-    }
-    if constexpr (std::is_same_v<T,
-                                 std::vector<simdjson::simdjson_result<
-                                     simdjson::ondemand::value>>>) {
-        json_array_length = arr1.size();
-    }
-    if (arr2.array_size() != json_array_length) {
-        return false;
-    }
-    int i = 0;
-    for (auto&& it : arr1) {
-        switch (arr2.array(i).val_case()) {
-            case proto::plan::GenericValue::kBoolVal: {
-                auto val = it.template get<bool>();
-                if (val.error() || val.value() != arr2.array(i).bool_val()) {
-                    return false;
-                }
-                break;
-            }
-            case proto::plan::GenericValue::kInt64Val: {
-                auto val = it.template get<int64_t>();
-                if (val.error() || val.value() != arr2.array(i).int64_val()) {
-                    return false;
-                }
-                break;
-            }
-            case proto::plan::GenericValue::kFloatVal: {
-                auto val = it.template get<double>();
-                if (val.error() || val.value() != arr2.array(i).float_val()) {
-                    return false;
-                }
-                break;
-            }
-            case proto::plan::GenericValue::kStringVal: {
-                auto val = it.template get<std::string_view>();
-                if (val.error() || val.value() != arr2.array(i).string_val()) {
-                    return false;
-                }
-                break;
-            }
-            default:
-                PanicInfo(DataTypeInvalid,
-                          fmt::format("unsupported data type {}",
-                                      int(arr2.array(i).val_case())));
-        }
-        i++;
-    }
-    return true;
-}
-
 void
 PhyJsonContainsFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
     switch (expr_->column_.data_type_) {
@@ -213,9 +155,10 @@ PhyJsonContainsFilterExpr::ExecArrayContains() {
                                 const std::unordered_set<GetType>& elements) {
         for (int i = 0; i < size; ++i) {
             const auto& array = data[i];
-            for (int i = 0; i < array.length(); ++i) {
-                if (elements.count(array.template get_data<GetType>(i)) > 0) {
+            for (int j = 0; j < array.length(); ++j) {
+                if (elements.count(array.template get_data<GetType>(j)) > 0) {
                     res[i] = true;
+                    break;
                 }
             }
             res[i] = false;

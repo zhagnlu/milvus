@@ -51,6 +51,47 @@ PhyBinaryArithOpEvalRangeExpr::Eval(EvalCtx& context, VectorPtr& result) {
             break;
         }
         case DataType::JSON: {
+            auto value_type = expr_->value_.val_case();
+            switch (value_type) {
+                case proto::plan::GenericValue::ValCase::kBoolVal: {
+                    result = ExecRangeVisitorImplForJson<bool>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kInt64Val: {
+                    result = ExecRangeVisitorImplForJson<int64_t>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kFloatVal: {
+                    result = ExecRangeVisitorImplForJson<double>();
+                    break;
+                }
+                default: {
+                    PanicInfo(
+                        DataTypeInvalid,
+                        fmt::format("unsupported value type {} in expression",
+                                    int(value_type)));
+                }
+            }
+            break;
+        }
+        case DataType::ARRAY: {
+            auto value_type = expr_->value_.val_case();
+            switch (value_type) {
+                case proto::plan::GenericValue::ValCase::kInt64Val: {
+                    result = ExecRangeVisitorImplForArray<int64_t>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kFloatVal: {
+                    result = ExecRangeVisitorImplForArray<double>();
+                    break;
+                }
+                default: {
+                    PanicInfo(
+                        DataTypeInvalid,
+                        fmt::format("unsupported value type {} in expression",
+                                    int(value_type)));
+                }
+            }
             break;
         }
         default:
@@ -58,6 +99,315 @@ PhyBinaryArithOpEvalRangeExpr::Eval(EvalCtx& context, VectorPtr& result) {
                       fmt::format("unsupported data type: {}",
                                   expr_->column_.data_type_));
     }
+}
+
+template <typename ValueType>
+VectorPtr
+PhyBinaryArithOpEvalRangeExpr::ExecRangeVisitorImplForJson() {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    auto real_batch_size = GetNextBatchSize();
+    if (real_batch_size == 0) {
+        return nullptr;
+    }
+    auto res_vec =
+        std::make_shared<FlatVector>(DataType::BOOL, real_batch_size);
+    bool* res = (bool*)res_vec->GetRawData();
+
+    auto pointer = milvus::Json::pointer(expr_->column_.nested_path_);
+    auto op_type = expr_->op_type_;
+    auto arith_type = expr_->arith_op_type_;
+    auto value = GetValueFromProto<ValueType>(expr_->value_);
+    auto right_operand = GetValueFromProto<ValueType>(expr_->right_operand_);
+
+#define BinaryArithRangeJSONCompare(cmp)                           \
+    do {                                                           \
+        for (size_t i = 0; i < size; ++i) {                        \
+            auto x = data[i].template at<GetType>(pointer);        \
+            if (x.error()) {                                       \
+                if constexpr (std::is_same_v<GetType, int64_t>) {  \
+                    auto x = data[i].template at<double>(pointer); \
+                    res[i] = !x.error() && (cmp);                  \
+                    break;                                         \
+                }                                                  \
+                res[i] = false;                                    \
+                break;                                             \
+            }                                                      \
+            res[i] = (cmp);                                        \
+        }                                                          \
+    } while (false)
+
+#define BinaryArithRangeJSONCompareNotEqual(cmp)                   \
+    do {                                                           \
+        for (size_t i = 0; i < size; ++i) {                        \
+            auto x = data[i].template at<GetType>(pointer);        \
+            if (x.error()) {                                       \
+                if constexpr (std::is_same_v<GetType, int64_t>) {  \
+                    auto x = data[i].template at<double>(pointer); \
+                    res[i] = x.error() || (cmp);                   \
+                    break;                                         \
+                }                                                  \
+                res[i] = true;                                     \
+                break;                                             \
+            }                                                      \
+            res[i] = (cmp);                                        \
+        }                                                          \
+    } while (false)
+
+    auto execute_sub_batch = [op_type, arith_type](const milvus::Json* data,
+                                                   const int size,
+                                                   bool* res,
+                                                   ValueType val,
+                                                   ValueType right_operand,
+                                                   const std::string& pointer) {
+        switch (op_type) {
+            case proto::plan::OpType::Equal: {
+                switch (arith_type) {
+                    case proto::plan::ArithOpType::Add: {
+                        BinaryArithRangeJSONCompare(x.value() + right_operand ==
+                                                    val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Sub: {
+                        BinaryArithRangeJSONCompare(x.value() - right_operand ==
+                                                    val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mul: {
+                        BinaryArithRangeJSONCompare(x.value() * right_operand ==
+                                                    val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Div: {
+                        BinaryArithRangeJSONCompare(x.value() / right_operand ==
+                                                    val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mod: {
+                        BinaryArithRangeJSONCompare(
+                            static_cast<ValueType>(
+                                fmod(x.value(), right_operand)) == val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::ArrayLength: {
+                        for (size_t i = 0; i < size; ++i) {
+                            int array_length = 0;
+                            auto doc = data[i].doc();
+                            auto array = doc.at_pointer(pointer).get_array();
+                            if (!array.error()) {
+                                array_length = array.count_elements();
+                            }
+                            res[i] = array_length == val;
+                        }
+                        break;
+                    }
+                    default:
+                        PanicInfo(
+                            OpTypeInvalid,
+                            fmt::format("unsupported arith type for binary "
+                                        "arithmetic eval expr: {}",
+                                        int(arith_type)));
+                }
+                break;
+            }
+            case proto::plan::OpType::NotEqual: {
+                switch (arith_type) {
+                    case proto::plan::ArithOpType::Add: {
+                        BinaryArithRangeJSONCompareNotEqual(
+                            x.value() + right_operand != val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Sub: {
+                        BinaryArithRangeJSONCompareNotEqual(
+                            x.value() - right_operand != val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mul: {
+                        BinaryArithRangeJSONCompareNotEqual(
+                            x.value() * right_operand != val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Div: {
+                        BinaryArithRangeJSONCompareNotEqual(
+                            x.value() / right_operand != val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mod: {
+                        BinaryArithRangeJSONCompareNotEqual(
+                            static_cast<ValueType>(
+                                fmod(x.value(), right_operand)) != val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::ArrayLength: {
+                        for (size_t i = 0; i < size; ++i) {
+                            int array_length = 0;
+                            auto doc = data[i].doc();
+                            auto array = doc.at_pointer(pointer).get_array();
+                            if (!array.error()) {
+                                array_length = array.count_elements();
+                            }
+                            res[i] = array_length != val;
+                        }
+                        break;
+                    }
+                    default:
+                        PanicInfo(
+                            OpTypeInvalid,
+                            fmt::format("unsupported arith type for binary "
+                                        "arithmetic eval expr: {}",
+                                        int(arith_type)));
+                }
+                break;
+            }
+            default:
+                PanicInfo(OpTypeInvalid,
+                          fmt::format("unsupported operator type for binary "
+                                      "arithmetic eval expr: {}",
+                                      int(op_type)));
+        }
+    };
+    ProcessDataChunks<milvus::Json>(
+        execute_sub_batch, res, value, right_operand, pointer);
+    return res_vec;
+}
+
+template <typename ValueType>
+VectorPtr
+PhyBinaryArithOpEvalRangeExpr::ExecRangeVisitorImplForArray() {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    auto real_batch_size = GetNextBatchSize();
+    if (real_batch_size == 0) {
+        return nullptr;
+    }
+    auto res_vec =
+        std::make_shared<FlatVector>(DataType::BOOL, real_batch_size);
+    bool* res = (bool*)res_vec->GetRawData();
+
+    int index = -1;
+    if (expr_->column_.nested_path_.size() > 0) {
+        index = std::stoi(expr_->column_.nested_path_[0]);
+    }
+    auto op_type = expr_->op_type_;
+    auto arith_type = expr_->arith_op_type_;
+    auto value = GetValueFromProto<ValueType>(expr_->value_);
+    auto right_operand = GetValueFromProto<ValueType>(expr_->right_operand_);
+
+#define BinaryArithRangeArrayCompare(cmp)                  \
+    do {                                                   \
+        for (size_t i = 0; i < size; ++i) {                \
+            auto value = data[i].get_data<GetType>(index); \
+            res[i] = (cmp);                                \
+        }                                                  \
+    } while (false)
+
+    auto execute_sub_batch = [op_type, arith_type](const ArrayView* data,
+                                                   const int size,
+                                                   bool* res,
+                                                   ValueType val,
+                                                   ValueType right_operand,
+                                                   int index) {
+        switch (op_type) {
+            case proto::plan::OpType::Equal: {
+                switch (arith_type) {
+                    case proto::plan::ArithOpType::Add: {
+                        BinaryArithRangeArrayCompare(value + right_operand ==
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Sub: {
+                        BinaryArithRangeArrayCompare(value - right_operand ==
+                                                     val);
+
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mul: {
+                        BinaryArithRangeArrayCompare(value * right_operand ==
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Div: {
+                        BinaryArithRangeArrayCompare(value / right_operand ==
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mod: {
+                        BinaryArithRangeArrayCompare(
+                            static_cast<ValueType>(
+                                fmod(value, right_operand)) == val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::ArrayLength: {
+                        for (size_t i = 0; i < size; ++i) {
+                            res[i] = data[i].length() == val;
+                        }
+                        break;
+                    }
+                    default:
+                        PanicInfo(
+                            OpTypeInvalid,
+                            fmt::format("unsupported arith type for binary "
+                                        "arithmetic eval expr: {}",
+                                        int(arith_type)));
+                }
+                break;
+            }
+            case proto::plan::OpType::NotEqual: {
+                switch (arith_type) {
+                    case proto::plan::ArithOpType::Add: {
+                        BinaryArithRangeArrayCompare(value + right_operand !=
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Sub: {
+                        BinaryArithRangeArrayCompare(value - right_operand !=
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mul: {
+                        BinaryArithRangeArrayCompare(value * right_operand !=
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Div: {
+                        BinaryArithRangeArrayCompare(value / right_operand !=
+                                                     val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::Mod: {
+                        BinaryArithRangeArrayCompare(
+                            static_cast<ValueType>(
+                                fmod(value, right_operand)) != val);
+                        break;
+                    }
+                    case proto::plan::ArithOpType::ArrayLength: {
+                        for (size_t i = 0; i < size; ++i) {
+                            res[i] = data[i].length() != val;
+                        }
+                        break;
+                    }
+                    default:
+                        PanicInfo(
+                            OpTypeInvalid,
+                            fmt::format("unsupported arith type for binary "
+                                        "arithmetic eval expr: {}",
+                                        int(arith_type)));
+                }
+                break;
+            }
+            default:
+                PanicInfo(OpTypeInvalid,
+                          fmt::format("unsupported operator type for binary "
+                                      "arithmetic eval expr: {}",
+                                      int(op_type)));
+        }
+    };
+
+    ProcessDataChunks<milvus::ArrayView>(
+        execute_sub_batch, res, value, right_operand, index);
+    return res_vec;
 }
 
 template <typename T>

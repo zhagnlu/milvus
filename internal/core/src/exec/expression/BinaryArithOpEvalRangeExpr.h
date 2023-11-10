@@ -198,6 +198,14 @@ class PhyBinaryArithOpEvalRangeExpr : public SegmentExpr {
     VectorPtr
     ExecRangeVisitorImplForData();
 
+    template <typename ValueType>
+    VectorPtr
+    ExecRangeVisitorImplForJson();
+
+    template <typename ValueType>
+    VectorPtr
+    ExecRangeVisitorImplForArray();
+
  private:
     std::shared_ptr<const milvus::expr::BinaryArithOpEvalRangeExpr> expr_;
 };

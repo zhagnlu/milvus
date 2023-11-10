@@ -564,6 +564,7 @@ class ArrayView {
         }
         switch (element_type_) {
             case DataType::BOOL: {
+                std::cout << length_ << std::endl;
                 for (int i = 0; i < length_; i++) {
                     auto val = get_data<bool>(i);
                     if (val != arr2.array(i).bool_val()) {

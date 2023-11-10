@@ -289,7 +289,7 @@ class TermFilterExpr : public ITypeFilterExpr {
  public:
     explicit TermFilterExpr(const ColumnInfo& column,
                             const std::vector<proto::plan::GenericValue>& vals,
-                            bool is_in_field)
+                            bool is_in_field = false)
         : ITypeFilterExpr(),
           column_(column),
           vals_(vals),
@@ -392,8 +392,8 @@ class BinaryArithOpEvalRangeExpr : public ITypeFilterExpr {
     BinaryArithOpEvalRangeExpr(const ColumnInfo& column,
                                const proto::plan::OpType op_type,
                                const proto::plan::ArithOpType arith_op_type,
-                               const proto::plan::GenericValue right_operand,
-                               const proto::plan::GenericValue value)
+                               const proto::plan::GenericValue value,
+                               const proto::plan::GenericValue right_operand)
         : column_(column),
           op_type_(op_type),
           arith_op_type_(arith_op_type),
@@ -436,9 +436,9 @@ class CompareExpr : public ITypeFilterExpr {
  public:
     const FieldId left_field_id_;
     const FieldId right_field_id_;
-    DataType left_data_type_;
-    DataType right_data_type_;
-    proto::plan::OpType op_type_;
+    const DataType left_data_type_;
+    const DataType right_data_type_;
+    const proto::plan::OpType op_type_;
 };
 
 class JsonContainsExpr : public ITypeFilterExpr {

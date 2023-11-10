@@ -130,7 +130,6 @@ PhyCompareFilterExpr::ExecCompareExprDispatcher(OpType op) {
         auto chunk_size = chunk_id == num_chunk_ - 1
                               ? num_rows_ - chunk_id * size_per_chunk_
                               : size_per_chunk_;
-
         auto left = GetChunkData(expr_->left_data_type_,
                                  expr_->left_field_id_,
                                  chunk_id,
@@ -143,9 +142,8 @@ PhyCompareFilterExpr::ExecCompareExprDispatcher(OpType op) {
         for (int i = chunk_id == current_chunk_id_ ? current_chunk_pos_ : 0;
              i < chunk_size;
              ++i) {
-            bool is_in = boost::apply_visitor(
+            res[processed_rows++] = boost::apply_visitor(
                 milvus::query::Relational<decltype(op)>{}, left(i), right(i));
-            processed_rows++;
 
             if (processed_rows >= batch_size_) {
                 current_chunk_id_ = chunk_id;

@@ -46,12 +46,69 @@ struct UnaryElementFunc {
             } else if constexpr (op == proto::plan::OpType::LessEqual) {
                 res[i] = src[i] <= val;
             } else if constexpr (op == proto::plan::OpType::PrefixMatch) {
-                res[i] = Match(src[i], val, proto::plan::OpType::PrefixMatch);
+                res[i] = milvus::query::Match(
+                    src[i], val, proto::plan::OpType::PrefixMatch);
             } else {
                 PanicInfo(
                     OpTypeInvalid,
                     fmt::format("unsupported op_type:{} for UnaryElementFunc",
                                 int(op)));
+            }
+        }
+    }
+};
+
+#define UnaryArrayCompare(cmp)                                          \
+    do {                                                                \
+        if constexpr (std::is_same_v<GetType, proto::plan::Array>) {    \
+            res[i] = false;                                             \
+        } else {                                                        \
+            auto array_data = src[i].template get_data<GetType>(index); \
+            res[i] = (cmp);                                             \
+        }                                                               \
+    } while (false)
+template <typename ValueType, proto::plan::OpType op>
+struct UnaryElementFuncForArray {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    void
+    operator()(const ArrayView* src,
+               size_t size,
+               ValueType val,
+               int index,
+               bool* res) {
+        for (int i = 0; i < size; ++i) {
+            if constexpr (op == proto::plan::OpType::Equal) {
+                if constexpr (std::is_same_v<GetType, proto::plan::Array>) {
+                    res[i] = src[i].is_same_array(val);
+                } else {
+                    auto array_data = src[i].template get_data<GetType>(index);
+                    res[i] = array_data == val;
+                }
+            } else if constexpr (op == proto::plan::OpType::NotEqual) {
+                if constexpr (std::is_same_v<GetType, proto::plan::Array>) {
+                    res[i] = !src[i].is_same_array(val);
+                } else {
+                    auto array_data = src[i].template get_data<GetType>(index);
+                    res[i] = array_data != val;
+                }
+            } else if constexpr (op == proto::plan::OpType::GreaterThan) {
+                UnaryArrayCompare(array_data > val);
+            } else if constexpr (op == proto::plan::OpType::LessThan) {
+                UnaryArrayCompare(array_data < val);
+            } else if constexpr (op == proto::plan::OpType::GreaterEqual) {
+                UnaryArrayCompare(array_data >= val);
+            } else if constexpr (op == proto::plan::OpType::LessEqual) {
+                UnaryArrayCompare(array_data <= val);
+            } else if constexpr (op == proto::plan::OpType::PrefixMatch) {
+                UnaryArrayCompare(milvus::query::Match(array_data, val, op));
+            } else {
+                PanicInfo(
+                    OpTypeInvalid,
+                    fmt::format(
+                        "unsupported op_type:{} for UnaryElementFuncForArray",
+                        int(op)));
             }
         }
     }
@@ -129,8 +186,12 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
     VectorPtr
     ExecUnaryRangeVisitorDispatcherJson();
 
+    template <typename ExprValueType>
+    VectorPtr
+    ExecUnaryRangeVisitorDispatcherArray();
+
  private:
     std::shared_ptr<const milvus::expr::UnaryRangeFilterExpr> expr_;
 };
-}  //namespace exec
+}  // namespace exec
 }  // namespace milvus

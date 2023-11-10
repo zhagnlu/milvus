@@ -151,6 +151,8 @@ ExecPlanNodeVisitor::ExecuteExprNode(
                   << std::endl;
         assert(childrens.size() == 1);
         if (auto child = std::dynamic_pointer_cast<FlatVector>(childrens[0])) {
+            std::cout << static_cast<bool*>(child->GetRawData())[2]
+                      << std::endl;
             AppendOneChunk(bitset_holder,
                            static_cast<bool*>(child->GetRawData()),
                            child->size());
@@ -158,9 +160,9 @@ ExecPlanNodeVisitor::ExecuteExprNode(
             PanicInfo(UnexpectedError, "expr return type not matched");
         }
     }
-    // std::string s;
-    // boost::to_string(*bitset_holder, s);
-    // std::cout << s << std::endl;
+    std::string s;
+    boost::to_string(*bitset_holder, s);
+    std::cout << bitset_holder->size() << " .  " << s << std::endl;
 }
 
 template <typename VectorType>

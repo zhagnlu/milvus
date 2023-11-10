@@ -61,6 +61,51 @@ PhyBinaryRangeFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
             break;
         }
         case DataType::JSON: {
+            auto value_type = expr_->lower_val_.val_case();
+            switch (value_type) {
+                case proto::plan::GenericValue::ValCase::kInt64Val: {
+                    result = ExecRangeVisitorImplForJson<int64_t>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kFloatVal: {
+                    result = ExecRangeVisitorImplForJson<double>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kStringVal: {
+                    result = ExecRangeVisitorImplForJson<std::string>();
+                    break;
+                }
+                default: {
+                    PanicInfo(
+                        DataTypeInvalid,
+                        fmt::format("unsupported value type {} in expression",
+                                    int(value_type)));
+                }
+            }
+            break;
+        }
+        case DataType::ARRAY: {
+            auto value_type = expr_->lower_val_.val_case();
+            switch (value_type) {
+                case proto::plan::GenericValue::ValCase::kInt64Val: {
+                    result = ExecRangeVisitorImplForArray<int64_t>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kFloatVal: {
+                    result = ExecRangeVisitorImplForArray<double>();
+                    break;
+                }
+                case proto::plan::GenericValue::ValCase::kStringVal: {
+                    result = ExecRangeVisitorImplForArray<std::string>();
+                    break;
+                }
+                default: {
+                    PanicInfo(
+                        DataTypeInvalid,
+                        fmt::format("unsupported value type {} in expression",
+                                    int(value_type)));
+                }
+            }
             break;
         }
         default:
@@ -202,6 +247,99 @@ PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForData() {
         }
     };
     ProcessDataChunks<T>(execute_sub_batch, res, val1, val2);
+    return res_vec;
+}
+
+template <typename ValueType>
+VectorPtr
+PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForJson() {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    auto real_batch_size = GetNextBatchSize();
+    if (real_batch_size == 0) {
+        return nullptr;
+    }
+    auto res_vec =
+        std::make_shared<FlatVector>(DataType::BOOL, real_batch_size);
+    bool* res = (bool*)res_vec->GetRawData();
+
+    bool lower_inclusive = expr_->lower_inclusive_;
+    bool upper_inclusive = expr_->upper_inclusive_;
+    ValueType val1 = GetValueFromProto<ValueType>(expr_->lower_val_);
+    ValueType val2 = GetValueFromProto<ValueType>(expr_->upper_val_);
+    auto pointer = milvus::Json::pointer(expr_->column_.nested_path_);
+
+    auto execute_sub_batch = [lower_inclusive, upper_inclusive, pointer](
+                                 const milvus::Json* data,
+                                 const int size,
+                                 bool* res,
+                                 ValueType val1,
+                                 ValueType val2) {
+        if (lower_inclusive && upper_inclusive) {
+            BinaryRangeElementFuncForJson<ValueType, true, true> func;
+            func(val1, val2, pointer, data, size, res);
+        } else if (lower_inclusive && !upper_inclusive) {
+            BinaryRangeElementFuncForJson<ValueType, true, false> func;
+            func(val1, val2, pointer, data, size, res);
+        } else if (!lower_inclusive && upper_inclusive) {
+            BinaryRangeElementFuncForJson<ValueType, false, true> func;
+            func(val1, val2, pointer, data, size, res);
+        } else {
+            BinaryRangeElementFuncForJson<ValueType, false, false> func;
+            func(val1, val2, pointer, data, size, res);
+        }
+    };
+    ProcessDataChunks<milvus::Json>(execute_sub_batch, res, val1, val2);
+    return res_vec;
+}
+
+template <typename ValueType>
+VectorPtr
+PhyBinaryRangeFilterExpr::ExecRangeVisitorImplForArray() {
+    using GetType = std::conditional_t<std::is_same_v<ValueType, std::string>,
+                                       std::string_view,
+                                       ValueType>;
+    auto real_batch_size = GetNextBatchSize();
+    if (real_batch_size == 0) {
+        return nullptr;
+    }
+    auto res_vec =
+        std::make_shared<FlatVector>(DataType::BOOL, real_batch_size);
+    bool* res = (bool*)res_vec->GetRawData();
+
+    bool lower_inclusive = expr_->lower_inclusive_;
+    bool upper_inclusive = expr_->upper_inclusive_;
+    ValueType val1 = GetValueFromProto<ValueType>(expr_->lower_val_);
+    ValueType val2 = GetValueFromProto<ValueType>(expr_->upper_val_);
+    int index = -1;
+    if (expr_->column_.nested_path_.size() > 0) {
+        index = std::stoi(expr_->column_.nested_path_[0]);
+    }
+
+    auto execute_sub_batch = [lower_inclusive, upper_inclusive](
+                                 const milvus::ArrayView* data,
+                                 const int size,
+                                 bool* res,
+                                 ValueType val1,
+                                 ValueType val2,
+                                 int index) {
+        if (lower_inclusive && upper_inclusive) {
+            BinaryRangeElementFuncForArray<ValueType, true, true> func;
+            func(val1, val2, index, data, size, res);
+        } else if (lower_inclusive && !upper_inclusive) {
+            BinaryRangeElementFuncForArray<ValueType, true, false> func;
+            func(val1, val2, index, data, size, res);
+        } else if (!lower_inclusive && upper_inclusive) {
+            BinaryRangeElementFuncForArray<ValueType, false, true> func;
+            func(val1, val2, index, data, size, res);
+        } else {
+            BinaryRangeElementFuncForArray<ValueType, false, false> func;
+            func(val1, val2, index, data, size, res);
+        }
+    };
+    ProcessDataChunks<milvus::ArrayView>(
+        execute_sub_batch, res, val1, val2, index);
     return res_vec;
 }
 

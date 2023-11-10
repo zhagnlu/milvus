@@ -21,6 +21,7 @@
 
 #include "exec/expression/EvalCtx.h"
 #include "exec/expression/VectorFunction.h"
+#include "exec/expression/Utils.h"
 #include "exec/QueryContext.h"
 #include "expr/ITypeExpr.h"
 

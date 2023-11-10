@@ -500,8 +500,7 @@ TEST(Expr, TestRange) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto [clause, ref_func] : testcases) {
         auto loc = raw_plan_tmp.find("@@@@");
         auto raw_plan = raw_plan_tmp;
@@ -509,7 +508,10 @@ TEST(Expr, TestRange) {
         auto plan_str = translate_text_plan_to_binary_plan(raw_plan.c_str());
         auto plan =
             CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -569,8 +571,7 @@ TEST(Expr, TestBinaryRangeJSON) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto testcase : testcases) {
         auto check = [&](int64_t value) {
             int64_t lower = testcase.lower, upper = testcase.upper;
@@ -584,14 +585,22 @@ TEST(Expr, TestBinaryRangeJSON) {
         };
         auto pointer = milvus::Json::pointer(testcase.nested_path);
         RetrievePlanNode plan;
-        plan.predicate_ = std::make_unique<BinaryRangeExprImpl<int64_t>>(
-            ColumnInfo(json_fid, DataType::JSON, testcase.nested_path),
-            proto::plan::GenericValue::ValCase::kInt64Val,
+        milvus::proto::plan::GenericValue lower_val;
+        lower_val.set_int64_val(testcase.lower);
+        milvus::proto::plan::GenericValue upper_val;
+        upper_val.set_int64_val(testcase.upper);
+        auto expr = std::make_shared<milvus::expr::BinaryRangeFilterExpr>(
+            milvus::expr::ColumnInfo(
+                json_fid, DataType::JSON, testcase.nested_path),
+            lower_val,
+            upper_val,
             testcase.lower_inclusive,
-            testcase.upper_inclusive,
-            testcase.lower,
-            testcase.upper);
-        auto final = visitor.call_child(*plan.predicate_.value());
+            testcase.upper_inclusive);
+        BitsetType final;
+        plan.filter_plannode_ =
+            std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+        visitor.ExecuteExprNode(
+            plan.filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -657,15 +666,19 @@ TEST(Expr, TestExistsJson) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto testcase : testcases) {
         auto check = [&](bool value) { return value; };
         RetrievePlanNode plan;
         auto pointer = milvus::Json::pointer(testcase.nested_path);
-        plan.predicate_ = std::make_unique<ExistsExprImpl>(
-            ColumnInfo(json_fid, DataType::JSON, testcase.nested_path));
-        auto final = visitor.call_child(*plan.predicate_.value());
+        auto expr =
+            std::make_shared<milvus::expr::ExistsExpr>(milvus::expr::ColumnInfo(
+                json_fid, DataType::JSON, testcase.nested_path));
+        BitsetType final;
+        plan.filter_plannode_ =
+            std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+        visitor.ExecuteExprNode(
+            plan.filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -722,8 +735,7 @@ TEST(Expr, TestUnaryRangeJson) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     std::vector<OpType> ops{
         OpType::Equal,
         OpType::NotEqual,
@@ -766,14 +778,19 @@ TEST(Expr, TestUnaryRangeJson) {
                 }
             }
 
-            RetrievePlanNode plan;
             auto pointer = milvus::Json::pointer(testcase.nested_path);
-            plan.predicate_ = std::make_unique<UnaryRangeExprImpl<int64_t>>(
-                ColumnInfo(json_fid, DataType::JSON, testcase.nested_path),
+            proto::plan::GenericValue value;
+            value.set_int64_val(testcase.val);
+            auto expr = std::make_shared<milvus::expr::UnaryRangeFilterExpr>(
+                milvus::expr::ColumnInfo(
+                    json_fid, DataType::JSON, testcase.nested_path),
                 op,
-                testcase.val,
-                proto::plan::GenericValue::ValCase::kInt64Val);
-            auto final = visitor.call_child(*plan.predicate_.value());
+                value);
+            BitsetType final;
+            auto plan = std::make_shared<plan::FilterBitsNode>(
+                DEFAULT_PLANNODE_ID, expr);
+            visitor.ExecuteExprNode(plan, seg_promote, &final);
+            EXPECT_EQ(final.size(), N * num_iters);
             EXPECT_EQ(final.size(), N * num_iters);
 
             for (int i = 0; i < N * num_iters; ++i) {
@@ -826,21 +843,25 @@ TEST(Expr, TestUnaryRangeJson) {
             return false;
         };
         for (auto& op : ops) {
-            RetrievePlanNode plan;
             auto pointer = milvus::Json::pointer(testcase.nested_path);
-            plan.predicate_ =
-                std::make_unique<UnaryRangeExprImpl<proto::plan::Array>>(
-                    ColumnInfo(json_fid, DataType::JSON, testcase.nested_path),
-                    op,
-                    testcase.val,
-                    proto::plan::GenericValue::ValCase::kArrayVal);
-            auto final = visitor.call_child(*plan.predicate_.value());
+            proto::plan::GenericValue value;
+            value.set_allocated_array_val(
+                const_cast<milvus::proto::plan::Array*>(&testcase.val));
+            auto expr = std::make_shared<milvus::expr::UnaryRangeFilterExpr>(
+                milvus::expr::ColumnInfo(
+                    json_fid, DataType::JSON, testcase.nested_path),
+                op,
+                value);
+            BitsetType final;
+            auto plan = std::make_shared<plan::FilterBitsNode>(
+                DEFAULT_PLANNODE_ID, expr);
+            visitor.ExecuteExprNode(plan, seg_promote, &final);
             EXPECT_EQ(final.size(), N * num_iters);
 
             for (int i = 0; i < N * num_iters; ++i) {
                 auto ans = final[i];
                 auto ref = check(op);
-                ASSERT_EQ(ans, ref);
+                ASSERT_EQ(ans, ref) << "@" << i << "op" << op;
             }
         }
     }
@@ -886,21 +907,28 @@ TEST(Expr, TestTermJson) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto testcase : testcases) {
         auto check = [&](int64_t value) {
             std::unordered_set<int64_t> term_set(testcase.term.begin(),
                                                  testcase.term.end());
             return term_set.find(value) != term_set.end();
         };
-        RetrievePlanNode plan;
         auto pointer = milvus::Json::pointer(testcase.nested_path);
-        plan.predicate_ = std::make_unique<TermExprImpl<int64_t>>(
-            ColumnInfo(json_fid, DataType::JSON, testcase.nested_path),
-            testcase.term,
-            proto::plan::GenericValue::ValCase::kInt64Val);
-        auto final = visitor.call_child(*plan.predicate_.value());
+        std::vector<proto::plan::GenericValue> values;
+        for (const auto& val : testcase.term) {
+            proto::plan::GenericValue value;
+            value.set_int64_val(val);
+            values.push_back(value);
+        }
+        auto expr = std::make_shared<milvus::expr::TermFilterExpr>(
+            milvus::expr::ColumnInfo(
+                json_fid, DataType::JSON, testcase.nested_path),
+            values);
+        BitsetType final;
+        auto plan =
+            std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+        visitor.ExecuteExprNode(plan, seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -1016,8 +1044,7 @@ TEST(Expr, TestTerm) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto [clause, ref_func] : testcases) {
         auto loc = raw_plan_tmp.find("@@@@");
         auto raw_plan = raw_plan_tmp;
@@ -1025,7 +1052,9 @@ TEST(Expr, TestTerm) {
         auto plan_str = translate_text_plan_to_binary_plan(raw_plan.c_str());
         auto plan =
             CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -1131,8 +1160,7 @@ TEST(Expr, TestCompare) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto [clause, ref_func] : testcases) {
         auto loc = raw_plan_tmp.find("@@@@");
         auto raw_plan = raw_plan_tmp;
@@ -1140,7 +1168,9 @@ TEST(Expr, TestCompare) {
         auto plan_str = translate_text_plan_to_binary_plan(raw_plan.c_str());
         auto plan =
             CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -1227,7 +1257,7 @@ TEST(Expr, TestCompareWithScalarIndex) {
     load_index_info.index = std::move(age64_index);
     seg->LoadIndex(load_index_info);
 
-    ExecExprVisitor visitor(*seg, seg->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg, MAX_TIMESTAMP);
     for (auto [clause, ref_func] : testcases) {
         auto dsl_string =
             boost::format(serialized_expr_plan) % vec_fid.get() % clause %
@@ -1238,7 +1268,9 @@ TEST(Expr, TestCompareWithScalarIndex) {
         auto plan = CreateSearchPlanByExpr(
             *schema, binary_plan.data(), binary_plan.size());
         // std::cout << ShowPlanNodeVisitor().call_child(*plan->plan_node_) << std::endl;
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg.get(), &final);
         EXPECT_EQ(final.size(), N);
 
         for (int i = 0; i < N; ++i) {
@@ -1294,116 +1326,113 @@ TEST(Expr, TestCompareExpr) {
         seg->LoadFieldData(FieldId(field_id), info);
     }
 
-    ExecExprVisitor visitor(*seg, seg->get_row_count(), MAX_TIMESTAMP);
-    auto build_expr = [&](enum DataType type) -> std::shared_ptr<query::Expr> {
+    query::ExecPlanNodeVisitor visitor(*seg, MAX_TIMESTAMP);
+    auto build_expr = [&](enum DataType type) -> expr::TypedExprPtr {
         switch (type) {
             case DataType::BOOL: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::BOOL;
-                compare_expr->left_field_id_ = bool_fid;
-
-                compare_expr->right_data_type_ = DataType::BOOL;
-                compare_expr->right_field_id_ = bool_1_fid;
+                auto compare_expr = std::make_shared<expr::CompareExpr>(
+                    bool_fid,
+                    bool_1_fid,
+                    DataType::BOOL,
+                    DataType::BOOL,
+                    proto::plan::OpType::LessThan);
                 return compare_expr;
             }
             case DataType::INT8: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::INT8;
-                compare_expr->left_field_id_ = int8_fid;
-
-                compare_expr->right_data_type_ = DataType::INT8;
-                compare_expr->right_field_id_ = int8_1_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(int8_fid,
+                                                        int8_1_fid,
+                                                        DataType::INT8,
+                                                        DataType::INT8,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             case DataType::INT16: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::INT16;
-                compare_expr->left_field_id_ = int16_fid;
-
-                compare_expr->right_data_type_ = DataType::INT16;
-                compare_expr->right_field_id_ = int16_1_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(int16_fid,
+                                                        int16_1_fid,
+                                                        DataType::INT16,
+                                                        DataType::INT16,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             case DataType::INT32: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::INT32;
-                compare_expr->left_field_id_ = int32_fid;
-
-                compare_expr->right_data_type_ = DataType::INT32;
-                compare_expr->right_field_id_ = int32_1_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(int32_fid,
+                                                        int32_1_fid,
+                                                        DataType::INT32,
+                                                        DataType::INT32,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             case DataType::INT64: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::INT64;
-                compare_expr->left_field_id_ = int64_fid;
-
-                compare_expr->right_data_type_ = DataType::INT64;
-                compare_expr->right_field_id_ = int64_1_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(int64_fid,
+                                                        int64_1_fid,
+                                                        DataType::INT64,
+                                                        DataType::INT64,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             case DataType::FLOAT: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::FLOAT;
-                compare_expr->left_field_id_ = float_fid;
-
-                compare_expr->right_data_type_ = DataType::FLOAT;
-                compare_expr->right_field_id_ = float_1_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(float_fid,
+                                                        float_1_fid,
+                                                        DataType::FLOAT,
+                                                        DataType::FLOAT,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             case DataType::DOUBLE: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::DOUBLE;
-                compare_expr->left_field_id_ = double_fid;
-
-                compare_expr->right_data_type_ = DataType::DOUBLE;
-                compare_expr->right_field_id_ = double_1_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(double_fid,
+                                                        double_1_fid,
+                                                        DataType::DOUBLE,
+                                                        DataType::DOUBLE,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             case DataType::VARCHAR: {
-                auto compare_expr = std::make_shared<query::CompareExpr>();
-                compare_expr->op_type_ = OpType::LessThan;
-
-                compare_expr->left_data_type_ = DataType::VARCHAR;
-                compare_expr->left_field_id_ = str2_fid;
-
-                compare_expr->right_data_type_ = DataType::VARCHAR;
-                compare_expr->right_field_id_ = str3_fid;
+                auto compare_expr =
+                    std::make_shared<expr::CompareExpr>(str2_fid,
+                                                        str3_fid,
+                                                        DataType::VARCHAR,
+                                                        DataType::VARCHAR,
+                                                        OpType::LessThan);
                 return compare_expr;
             }
             default:
-                return std::make_shared<query::CompareExpr>();
+                return std::make_shared<expr::CompareExpr>(int8_fid,
+                                                           int8_1_fid,
+                                                           DataType::INT8,
+                                                           DataType::INT8,
+                                                           OpType::LessThan);
         }
     };
     std::cout << "start compare test" << std::endl;
     auto expr = build_expr(DataType::BOOL);
-    auto final = visitor.call_child(*expr);
+    BitsetType final;
+    auto plan =
+        std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     expr = build_expr(DataType::INT8);
-    final = visitor.call_child(*expr);
+    plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     expr = build_expr(DataType::INT16);
-    final = visitor.call_child(*expr);
+    plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     expr = build_expr(DataType::INT32);
-    final = visitor.call_child(*expr);
+    plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     expr = build_expr(DataType::INT64);
-    final = visitor.call_child(*expr);
+    plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     expr = build_expr(DataType::FLOAT);
-    final = visitor.call_child(*expr);
+    plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     expr = build_expr(DataType::DOUBLE);
-    final = visitor.call_child(*expr);
+    plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+    visitor.ExecuteExprNode(plan, seg.get(), &final);
     std::cout << "end compare test" << std::endl;
 }
 
@@ -1748,7 +1777,7 @@ TEST(Expr, TestCompareWithScalarIndexMaris) {
     load_index_info.index = std::move(str2_index);
     seg->LoadIndex(load_index_info);
 
-    ExecExprVisitor visitor(*seg, seg->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg, MAX_TIMESTAMP);
     for (auto [clause, ref_func] : testcases) {
         auto dsl_string = boost::format(serialized_expr_plan) % vec_fid.get() %
                           clause % str1_fid.get() % str2_fid.get();
@@ -1757,7 +1786,9 @@ TEST(Expr, TestCompareWithScalarIndexMaris) {
         auto plan = CreateSearchPlanByExpr(
             *schema, binary_plan.data(), binary_plan.size());
         //         std::cout << ShowPlanNodeVisitor().call_child(*plan->plan_node_) << std::endl;
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg.get(), &final);
         EXPECT_EQ(final.size(), N);
 
         for (int i = 0; i < N; ++i) {
@@ -2081,8 +2112,7 @@ TEST(Expr, TestBinaryArithOpEvalRange) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto [clause, ref_func, dtype] : testcases) {
         auto loc = raw_plan_tmp.find("@@@@@");
         auto raw_plan = raw_plan_tmp;
@@ -2107,7 +2137,9 @@ TEST(Expr, TestBinaryArithOpEvalRange) {
         auto plan_str = translate_text_plan_to_binary_plan(raw_plan.c_str());
         auto plan =
             CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -2115,7 +2147,8 @@ TEST(Expr, TestBinaryArithOpEvalRange) {
             if (dtype == DataType::INT8) {
                 auto val = age8_col[i];
                 auto ref = ref_func(val);
-                ASSERT_EQ(ans, ref) << clause << "@" << i << "!!" << val;
+                ASSERT_EQ(ans, ref)
+                    << clause << "@" << i << "!!" << val << std::endl;
             } else if (dtype == DataType::INT16) {
                 auto val = age16_col[i];
                 auto ref = ref_func(val);
@@ -2189,8 +2222,7 @@ TEST(Expr, TestBinaryArithOpEvalRangeJSON) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     for (auto testcase : testcases) {
         auto check = [&](int64_t value) {
             if (testcase.op == OpType::Equal) {
@@ -2198,17 +2230,22 @@ TEST(Expr, TestBinaryArithOpEvalRangeJSON) {
             }
             return value + testcase.right_operand != testcase.value;
         };
-        RetrievePlanNode plan;
         auto pointer = milvus::Json::pointer(testcase.nested_path);
-        plan.predicate_ =
-            std::make_unique<BinaryArithOpEvalRangeExprImpl<int64_t>>(
-                ColumnInfo(json_fid, DataType::JSON, testcase.nested_path),
-                proto::plan::GenericValue::ValCase::kInt64Val,
-                ArithOpType::Add,
-                testcase.right_operand,
-                testcase.op,
-                testcase.value);
-        auto final = visitor.call_child(*plan.predicate_.value());
+        proto::plan::GenericValue value;
+        value.set_int64_val(testcase.value);
+        proto::plan::GenericValue right_operand;
+        right_operand.set_int64_val(testcase.right_operand);
+        auto expr = std::make_shared<milvus::expr::BinaryArithOpEvalRangeExpr>(
+            milvus::expr::ColumnInfo(
+                json_fid, DataType::JSON, testcase.nested_path),
+            testcase.op,
+            ArithOpType::Add,
+            value,
+            right_operand);
+        BitsetType final;
+        auto plan =
+            std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID, expr);
+        visitor.ExecuteExprNode(plan, seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
@@ -2596,8 +2633,7 @@ TEST(Expr, TestBinaryArithOpEvalRangeWithScalarSortIndex) {
     seg->LoadIndex(load_index_info);
 
     auto seg_promote = dynamic_cast<SegmentSealedImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     int offset = 0;
     for (auto [clause, ref_func, dtype] : testcases) {
         auto loc = serialized_expr_plan.find("@@@@@");
@@ -2633,7 +2669,9 @@ TEST(Expr, TestBinaryArithOpEvalRangeWithScalarSortIndex) {
         auto plan = CreateSearchPlanByExpr(
             *schema, binary_plan.data(), binary_plan.size());
 
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N);
 
         for (int i = 0; i < N; ++i) {
@@ -2787,8 +2825,7 @@ TEST(Expr, TestUnaryRangeWithJSON) {
     }
 
     auto seg_promote = dynamic_cast<SegmentGrowingImpl*>(seg.get());
-    ExecExprVisitor visitor(
-        *seg_promote, seg_promote->get_row_count(), MAX_TIMESTAMP);
+    query::ExecPlanNodeVisitor visitor(*seg_promote, MAX_TIMESTAMP);
     int offset = 0;
     for (auto [clause, ref_func, dtype] : testcases) {
         auto loc = serialized_expr_plan.find("@@@@@");
@@ -2833,7 +2870,9 @@ TEST(Expr, TestUnaryRangeWithJSON) {
         auto plan = CreateSearchPlanByExpr(
             *schema, unary_plan.data(), unary_plan.size());
 
-        auto final = visitor.call_child(*plan->plan_node_->predicate_.value());
+        BitsetType final;
+        visitor.ExecuteExprNode(
+            plan->plan_node_->filter_plannode_.value(), seg_promote, &final);
         EXPECT_EQ(final.size(), N * num_iters);
 
         for (int i = 0; i < N * num_iters; ++i) {
