@@ -58,6 +58,8 @@ SegmentGrowingImpl::mask_with_delete(BitsetType& bitset,
         return;
     }
     auto& delete_bitset = *bitmap_holder->bitmap_ptr;
+    std::cout << "xxx" << get_segment_id() << ins_barrier << "  "
+              << delete_bitset.size() << " | " << bitset.size() << std::endl;
     AssertInfo(
         delete_bitset.size() == bitset.size(),
         fmt::format(
