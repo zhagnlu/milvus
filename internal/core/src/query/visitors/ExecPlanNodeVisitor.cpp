@@ -81,7 +81,8 @@ ExecPlanNodeVisitor::ExecuteExprNodeInternal(
     bool& cache_offset_getted,
     std::vector<int64_t>& cache_offset) {
     bitset_holder.clear();
-    LOG_DEBUG("plannode: {}, active_count: {}, timestamp: {}",
+    LOG_INFO("segmentid: {}, plannode: {}, active_count: {}, timestamp: {}",
+              segment->get_segment_id(), 
               plannode->ToString(),
               active_count,
               timestamp_);
@@ -134,9 +135,9 @@ ExecPlanNodeVisitor::ExecuteExprNodeInternal(
             PanicInfo(UnexpectedError, "expr return type not matched");
         }
     }
-    //    std::string s;
-    //    boost::to_string(*bitset_holder, s);
-    //    std::cout << bitset_holder->size() << " .  " << s << std::endl;
+        std::string s;
+        boost::to_string(bitset_holder, s);
+        std::cout << bitset_holder.size() << " .  " << s << std::endl;
 }
 
 template <typename VectorType>
