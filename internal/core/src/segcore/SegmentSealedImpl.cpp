@@ -1549,7 +1549,12 @@ SegmentSealedImpl::generate_binlog_index(const FieldId field_id) {
         auto dim = field_meta.get_dim();
         std::shared_ptr<ColumnBase> vec_data{};
 
-        vec_data = fields_.at(field_id);
+        {
+            std::cout << "xxxx" << field_id.get() << std::endl;
+            std::shared_lock lck(mutex_);
+            vec_data = fields_.at(field_id);
+        }
+
         auto dataset =
             knowhere::GenDataSet(row_count, dim, (void*)vec_data->Data());
         dataset->SetIsOwner(false);
