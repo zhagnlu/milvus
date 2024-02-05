@@ -72,6 +72,19 @@ empty_search_result(int64_t num_queries, SearchInfo& search_info) {
     return final_result;
 }
 
+bool isNewline(char c) {
+    return c == '\n';
+}
+
+std::string removeNewlines(const std::string& input) {
+    std::string result = input;
+
+    // 使用 std::replace_if 替换换行符为空格
+    std::replace_if(result.begin(), result.end(), isNewline, ' ');
+
+    return result;
+}
+
 void
 ExecPlanNodeVisitor::ExecuteExprNodeInternal(
     const std::shared_ptr<milvus::plan::PlanNode>& plannode,
@@ -81,8 +94,9 @@ ExecPlanNodeVisitor::ExecuteExprNodeInternal(
     bool& cache_offset_getted,
     std::vector<int64_t>& cache_offset) {
     bitset_holder.clear();
-    LOG_DEBUG("plannode: {}, active_count: {}, timestamp: {}",
-              plannode->ToString(),
+    LOG_INFO("segment id: {}, plannode: {}, active_count: {}, timestamp: {}",
+              segment->get_segment_id(),
+              removeNewlines(plannode->ToString()),
               active_count,
               timestamp_);
     auto plan = plan::PlanFragment(plannode);
@@ -134,9 +148,9 @@ ExecPlanNodeVisitor::ExecuteExprNodeInternal(
             PanicInfo(UnexpectedError, "expr return type not matched");
         }
     }
-    //    std::string s;
-    //    boost::to_string(*bitset_holder, s);
-    //    std::cout << bitset_holder->size() << " .  " << s << std::endl;
+        //std::string s;
+        //boost::to_string(bitset_holder, s);
+        LOG_INFO("bitset_size: {}, bitset_count: {}", bitset_holder.size(), bitset_holder.count());
 }
 
 template <typename VectorType>
