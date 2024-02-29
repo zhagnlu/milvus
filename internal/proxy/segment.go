@@ -393,6 +393,7 @@ func (sa *segIDAssigner) GetSegmentID(collID UniqueID, partitionID UniqueID, cha
 		timestamp:   ts,
 	}
 	sa.Reqs <- req
+	log.Info("get segmemt ID put rquest done")
 	if err := req.Wait(); err != nil {
 		return nil, fmt.Errorf("getSegmentID failed: %s", err)
 	}

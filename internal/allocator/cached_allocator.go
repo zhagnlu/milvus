@@ -189,6 +189,7 @@ func (ta *CachedAllocator) mainLoop() {
 			ta.failRemainRequest()
 
 		case first := <-ta.Reqs:
+			log.Info("xxxx get request", zap.Any("first", first))
 			ta.ToDoReqs = append(ta.ToDoReqs, first)
 			pending := len(ta.Reqs)
 			for i := 0; i < pending; i++ {
@@ -268,10 +269,12 @@ func (ta *CachedAllocator) failRemainRequest() {
 }
 
 func (ta *CachedAllocator) finishRequest() {
+	log.Info("xxx finishRequest")
 	for _, req := range ta.CanDoReqs {
 		if req != nil {
 			err := ta.ProcessFunc(req)
 			req.Notify(err)
+			log.Info("xxxxnotify finishRequest", zap.Any("req", req))
 		}
 	}
 	ta.CanDoReqs = []Request{}

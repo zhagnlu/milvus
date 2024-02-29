@@ -22,9 +22,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/commonpbutil"
 )
 
@@ -133,6 +135,7 @@ func (ia *IDAllocator) processFunc(req Request) error {
 	idRequest := req.(*IDRequest)
 	idRequest.id = ia.idStart
 	ia.idStart += int64(idRequest.count)
+	log.Info("xxx Process Func", zap.Any("idStart", ia.idStart), zap.Any("count", idRequest.count))
 	return nil
 }
 
@@ -147,6 +150,7 @@ func (ia *IDAllocator) AllocOne() (UniqueID, error) {
 
 // Alloc allocates the id of the count number.
 func (ia *IDAllocator) Alloc(count uint32) (UniqueID, UniqueID, error) {
+	log.Info("xxx id_allocator.go Alloc", zap.Any("start, count", count))
 	if ia.closed() {
 		return 0, 0, errors.New("fail to allocate ID, closed allocator")
 	}
@@ -154,11 +158,13 @@ func (ia *IDAllocator) Alloc(count uint32) (UniqueID, UniqueID, error) {
 
 	req.count = count
 	ia.Reqs <- req
+	log.Info("xxx id_allocator.go have put request")
 	if err := req.Wait(); err != nil {
 		return 0, 0, err
 	}
 
 	start, count := req.id, req.count
+	log.Info("xxx id_allocator.go Alloc", zap.Any("end, count", count), zap.Any("end, start", start))
 	return start, start + int64(count), nil
 }
 

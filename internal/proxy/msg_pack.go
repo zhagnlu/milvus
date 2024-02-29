@@ -120,12 +120,13 @@ func repackInsertDataByPartition(ctx context.Context,
 			maxTs = ts
 		}
 	}
-
+	log.Ctx(ctx).Info("xxxx", zap.Any("xx start repack insert partition data", partitionName), zap.Any("offset", rowOffsets))
 	partitionID, err := globalMetaCache.GetPartitionID(ctx, insertMsg.GetDbName(), insertMsg.CollectionName, partitionName)
 	if err != nil {
 		return nil, err
 	}
 	beforeAssign := time.Now()
+	log.Ctx(ctx).Info("xxxx", zap.Any("xx end repack insert partition data", partitionName))
 	assignedSegmentInfos, err := segIDAssigner.GetSegmentID(insertMsg.CollectionID, partitionID, channelName, uint32(len(rowOffsets)), maxTs)
 	metrics.ProxyAssignSegmentIDLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(float64(time.Since(beforeAssign).Milliseconds()))
 	if err != nil {
@@ -137,6 +138,7 @@ func repackInsertDataByPartition(ctx context.Context,
 		return nil, err
 	}
 
+	log.Ctx(ctx).Info("xxxx", zap.Any("xx end get segmentid ", partitionName), zap.Any("assignSegmentInfo", assignedSegmentInfos))
 	startPos := 0
 	for segmentID, count := range assignedSegmentInfos {
 		subRowOffsets := rowOffsets[startPos : startPos+int(count)]
@@ -151,6 +153,7 @@ func repackInsertDataByPartition(ctx context.Context,
 		res = append(res, msgs...)
 		startPos += int(count)
 	}
+	log.Ctx(ctx).Info("xxxx", zap.Any("xx end gen insert msg ", partitionName))
 
 	return res, nil
 }
@@ -161,7 +164,7 @@ func setMsgID(ctx context.Context,
 ) error {
 	var idBegin int64
 	var err error
-
+	log.Ctx(ctx).Info("xxx set msg ids", zap.Any("allocat count", len(msgs)))
 	err = retry.Do(ctx, func() error {
 		idBegin, _, err = idAllocator.Alloc(uint32(len(msgs)))
 		return err
@@ -191,6 +194,7 @@ func repackInsertData(ctx context.Context,
 	}
 
 	channel2RowOffsets := assignChannelsByPK(result.IDs, channelNames, insertMsg)
+	log.Ctx(ctx).Info("xxxx repack insert data")
 	for channel, rowOffsets := range channel2RowOffsets {
 		partitionName := insertMsg.PartitionName
 		msgs, err := repackInsertDataByPartition(ctx, partitionName, rowOffsets, channel, insertMsg, segIDAssigner)
@@ -201,10 +205,12 @@ func repackInsertData(ctx context.Context,
 				zap.Error(err))
 			return nil, err
 		}
+		log.Ctx(ctx).Info("xxxx repack done", zap.Any("xx", msgs))
 
 		msgPack.Msgs = append(msgPack.Msgs, msgs...)
 	}
 
+	log.Ctx(ctx).Info("xxxxxxxx, start set msg id", zap.Any("xx", insertMsg.CollectionName))
 	err := setMsgID(ctx, msgPack.Msgs, idAllocator)
 	if err != nil {
 		log.Error("failed to set msgID when repack insert data",

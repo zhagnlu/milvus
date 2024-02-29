@@ -1564,12 +1564,14 @@ func (c *Core) AllocTimestamp(ctx context.Context, in *rootcoordpb.AllocTimestam
 
 // AllocID alloc ids
 func (c *Core) AllocID(ctx context.Context, in *rootcoordpb.AllocIDRequest) (*rootcoordpb.AllocIDResponse, error) {
+	log.Ctx(ctx).Error("xxxxstart to AllocID", zap.Any("allocate id:", in.Count))
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &rootcoordpb.AllocIDResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 	start, _, err := c.idAllocator.Alloc(in.Count)
+	log.Ctx(ctx).Error("xxxxend to AllocID")
 	if err != nil {
 		log.Ctx(ctx).Error("failed to allocate id",
 			zap.String("role", typeutil.RootCoordRole),
@@ -1581,6 +1583,7 @@ func (c *Core) AllocID(ctx context.Context, in *rootcoordpb.AllocIDRequest) (*ro
 		}, nil
 	}
 
+	log.Ctx(ctx).Error("xxxx", zap.Any("xxx", metrics.RootCoordIDAllocCounter))
 	metrics.RootCoordIDAllocCounter.Add(float64(in.Count))
 	return &rootcoordpb.AllocIDResponse{
 		Status: merr.Success(),

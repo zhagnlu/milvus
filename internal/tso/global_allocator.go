@@ -30,6 +30,8 @@
 package tso
 
 import (
+	"fmt"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -105,6 +107,20 @@ func (gta *GlobalTSOAllocator) SetTSO(tso uint64) error {
 	return gta.tso.ResetUserTimestamp(tso)
 }
 
+func PrintStackTrace() {
+	fmt.Println("Printing stack trace:")
+	pc := make([]uintptr, 30) // 假设调用栈的最大深度为10
+	n := runtime.Callers(0, pc)
+	frames := runtime.CallersFrames(pc[:n])
+	for {
+		frame, more := frames.Next()
+		fmt.Printf("- %s:%d %s\n", frame.File, frame.Line, frame.Function)
+		if !more {
+			break
+		}
+	}
+}
+
 // GenerateTSO is used to generate a given number of TSOs.
 // Make sure you have initialized the TSO allocator before calling.
 func (gta *GlobalTSOAllocator) GenerateTSO(count uint32) (uint64, error) {
@@ -114,7 +130,8 @@ func (gta *GlobalTSOAllocator) GenerateTSO(count uint32) (uint64, error) {
 	}
 
 	maxRetryCount := 10
-
+	// PrintStackTrace()
+	log.Info("xxx start generatre Tso", zap.Any("count:", count))
 	for i := 0; i < maxRetryCount; i++ {
 		current := (*atomicObject)(atomic.LoadPointer(&gta.tso.TSO))
 		if current == nil || current.physical.Equal(typeutil.ZeroTime) {
@@ -132,6 +149,7 @@ func (gta *GlobalTSOAllocator) GenerateTSO(count uint32) (uint64, error) {
 			time.Sleep(UpdateTimestampStep)
 			continue
 		}
+		log.Info("xxx end start generate Tso")
 		return tsoutil.ComposeTS(physical, logical), nil
 	}
 	return 0, errors.New("can not get timestamp")

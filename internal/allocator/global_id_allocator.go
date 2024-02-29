@@ -19,7 +19,9 @@ package allocator
 import (
 	"github.com/milvus-io/milvus/internal/kv"
 	"github.com/milvus-io/milvus/internal/tso"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
+	"go.uber.org/zap"
 )
 
 // GlobalIDAllocator is the global single point TSO allocator.
@@ -45,6 +47,7 @@ func (gia *GlobalIDAllocator) Initialize() error {
 // GenerateTSO is used to generate a given number of TSOs.
 // Make sure you have initialized the TSO allocator before calling.
 func (gia *GlobalIDAllocator) Alloc(count uint32) (typeutil.UniqueID, typeutil.UniqueID, error) {
+	log.Info("xxx", zap.Any("allocating count", count))
 	timestamp, err := gia.allocator.GenerateTSO(count)
 	if err != nil {
 		return 0, 0, err
