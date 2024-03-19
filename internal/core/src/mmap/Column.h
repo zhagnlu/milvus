@@ -41,6 +41,12 @@
 
 namespace milvus {
 
+/*
+* If string field's value all empty, need a string padding to avoid 
+* mmap failing because size_ is zero which causing invalid arguement
+* TODO: remove it when support NULL value
+*/
+constexpr size_t STRING_PADDING = 1;
 class ColumnBase {
  public:
     // memory mode ctor
@@ -48,10 +54,7 @@ class ColumnBase {
         : type_size_(datatype_is_sparse_vector(field_meta.get_data_type())
                          ? 1
                          : field_meta.get_sizeof()) {
-        // simdjson requires a padding following the json data
-        padding_ = field_meta.get_data_type() == DataType::JSON
-                       ? simdjson::SIMDJSON_PADDING
-                       : 0;
+        SetPaddingSize(field_meta.get_data_type());
 
         if (datatype_is_variable(field_meta.get_data_type())) {
             return;
@@ -78,9 +81,7 @@ class ColumnBase {
                          ? 1
                          : field_meta.get_sizeof()),
           num_rows_(size / type_size_) {
-        padding_ = field_meta.get_data_type() == DataType::JSON
-                       ? simdjson::SIMDJSON_PADDING
-                       : 0;
+        SetPaddingSize(field_meta.get_data_type());
 
         size_ = size;
         cap_size_ = size;
@@ -105,7 +106,7 @@ class ColumnBase {
           num_rows_(size / datatype_sizeof(data_type, dim)),
           size_(size),
           cap_size_(size) {
-        padding_ = data_type == DataType::JSON ? simdjson::SIMDJSON_PADDING : 0;
+        SetPaddingSize(data_type);
 
         data_ = static_cast<char*>(mmap(nullptr,
                                         cap_size_ + padding_,
@@ -192,6 +193,23 @@ class ColumnBase {
         std::copy_n(data, size, data_ + size_);
         size_ = required_size;
         num_rows_++;
+    }
+
+    void
+    SetPaddingSize(const DataType& type) {
+        switch (type) {
+            case DataType::JSON:
+                // simdjson requires a padding following the json data
+                padding_ = simdjson::SIMDJSON_PADDING;
+                break;
+            case DataType::VARCHAR:
+            case DataType::STRING:
+                padding_ = STRING_PADDING;
+                break;
+            default:
+                padding_ = 0;
+                break;
+        }
     }
 
  protected:
