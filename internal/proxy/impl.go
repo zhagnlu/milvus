@@ -2889,6 +2889,7 @@ func (node *Proxy) HybridSearch(ctx context.Context, request *milvuspb.HybridSea
 		request.CollectionName,
 	).Observe(float64(searchDur))
 
+	log.Info("xxx hybrid proxy latency", zap.Any("duration", float64(searchDur)))
 	if qt.result != nil {
 		sentSize := proto.Size(qt.result)
 		metrics.ProxyReadReqSendBytes.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Add(float64(sentSize))
