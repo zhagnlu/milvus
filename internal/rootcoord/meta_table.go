@@ -531,7 +531,9 @@ func (mt *MetaTable) getCollectionByIDInternal(ctx context.Context, dbName strin
 		if err != nil {
 			return nil, err
 		}
+		log.Debug("rootcoord catalog GetCollectionByID", zap.Any("collectionID", collectionID))
 		coll, err = mt.catalog.GetCollectionByID(ctx1, db.ID, ts, collectionID)
+		log.Debug("rootcoord catalog GetCollectionByID done", zap.Any("collectionID", collectionID))
 		if err != nil {
 			return nil, err
 		}
@@ -555,6 +557,7 @@ func (mt *MetaTable) getCollectionByIDInternal(ctx context.Context, dbName strin
 }
 
 func (mt *MetaTable) GetCollectionByName(ctx context.Context, dbName string, collectionName string, ts Timestamp) (*model.Collection, error) {
+	log.Debug("root meta table GetCollectionByName start", zap.Any("collectionName", collectionName))
 	mt.ddLock.RLock()
 	defer mt.ddLock.RUnlock()
 	return mt.getCollectionByNameInternal(ctx, dbName, collectionName, ts)
@@ -567,6 +570,7 @@ func (mt *MetaTable) getCollectionByNameInternal(ctx context.Context, dbName str
 		dbName = util.DefaultDBName
 	}
 
+	log.Debug("root meta table getCollectionByNameInternal start", zap.Any("collectionName", collectionName))
 	collectionID, ok := mt.aliases.get(dbName, collectionName)
 	if ok {
 		return mt.getCollectionByIDInternal(ctx, dbName, collectionID, ts, false)

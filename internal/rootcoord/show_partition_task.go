@@ -22,9 +22,11 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/merr"
 	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
+	"go.uber.org/zap"
 )
 
 // showPartitionTask show partition request task
@@ -47,6 +49,7 @@ func (t *showPartitionTask) Execute(ctx context.Context) error {
 	var coll *model.Collection
 	var err error
 	t.Rsp.Status = merr.Success()
+	log.Debug("Executing task show partition request start", zap.Any("req collecition namne", t.Req.GetCollectionName()))
 	if t.Req.GetCollectionName() == "" {
 		coll, err = t.core.meta.GetCollectionByID(ctx, t.Req.GetDbName(), t.Req.GetCollectionID(), typeutil.MaxTimestamp, t.allowUnavailable)
 	} else {
