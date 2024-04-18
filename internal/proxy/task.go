@@ -1545,11 +1545,13 @@ func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	log.Debug("GetCollectionSchema done", zap.Any("collectionname", t.CollectionName))
 	// check index
 	indexResponse, err := t.datacoord.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{
 		CollectionID: collID,
 		IndexName:    "",
 	})
+	log.Debug("DescribeIndex done", zap.Any("collectionname", collID))
 	if err == nil {
 		err = merr.Error(indexResponse.GetStatus())
 	}

@@ -21,6 +21,8 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus/pkg/log"
+	"go.uber.org/zap"
 )
 
 // describeCollectionTask describe collection request task
@@ -40,7 +42,9 @@ func (t *describeCollectionTask) Prepare(ctx context.Context) error {
 
 // Execute task execution
 func (t *describeCollectionTask) Execute(ctx context.Context) (err error) {
+	log.Debug("Execute describeCollectionTask", zap.Any("req", t.Req))
 	coll, err := t.core.describeCollection(ctx, t.Req, t.allowUnavailable)
+	log.Debug("Execute describeCollectionTask describe collection done", zap.Any("req", t.Req))
 	if err != nil {
 		return err
 	}

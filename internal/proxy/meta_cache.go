@@ -600,6 +600,7 @@ func (m *MetaCache) GetCollectionSchema(ctx context.Context, database, collectio
 		tr := timerecord.NewTimeRecorder("UpdateCache")
 		metrics.ProxyCacheStatsCounter.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), method, metrics.CacheMissLabel).Inc()
 
+		log.Ctx(ctx).Debug("get collection scheame update by name", zap.Any("collection name", collectionName))
 		collInfo, err := m.UpdateByName(ctx, database, collectionName)
 		if err != nil {
 			return nil, err
@@ -687,6 +688,8 @@ func (m *MetaCache) describeCollection(ctx context.Context, database, collection
 		CollectionName: collectionName,
 		CollectionID:   collectionID,
 	}
+
+	log.Info("send rootcootd describe collection request", zap.Any("request", req))
 	coll, err := m.rootCoord.DescribeCollection(ctx, req)
 	if err != nil {
 		return nil, err
@@ -730,6 +733,7 @@ func (m *MetaCache) showPartitions(ctx context.Context, dbName string, collectio
 		CollectionID:   collectionID,
 	}
 
+	log.Info("send rootcootd show partition request", zap.Any("request", req))
 	partitions, err := m.rootCoord.ShowPartitions(ctx, req)
 	if err != nil {
 		return nil, err
