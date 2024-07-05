@@ -365,10 +365,10 @@ func fillDimension(field *schemapb.FieldSchema, indexParams map[string]string) e
 func checkTrain(field *schemapb.FieldSchema, indexParams map[string]string) error {
 	indexType := indexParams[common.IndexTypeKey]
 
-	if indexType == indexparamcheck.IndexBitmap {
-		_, exist := indexParams[common.BitmapCardinalityLimitKey]
+	if indexType == indexparamcheck.IndexHybrid {
+		_, exist := indexParams[common.HybridCardinalityLimitKey]
 		if !exist {
-			indexParams[common.BitmapCardinalityLimitKey] = paramtable.Get().CommonCfg.BitmapIndexCardinalityBound.GetValue()
+			indexParams[common.HybridCardinalityLimitKey] = paramtable.Get().CommonCfg.HybridIndexCardinalityBound.GetValue()
 		}
 	}
 	checker, err := indexparamcheck.GetIndexCheckerMgrInstance().GetChecker(indexType)

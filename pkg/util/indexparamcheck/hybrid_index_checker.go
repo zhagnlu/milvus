@@ -9,13 +9,13 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
-type BITMAPChecker struct {
+type HYBRIDhecker struct {
 	scalarIndexChecker
 }
 
-func (c *BITMAPChecker) CheckTrain(params map[string]string) error {
-	if !CheckIntByRange(params, common.BitmapCardinalityLimitKey, 1, math.MaxInt) {
-		return fmt.Errorf("failed to check bitmap cardinality limit, should be larger than 0 and smaller than math.MaxInt")
+func (c *HYBRIDhecker) CheckTrain(params map[string]string) error {
+	if !CheckIntByRange(params, common.HybridCardinalityLimitKey, 1, math.MaxInt) {
+		return fmt.Errorf("failed to check hybrid cardinality limit, should be larger than 0 and smaller than math.MaxInt")
 	}
 	return c.scalarIndexChecker.CheckTrain(params)
 }
@@ -36,6 +36,6 @@ func (c *BITMAPChecker) CheckValidDataType(field *schemapb.FieldSchema) error {
 	return nil
 }
 
-func newBITMAPChecker() *BITMAPChecker {
-	return &BITMAPChecker{}
+func newHYBRIDChecker() *HYBRIDhecker {
+	return &HYBRIDhecker{}
 }

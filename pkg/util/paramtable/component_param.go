@@ -49,7 +49,7 @@ const (
 	DefaultSearchCacheBudgetGBRatio    = 0.10
 	DefaultLoadNumThreadRatio          = 8.0
 	DefaultBeamWidthRatio              = 4.0
-	DefaultBitmapIndexCardinalityBound = 500
+	DefaultHybridIndexCardinalityBound = 500
 )
 
 // ComponentParam is used to quickly and easily access all components' configurations.
@@ -213,7 +213,7 @@ type commonConfig struct {
 	BeamWidthRatio                      ParamItem `refreshable:"true"`
 	GracefulTime                        ParamItem `refreshable:"true"`
 	GracefulStopTimeout                 ParamItem `refreshable:"true"`
-	BitmapIndexCardinalityBound         ParamItem `refreshable:"false"`
+	HybridIndexCardinalityBound         ParamItem `refreshable:"false"`
 
 	StorageType ParamItem `refreshable:"false"`
 	SimdType    ParamItem `refreshable:"false"`
@@ -451,13 +451,13 @@ This configuration is only used by querynode and indexnode, it selects CPU instr
 	}
 	p.IndexSliceSize.Init(base.mgr)
 
-	p.BitmapIndexCardinalityBound = ParamItem{
-		Key:          "common.bitmapIndexCardinalityBound",
+	p.HybridIndexCardinalityBound = ParamItem{
+		Key:          "common.HybridIndexCardinalityBound",
 		Version:      "2.5.0",
-		DefaultValue: strconv.Itoa(DefaultBitmapIndexCardinalityBound),
+		DefaultValue: strconv.Itoa(DefaultHybridIndexCardinalityBound),
 		Export:       true,
 	}
-	p.BitmapIndexCardinalityBound.Init(base.mgr)
+	p.HybridIndexCardinalityBound.Init(base.mgr)
 
 	p.EnableMaterializedView = ParamItem{
 		Key:          "common.materializedView.enabled",

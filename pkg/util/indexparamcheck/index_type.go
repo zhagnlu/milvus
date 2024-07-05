@@ -37,7 +37,7 @@ const (
 	IndexSTLSORT IndexType = "STL_SORT"
 	IndexTRIE    IndexType = "TRIE"
 	IndexTrie    IndexType = "Trie"
-	IndexBitmap  IndexType = "BITMAP"
+	IndexHybrid  IndexType = "HYBRID"
 
 	AutoIndex IndexType = "AUTOINDEX"
 )
