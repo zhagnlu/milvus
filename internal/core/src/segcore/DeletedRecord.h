@@ -59,6 +59,7 @@ class DeletedRecord {
         int64_t mem_add = 0;
         for (size_t i = 0; i < pks.size(); ++i) {
             auto offsets = insert_record_->search_pk(pks[i], timestamps[i]);
+            bool has_same_timestmap_offset = false;
             for (auto offset : offsets) {
                 int64_t insert_row_offset = offset.get();
                 // Assert(insert_record->timestamps_.size() >= insert_row_offset);
@@ -67,6 +68,16 @@ class DeletedRecord {
                     InsertIntoInnerPairs(timestamps[i], {insert_row_offset});
                     removed_num++;
                     mem_add += sizeof(Timestamp) + sizeof(int64_t);
+                } else if (insert_record_->timestamps_[insert_row_offset] ==
+                           timestamps[i]) {
+                    if (!has_same_timestmap_offset) {
+                        has_same_timestmap_offset = true;
+                    } else {
+                        InsertIntoInnerPairs(timestamps[i],
+                                             {insert_row_offset});
+                        removed_num++;
+                        mem_add += sizeof(Timestamp) + sizeof(int64_t);
+                    }
                 }
             }
         }
@@ -85,14 +96,18 @@ class DeletedRecord {
             std::make_pair(timestamp, std::set<int64_t>{}));
         for (auto it = deleted_pairs_.begin(); it != end; it++) {
             for (auto& v : it->second) {
-                bitset.set(v);
+                if (v < insert_barrier) {
+                    bitset.set(v);
+                }
             }
         }
 
         // handle the case where end points to an element with the same timestamp
         if (end != deleted_pairs_.end() && end->first == timestamp) {
             for (auto& v : end->second) {
-                bitset.set(v);
+                if (v < insert_barrier) {
+                    bitset.set(v);
+                }
             }
         }
     }
@@ -118,6 +133,20 @@ class DeletedRecord {
                 it->second.insert(val);
             }
         }
+    }
+
+    void
+    PrintDeletedPairs() {
+        std::string all_values;
+        for (auto it = deleted_pairs_.begin(); it != deleted_pairs_.end();
+             it++) {
+            all_values += std::to_string(it->first) + " || ";
+            for (auto& val : it->second) {
+                all_values += std::to_string(val) + " ";
+            }
+            all_values += "\n";
+        }
+        LOG_INFO("xxx deleted pairs: {}", all_values.c_str());
     }
 
  private:
