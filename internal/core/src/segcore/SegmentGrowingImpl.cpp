@@ -44,6 +44,11 @@ SegmentGrowingImpl::PreInsert(int64_t size) {
     return reserved_begin;
 }
 
+size_t
+SegmentGrowingImpl::get_delete_record_mem() const {
+    return deleted_record_.mem_size();
+}
+
 void
 SegmentGrowingImpl::mask_with_delete(BitsetType& bitset,
                                      int64_t ins_barrier,
@@ -149,7 +154,7 @@ SegmentGrowingImpl::Insert(int64_t reserved_offset,
         // means last pk is invisibale for current insert timestamp
         if (exist_pk) {
             auto remove_timestamp = timestamps_raw[i];
-            deleted_record_.Push({pks[i]}, &remove_timestamp);
+            deleted_record_.PushGrowing({pks[i]}, &remove_timestamp);
         }
     }
 
@@ -164,7 +169,7 @@ SegmentGrowingImpl::RemoveDuplicatePkRecords() {
     //Assert(!insert_record_.timestamps_.empty());
     // firstly find that need removed records and mark them as deleted
     auto removed_pks = insert_record_.get_need_removed_pks();
-    deleted_record_.Push(removed_pks.first, removed_pks.second.data());
+    deleted_record_.PushGrowing(removed_pks.first, removed_pks.second.data());
 
     // then remove duplicated pks in pk index
     insert_record_.remove_duplicate_pks();
@@ -394,7 +399,7 @@ SegmentGrowingImpl::Delete(int64_t reserved_begin,
     }
 
     // step 2: fill delete record
-    deleted_record_.Push(sort_pks, sort_timestamps.data());
+    deleted_record_.PushGrowing(sort_pks, sort_timestamps.data());
     return SegcoreError::success();
 }
 
@@ -415,7 +420,7 @@ SegmentGrowingImpl::LoadDeletedRecord(const LoadDeletedRecordInfo& info) {
     auto timestamps = reinterpret_cast<const Timestamp*>(info.timestamps);
 
     // step 2: fill pks and timestamps
-    deleted_record_.Push(pks, timestamps);
+    deleted_record_.PushGrowing(pks, timestamps);
 }
 
 SpanBase

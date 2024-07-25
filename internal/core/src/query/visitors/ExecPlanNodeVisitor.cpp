@@ -230,8 +230,7 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
     double total_cost =
         std::chrono::duration<double, std::micro>(vector_end - scalar_start)
             .count();
-    double scalar_ratio =
-        total_cost > 0.0 ? scalar_cost / total_cost : 0.0;
+    double scalar_ratio = total_cost > 0.0 ? scalar_cost / total_cost : 0.0;
     monitor::internal_core_search_latency_scalar_proportion.Observe(
         scalar_ratio);
 }
@@ -293,6 +292,15 @@ ExecPlanNodeVisitor::visit(RetrievePlanNode& node) {
     segment->mask_with_timestamps(bitset_holder, timestamp_);
 
     segment->mask_with_delete(bitset_holder, active_count, timestamp_);
+    LOG_INFO(
+        "xxx segment id:{}, segment type:{}, delete_size:{}, "
+        "bitset_holder_size:{}, bitset_count:{}",
+        segment->get_segment_id(),
+        segment->type(),
+        segment->get_delete_record_mem(),
+        active_count,
+        bitset_holder.count());
+
     // if bitset_holder is all 1's, we got empty result
     if (bitset_holder.all() && !node.is_count_) {
         retrieve_result_opt_ = std::move(retrieve_result);
