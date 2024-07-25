@@ -44,6 +44,11 @@ SegmentGrowingImpl::PreInsert(int64_t size) {
     return reserved_begin;
 }
 
+size_t
+SegmentGrowingImpl::get_delete_record_mem() const {
+    return deleted_record_.mem_size();
+}
+
 void
 SegmentGrowingImpl::mask_with_delete(BitsetType& bitset,
                                      int64_t ins_barrier,

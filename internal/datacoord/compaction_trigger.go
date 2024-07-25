@@ -833,6 +833,10 @@ func (t *compactionTrigger) ShouldDoSingleCompaction(segment *SegmentInfo, compa
 		}
 	}
 
+	log.Info("vvvvv total expired info ", zap.Int64("segmentID", segment.ID),
+		zap.Int("expiredRows", totalExpiredRows), zap.Int64("totol num rows", segment.GetNumOfRows()),
+		zap.Int64("expiredLogSize", totalExpiredSize))
+
 	if float64(totalExpiredRows)/float64(segment.GetNumOfRows()) >= Params.DataCoordCfg.SingleCompactionRatioThreshold.GetAsFloat() ||
 		totalExpiredSize > Params.DataCoordCfg.SingleCompactionExpiredLogMaxSize.GetAsInt64() {
 		log.Info("total expired entities is too much, trigger compaction", zap.Int64("segmentID", segment.ID),

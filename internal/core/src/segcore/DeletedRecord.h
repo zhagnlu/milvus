@@ -95,6 +95,7 @@ class DeletedRecord {
         if (deleted_pairs_.size() == 0) {
             return;
         }
+        LOG_INFO("xxx mem_size:{}", mem_size());
         auto end = deleted_pairs_.lower_bound(
             std::make_pair(timestamp, std::set<int64_t>{}));
         for (auto it = deleted_pairs_.begin(); it != end; it++) {
