@@ -335,7 +335,7 @@ class SegmentInternalInterface : public SegmentInterface {
     virtual std::pair<std::vector<OffsetMap::OffsetType>, bool>
     find_first(int64_t limit,
                const BitsetType& bitset,
-               bool false_filtered_out) const = 0;
+               bool false_filtered_out = false) const = 0;
 
     void
     FillTargetEntry(

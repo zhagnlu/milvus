@@ -104,28 +104,10 @@ class ExecPlanNodeVisitor : public PlanNodeVisitor {
     }
 
     void
-    ExecuteExprNodeInternal(
-        const std::shared_ptr<milvus::plan::PlanNode>& plannode,
-        const milvus::segcore::SegmentInternalInterface* segment,
-        int64_t active_count,
-        BitsetType& result,
-        bool& cache_offset_getted,
-        std::vector<int64_t>& cache_offset);
-
-    void
     ExecuteExprNode(const std::shared_ptr<milvus::plan::PlanNode>& plannode,
                     const milvus::segcore::SegmentInternalInterface* segment,
                     int64_t active_count,
-                    BitsetType& result) {
-        bool get_cache_offset;
-        std::vector<int64_t> cache_offsets;
-        ExecuteExprNodeInternal(plannode,
-                                segment,
-                                active_count,
-                                result,
-                                get_cache_offset,
-                                cache_offsets);
-    }
+                    BitsetType& result);
 
  private:
     template <typename VectorType>
