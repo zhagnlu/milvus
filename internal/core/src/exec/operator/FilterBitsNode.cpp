@@ -97,7 +97,7 @@ PhyFilterBitsNode::GetOutput() {
         std::chrono::duration<double, std::micro>(scalar_end - scalar_start)
             .count();
     monitor::internal_core_search_latency_scalar.Observe(scalar_cost);
-
+    LOG_INFO("filter expr cost:{}us", scalar_cost);
     return std::make_shared<RowVector>(col_res);
 }
 

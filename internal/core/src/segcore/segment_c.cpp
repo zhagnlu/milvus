@@ -117,12 +117,14 @@ AsyncSearch(CTraceContext c_trace,
     auto phg_ptr = reinterpret_cast<const milvus::query::PlaceholderGroup*>(
         c_placeholder_group);
 
+    auto start = std::chrono::steady_clock::now();
     auto future = milvus::futures::Future<milvus::SearchResult>::async(
         milvus::futures::getGlobalCPUExecutor(),
         milvus::futures::ExecutePriority::HIGH,
         [c_trace, segment, plan, phg_ptr, timestamp](
             milvus::futures::CancellationToken cancel_token) {
             // save trace context into search_info
+            auto start = std::chrono::steady_clock::now();
             auto& trace_ctx = plan->plan_node_->search_info_.trace_ctx_;
             trace_ctx.traceID = c_trace.traceID;
             trace_ctx.spanID = c_trace.spanID;
@@ -138,10 +140,18 @@ AsyncSearch(CTraceContext c_trace,
                     dis *= -1;
                 }
             }
+            LOG_INFO("AsyncSearch internal cost: {}us",
+                     std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count());
             span->End();
             milvus::tracer::CloseRootSpan();
             return search_result.release();
         });
+    LOG_INFO("AsyncSearch cost: {}us",
+             std::chrono::duration_cast<std::chrono::microseconds>(
+                 std::chrono::steady_clock::now() - start)
+                 .count());
     return static_cast<CFuture*>(static_cast<void*>(
         static_cast<milvus::futures::IFuture*>(future.release())));
 }

@@ -39,6 +39,7 @@ PhyMvccNode::AddInput(RowVectorPtr& input) {
 
 RowVectorPtr
 PhyMvccNode::GetOutput() {
+    auto start = std::chrono::steady_clock::now();
     if (is_finished_) {
         return nullptr;
     }
@@ -64,6 +65,10 @@ PhyMvccNode::GetOutput() {
     segment_->mask_with_delete(data, active_count_, query_timestamp_);
     is_finished_ = true;
 
+    LOG_INFO("mvcc cost:{}",
+             std::chrono::duration_cast<std::chrono::microseconds>(
+                 std::chrono::steady_clock::now() - start)
+                 .count());
     // input_ have already been updated
     return std::make_shared<RowVector>(std::vector<VectorPtr>{col_input});
 }
