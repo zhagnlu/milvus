@@ -46,6 +46,7 @@ class LocalChunkManagerSingleton {
         if (lcm_ == nullptr) {
             lcm_ = std::make_shared<LocalChunkManager>(root_path);
         }
+        lcm_->Size("/var/lib/milvus/data/a");
     }
 
     LocalChunkManagerSPtr

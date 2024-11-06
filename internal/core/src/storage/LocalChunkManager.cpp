@@ -50,6 +50,18 @@ LocalChunkManager::Size(const std::string& filepath) {
     boost::filesystem::path absPath(filepath);
 
     if (!Exist(filepath)) {
+        namespace fs = boost::filesystem;
+        try {
+            LOG_INFO("xxx111xx");
+            for (const auto& entry :
+                 fs::recursive_directory_iterator("/var/lib/milvus/data/")) {
+                if (fs::is_regular_file(entry.path())) {
+                    LOG_INFO("xxx files: {}", entry.path().string());
+                }
+            }
+        } catch (const fs::filesystem_error& e) {
+            std::cout << "Error accessing directory: " << e.what() << std::endl;
+        }
         PanicInfo(PathNotExist, "invalid local path:" + absPath.string());
     }
     boost::system::error_code err;
