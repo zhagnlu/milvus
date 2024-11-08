@@ -95,6 +95,7 @@ AsyncSearch(CTraceContext c_trace,
     auto phg_ptr = reinterpret_cast<const milvus::query::PlaceholderGroup*>(
         c_placeholder_group);
 
+    auto start = std::chrono::steady_clock::now();
     auto future = milvus::futures::Future<milvus::SearchResult>::async(
         milvus::futures::getGlobalCPUExecutor(),
         milvus::futures::ExecutePriority::HIGH,
@@ -120,6 +121,9 @@ AsyncSearch(CTraceContext c_trace,
             milvus::tracer::CloseRootSpan();
             return search_result.release();
         });
+    auto end = std::chrono::steady_clock::now();
+    LOG_INFO("xxx cgo cost:{}",
+             std::chrono::duration<double, std::micro>(end - start).count());
     return static_cast<CFuture*>(static_cast<void*>(
         static_cast<milvus::futures::IFuture*>(future.release())));
 }
