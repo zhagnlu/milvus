@@ -80,7 +80,12 @@ SegmentInternalInterface::Search(
     const query::Plan* plan,
     const query::PlaceholderGroup* placeholder_group,
     Timestamp timestamp) const {
+    auto start = std::chrono::system_clock::now();
     std::shared_lock lck(mutex_);
+    LOG_INFO("xxx lock cost:{}",
+             std::chrono::duration<double, std::nano>(
+                 std::chrono::system_clock::now() - start)
+                 .count());
     milvus::tracer::AddEvent("obtained_segment_lock_mutex");
     check_search(plan);
     query::ExecPlanNodeVisitor visitor(*this, timestamp, placeholder_group);
