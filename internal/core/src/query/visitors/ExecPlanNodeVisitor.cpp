@@ -160,15 +160,18 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
     // auto row_count = segment->get_row_count();
     auto active_count = segment->get_active_count(timestamp_);
 
+    std::chrono::high_resolution_clock::time_point get_active_end =
+        std::chrono::high_resolution_clock::now();
     // skip all calculation
     if (active_count == 0) {
         search_result_opt_ =
             empty_search_result(num_queries, node.search_info_);
+        double get_active_cost = std::chrono::duration<double, std::micro>(
+                                     get_active_end - scalar_start)
+                                     .count();
+        LOG_INFO("xxx search get_active cost: {}", get_active_cost);
         return;
     }
-
-    std::chrono::high_resolution_clock::time_point get_active_end =
-        std::chrono::high_resolution_clock::now();
 
     std::unique_ptr<BitsetType> bitset_holder;
     if (node.filter_plannode_.has_value()) {
@@ -197,6 +200,18 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
     if (bitset_holder->all()) {
         search_result_opt_ =
             empty_search_result(num_queries, node.search_info_);
+        double get_active_cost = std::chrono::duration<double, std::micro>(
+                                     get_active_end - scalar_start)
+                                     .count();
+        double delete_cost =
+            std::chrono::duration<double, std::micro>(scalar_end - mv_ts_end)
+                .count();
+        LOG_INFO(
+            "xxx search scalar cost:{},  get_active cost: {}, "
+            "delete_cost: {}",
+            scalar_cost,
+            get_active_cost,
+            delete_cost);
         return;
     }
 

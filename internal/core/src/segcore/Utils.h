@@ -117,8 +117,13 @@ get_deleted_bitmap(int64_t del_barrier,
     // if insert_barrier and del_barrier have not changed, use cache data directly
     bool hit_cache = false;
     int64_t old_del_barrier = 0;
+    std::chrono::high_resolution_clock::time_point start1 =
+        std::chrono::high_resolution_clock::now();
+
     auto current = delete_record.clone_lru_entry(
         insert_barrier, del_barrier, old_del_barrier, hit_cache);
+    std::chrono::high_resolution_clock::time_point start2 =
+        std::chrono::high_resolution_clock::now();
     if (hit_cache) {
         return current;
     }
@@ -151,8 +156,26 @@ get_deleted_bitmap(int64_t del_barrier,
                                     : delete_timestamps[pk];
     }
 
+    std::chrono::high_resolution_clock::time_point start3 =
+        std::chrono::high_resolution_clock::now();
+    double clone_cost =
+        std::chrono::duration<double, std::micro>(start2 - start1).count();
+    double avoid_cost =
+        std::chrono::duration<double, std::micro>(start3 - start2).count();
+    LOG_INFO("xxx clone cost: {}, avoid cost: {}, start -end {} ",
+             clone_cost,
+             avoid_cost,
+             end - start);
+
     for (auto& [pk, timestamp] : delete_timestamps) {
+        std::chrono::high_resolution_clock::time_point start_1 =
+            std::chrono::high_resolution_clock::now();
         auto segOffsets = insert_record.search_pk(pk, insert_barrier);
+        std::chrono::high_resolution_clock::time_point start_2 =
+            std::chrono::high_resolution_clock::now();
+        double search_pk_cost =
+            std::chrono::duration<double, std::micro>(start_2 - start_1)
+                .count();
         for (auto offset : segOffsets) {
             int64_t insert_row_offset = offset.get();
 
@@ -171,6 +194,19 @@ get_deleted_bitmap(int64_t del_barrier,
             // insert data corresponding to the insert_row_offset will be ignored in search/query
             bitmap->set(insert_row_offset);
         }
+        std::chrono::high_resolution_clock::time_point start_3 =
+            std::chrono::high_resolution_clock::now();
+        double set_cost =
+            std::chrono::duration<double, std::micro>(start_3 - start_2)
+                .count();
+        LOG_INFO(
+            "xx searchpk cost: {}, set cost :{}, offset size {}, "
+            "delete_timestamps "
+            "size: {} ",
+            search_pk_cost,
+            set_cost,
+            segOffsets.size(),
+            delete_timestamps.size());
     }
 
     delete_record.insert_lru_entry(current);

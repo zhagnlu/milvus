@@ -804,13 +804,26 @@ void
 SegmentSealedImpl::mask_with_delete(BitsetType& bitset,
                                     int64_t ins_barrier,
                                     Timestamp timestamp) const {
+    std::chrono::high_resolution_clock::time_point start1 =
+        std::chrono::high_resolution_clock::now();
     auto del_barrier = get_barrier(get_deleted_record(), timestamp);
+    std::chrono::high_resolution_clock::time_point start2 =
+        std::chrono::high_resolution_clock::now();
+    double get_barrier_cost =
+        std::chrono::duration<double, std::micro>(start2 - start1).count();
     if (del_barrier == 0) {
         return;
     }
 
     auto bitmap_holder = get_deleted_bitmap(
         del_barrier, ins_barrier, deleted_record_, insert_record_, timestamp);
+    std::chrono::high_resolution_clock::time_point start3 =
+        std::chrono::high_resolution_clock::now();
+    double get_bimmap_cost =
+        std::chrono::duration<double, std::micro>(start3 - start2).count();
+    LOG_INFO("xx mask_with_timestamp cost:{} cost {}",
+             get_barrier_cost,
+             get_bimmap_cost);
     if (!bitmap_holder || !bitmap_holder->bitmap_ptr) {
         return;
     }
