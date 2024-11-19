@@ -498,6 +498,8 @@ class SegmentExpr : public Expr {
             // It avoids indexing execute for every batch because indexing
             // executing costs quite much time.
             if (cached_index_chunk_id_ != i) {
+                std::chrono::high_resolution_clock::time_point start =
+                    std::chrono::high_resolution_clock::now();
                 const Index& index =
                     segment_->chunk_scalar_index<IndexInnerType>(field_id_, i);
                 auto* index_ptr = const_cast<Index*>(&index);
@@ -505,6 +507,15 @@ class SegmentExpr : public Expr {
                 auto valid_result = index_ptr->IsNotNull();
                 cached_index_chunk_valid_res_ = std::move(valid_result);
                 cached_index_chunk_id_ = i;
+                std::chrono::high_resolution_clock::time_point end =
+                    std::chrono::high_resolution_clock::now();
+                double cost =
+                    std::chrono::duration<double, std::micro>(end - start)
+                        .count();
+                LOG_INFO("xxx segmentid: {}, chunk id :{} index cost: {}us",
+                         segment_->get_segment_id(),
+                         i,
+                         cost);
             }
 
             auto size = ProcessIndexOneChunk(result,

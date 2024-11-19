@@ -51,6 +51,10 @@ PhyMvccNode::GetOutput() {
         is_finished_ = true;
         return nullptr;
     }
+
+    std::chrono::high_resolution_clock::time_point start =
+        std::chrono::high_resolution_clock::now();
+
     // the first vector is filtering result and second bitset is a valid bitset
     // if valid_bitset[i]==false, means result[i] is null
     auto col_input = is_source_node_ ? std::make_shared<ColumnVector>(
@@ -61,9 +65,17 @@ PhyMvccNode::GetOutput() {
     TargetBitmapView data(col_input->GetRawData(), col_input->size());
     // need to expose null?
     segment_->mask_with_timestamps(data, query_timestamp_);
+    std::chrono::high_resolution_clock::time_point middle =
+        std::chrono::high_resolution_clock::now();
     segment_->mask_with_delete(data, active_count_, query_timestamp_);
     is_finished_ = true;
-
+    std::chrono::high_resolution_clock::time_point end =
+        std::chrono::high_resolution_clock::now();
+    double mvcc =
+        std::chrono::duration<double, std::micro>(middle - start).count();
+    double cost =
+        std::chrono::duration<double, std::micro>(end - middle).count();
+    LOG_INFO(" mvcc cost: {}, delete cost:{}", mvcc, cost);
     // input_ have already been updated
     return std::make_shared<RowVector>(std::vector<VectorPtr>{col_input});
 }

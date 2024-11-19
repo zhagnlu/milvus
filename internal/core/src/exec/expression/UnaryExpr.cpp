@@ -380,7 +380,7 @@ PhyUnaryRangeFilterExpr::ExecArrayEqualForIndex(bool reverse) {
                 };
             } else {
                 auto size_per_chunk = segment_->size_per_chunk();
-                retrieve = [ size_per_chunk, this ](int64_t offset) -> auto {
+                retrieve = [size_per_chunk, this](int64_t offset) -> auto {
                     auto chunk_idx = offset / size_per_chunk;
                     auto chunk_offset = offset % size_per_chunk;
                     const auto& chunk =
@@ -676,6 +676,8 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForIndex() {
         return res;
     }
 
+    std::chrono::high_resolution_clock::time_point start =
+        std::chrono::high_resolution_clock::now();
     auto real_batch_size = GetNextBatchSize();
     if (real_batch_size == 0) {
         return nullptr;
@@ -734,6 +736,13 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForIndex() {
     };
     auto val = GetValueFromProto<IndexInnerType>(expr_->val_);
     auto res = ProcessIndexChunks<T>(execute_sub_batch, val);
+    std::chrono::high_resolution_clock::time_point end =
+        std::chrono::high_resolution_clock::now();
+    double cost =
+        std::chrono::duration<double, std::micro>(end - start).count();
+    LOG_INFO(
+        "xxx index segmentid:{} cost: {}us ", segment_->get_segment_id(), cost);
+
     AssertInfo(res->size() == real_batch_size,
                "internal error: expr processed rows {} not equal "
                "expect batch size {}",
@@ -807,6 +816,8 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForData() {
     if (auto res = PreCheckOverflow<T>()) {
         return res;
     }
+    std::chrono::high_resolution_clock::time_point start =
+        std::chrono::high_resolution_clock::now();
 
     auto real_batch_size = GetNextBatchSize();
     if (real_batch_size == 0) {
@@ -901,6 +912,13 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForData() {
                current_data_chunk_,
                num_data_chunk_,
                current_data_chunk_pos_);
+    auto end = std::chrono::high_resolution_clock::now();
+    double cost =
+        std::chrono::duration<double, std::micro>(end - start).count();
+    LOG_INFO("xxx baosou segmentid:{} cost: {}us ",
+             segment_->get_segment_id(),
+             cost);
+
     return res_vec;
 }
 

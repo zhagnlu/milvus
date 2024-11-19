@@ -94,6 +94,7 @@ PhyVectorSearchNode::GetOutput() {
         std::chrono::duration<double, std::micro>(vector_end - vector_start)
             .count();
     monitor::internal_core_search_latency_vector.Observe(vector_cost);
+    LOG_INFO("xxx vector search cost: {}", vector_cost);
     // for now, vector search store result in query_context
     // this node interface just return bitset
     return input_;
