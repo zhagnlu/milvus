@@ -210,7 +210,10 @@ LocalChunkManager::RemoveDir(const std::string& dir) {
     boost::system::error_code err;
     boost::filesystem::remove_all(dirPath, err);
     if (err) {
-        THROWLOCALERROR(FileCreateFailed, RemoveDir);
+        PanicInfo(PathNotExist,
+                  "xxxremove dir: {} failed, error: {}",
+                  dir,
+                  std::string(err.message()));
     }
 }
 
