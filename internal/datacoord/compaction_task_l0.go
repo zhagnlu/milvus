@@ -25,6 +25,7 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -324,11 +325,17 @@ func (t *l0CompactionTask) BuildCompactionRequest() (*datapb.CompactionPlan, err
 		log.Info("l0Compaction available non-L0 Segments is empty ")
 		return nil, errors.Errorf("Selected zero L1/L2 segments for the position=%v", taskProto.GetPos())
 	}
+	data, _ := protojson.Marshal(plan)
 
 	plan.SegmentBinlogs = append(plan.SegmentBinlogs, sealedSegBinlogs...)
 	log.Info("l0CompactionTask refreshed level zero compaction plan",
 		zap.Any("target position", taskProto.GetPos()),
-		zap.Any("target segments count", len(sealedSegBinlogs)))
+		zap.Any("target segments count", len(sealedSegBinlogs)),
+		zap.Int64s("sealed segment ids", sealedSegmentIDs),
+		zap.String("plan_data", string(data)),
+		zap.Any("plan", plan),
+	)
+
 	return plan, nil
 }
 
