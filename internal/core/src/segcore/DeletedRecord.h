@@ -194,21 +194,64 @@ class DeletedRecord {
                 }
                 it++;
             }
+            LOG_INFO(
+                "xxxx segmentid: {}, query_ts:{}, bitset size: {}, bitset "
+                "count:{} hitsnapshot: {}, next_iter:({}, "
+                "{}) ",
+                segment_id_,
+                query_timestamp,
+                bitset.size(),
+                bitset.count(),
+                hit_snapshot,
+                next_iter->first,
+                next_iter->second);
             return;
         }
 
         while (it != accessor.end() && it != end_iter) {
+            LOG_INFO(
+                "yyyyy segment id:{}, query_ts: {}, it:({},{}), "
+                "end_iter:({},{})",
+                segment_id_,
+                query_timestamp,
+                it->first,
+                it->second,
+                end_iter->first,
+                end_iter->second);
             if (it->second < insert_barrier) {
                 bitset.set(it->second);
             }
             it++;
         }
         while (it != accessor.end() && it->first == query_timestamp) {
+            LOG_INFO(
+                "zzzzz segment id:{}, query_ts: {}, it:({},{}), "
+                "end_iter:({},{})",
+                segment_id_,
+                query_timestamp,
+                it->first,
+                it->second,
+                end_iter->first,
+                end_iter->second);
             if (it->second < insert_barrier) {
                 bitset.set(it->second);
             }
             it++;
         }
+
+        LOG_INFO(
+            "ttttt segmentid: {}, query_ts:{}, bitset size: {}, bitset "
+            "count:{} hitsnapshot: {}, next_iter:({}, "
+            "{}), end_iter:({},{}) ",
+            segment_id_,
+            query_timestamp,
+            bitset.size(),
+            bitset.count(),
+            hit_snapshot,
+            next_iter->first,
+            next_iter->second,
+            end_iter->first,
+            end_iter->second);
     }
 
     size_t
