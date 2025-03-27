@@ -196,15 +196,15 @@ class DeletedRecord {
             }
             LOG_INFO(
                 "xxxx segmentid: {}, query_ts:{}, bitset size: {}, bitset "
-                "count:{} hitsnapshot: {}, next_iter:({}, "
+                "count:{} hitsnapshot: {}, start_iter:({}, "
                 "{}) ",
                 segment_id_,
                 query_timestamp,
                 bitset.size(),
                 bitset.count(),
                 hit_snapshot,
-                next_iter->first,
-                next_iter->second);
+                start_iter->first,
+                start_iter->second);
             return;
         }
 
@@ -241,15 +241,15 @@ class DeletedRecord {
 
         LOG_INFO(
             "ttttt segmentid: {}, query_ts:{}, bitset size: {}, bitset "
-            "count:{} hitsnapshot: {}, next_iter:({}, "
+            "count:{} hitsnapshot: {}, start_iter:({}, "
             "{}), end_iter:({},{}) ",
             segment_id_,
             query_timestamp,
             bitset.size(),
             bitset.count(),
             hit_snapshot,
-            next_iter->first,
-            next_iter->second,
+            start_iter->first,
+            start_iter->second,
             end_iter->first,
             end_iter->second);
     }
