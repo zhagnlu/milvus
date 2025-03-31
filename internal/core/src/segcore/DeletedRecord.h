@@ -31,6 +31,8 @@ namespace milvus::segcore {
 
 using Offset = int32_t;
 
+
+
 struct Comparator {
     bool
     operator()(const std::pair<Timestamp, Offset>& left,
