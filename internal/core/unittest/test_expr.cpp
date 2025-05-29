@@ -4213,7 +4213,7 @@ TEST_P(ExprTest, TestMutiInConvert) {
 }
 
 TEST(Expr, TestExprPerformance) {
-    GTEST_SKIP() << "Skip performance test, open it when test performance";
+    //GTEST_SKIP() << "Skip performance test, open it when test performance";
     auto schema = std::make_shared<Schema>();
     auto int8_fid = schema->AddDebugField("int8", DataType::INT8);
     auto int8_1_fid = schema->AddDebugField("int81", DataType::INT8);
@@ -4238,7 +4238,7 @@ TEST(Expr, TestExprPerformance) {
                                         {DataType::DOUBLE, double_fid}};
 
     auto seg = CreateSealedSegment(schema);
-    int N = 1000;
+    int N = 100000;
     auto raw_data = DataGen(schema, N);
 
     // load field data
@@ -4286,7 +4286,7 @@ TEST(Expr, TestExprPerformance) {
             val.set_string_val(std::to_string(value));
             return std::make_shared<expr::UnaryRangeFilterExpr>(
                 expr::ColumnInfo(fids[data_type], data_type),
-                proto::plan::OpType::LessThan,
+                proto::plan::OpType::Equal,
                 val);
         } else {
             throw std::runtime_error("not supported type");
