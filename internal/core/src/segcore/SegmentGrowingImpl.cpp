@@ -184,6 +184,11 @@ SegmentGrowingImpl::Insert(int64_t reserved_offset,
                 field_id,
                 &insert_record_proto->fields_data(data_offset),
                 insert_record_);
+            LOG_INFO("xxx segment {} appending index, offset: {}, row_count: {}, field_id: {}",
+                     this->get_segment_id(),
+                     reserved_offset,
+                     num_rows,
+                     field_id.get());
         }
 
         // index text.
@@ -269,6 +274,10 @@ SegmentGrowingImpl::Insert(int64_t reserved_offset,
     // step 5: update small indexes
     insert_record_.ack_responder_.AddSegment(reserved_offset,
                                              reserved_offset + num_rows);
+    LOG_INFO("xxx insert segment {} add segment to ack responder, offset: {}, num_rows: {}",
+             this->get_segment_id(),
+             reserved_offset,
+             reserved_offset + num_rows);
 }
 
 void
@@ -349,6 +358,10 @@ SegmentGrowingImpl::load_field_data_internal(const LoadFieldDataInfo& infos) {
     // step 5: update small indexes
     insert_record_.ack_responder_.AddSegment(reserved_offset,
                                              reserved_offset + num_rows);
+    LOG_INFO("xxx load segment {} add segment to ack responder, offset: {}, num_rows: {}",
+             this->get_segment_id(),
+             reserved_offset,
+             reserved_offset + num_rows);
 }
 
 void
@@ -385,6 +398,11 @@ SegmentGrowingImpl::load_field_data_common(
             indexing_record_.AppendingIndex(
                 offset, row_count, field_id, data, insert_record_);
             offset += row_count;
+            LOG_INFO("xxx segment {} appending index, offset: {}, row_count: {}, field_id: {}",
+                     this->get_segment_id(),
+                     offset,
+                     row_count,
+                     field_id.get());
         }
     }
     try_remove_chunks(field_id);
@@ -542,6 +560,10 @@ SegmentGrowingImpl::load_column_group_data_internal(
     // step 5: update small indexes
     insert_record_.ack_responder_.AddSegment(reserved_offset,
                                              reserved_offset + num_rows);
+    LOG_INFO("xxx segment {} add segment to ack responder, offset: {}, num_rows: {}",
+             this->get_segment_id(),
+             reserved_offset,
+             reserved_offset + num_rows);
 }
 
 SegcoreError
@@ -1122,6 +1144,10 @@ SegmentGrowingImpl::get_active_count(Timestamp ts) const {
         boost::make_counting_iterator(row_count),
         ts,
         [&](Timestamp ts, int64_t index) { return ts < ts_vec[index]; });
+    LOG_INFO("xxx segment {} get_active_count, ts: {}, iter: {}",
+             this->get_segment_id(),
+             ts,
+             *iter);
     return *iter;
 }
 
