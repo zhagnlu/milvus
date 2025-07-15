@@ -321,11 +321,18 @@ class IndexingRecord {
                    const DataArray* stream_data,
                    const InsertRecord<false>& record) {
         if (!is_in(fieldId)) {
+            LOG_INFO("xxx AppendingIndex, fieldId: {}, not in IndexingRecord", fieldId.get());
             return;
         }
         auto& indexing = field_indexings_.at(fieldId);
         auto type = indexing->get_field_meta().get_data_type();
         auto field_raw_data = record.get_data_base(fieldId);
+        LOG_INFO("xxx AppendingIndex, fieldId: {}, type: {}, reserved_offset: {}, size: {}, build_threshold: {}",
+                 fieldId.get(),
+                 type,
+                 reserved_offset,
+                 size,
+                 indexing->get_build_threshold());
         if (type == DataType::VECTOR_FLOAT &&
             reserved_offset + size >= indexing->get_build_threshold()) {
             indexing->AppendSegmentIndexDense(

@@ -223,6 +223,10 @@ VectorFieldIndexing::AppendSegmentIndexSparse(int64_t reserved_offset,
     dataset->SetIsSparse(true);
     index_->AddWithDataset(dataset, conf);
     index_cur_.fetch_add(size);
+    LOG_INFO("xxx AppendSegmentIndexSparse, offset: {}, row_count: {}, index_cur: {}",
+             reserved_offset,
+             size,
+             index_cur_.load());
 }
 
 void
@@ -230,6 +234,9 @@ VectorFieldIndexing::AppendSegmentIndexDense(int64_t reserved_offset,
                                              int64_t size,
                                              const VectorBase* field_raw_data,
                                              const void* data_source) {
+    LOG_INFO("xxx start AppendSegmentIndexDense, offset: {}, row_count: {}",
+             reserved_offset,
+             size);
     AssertInfo(field_meta_.get_data_type() == DataType::VECTOR_FLOAT ||
                    field_meta_.get_data_type() == DataType::VECTOR_FLOAT16 ||
                    field_meta_.get_data_type() == DataType::VECTOR_BFLOAT16,
@@ -293,6 +300,7 @@ VectorFieldIndexing::AppendSegmentIndexDense(int64_t reserved_offset,
             index_->BuildWithDataset(dataset, conf);
         } catch (SegcoreError& error) {
             LOG_ERROR("growing index build error: {}", error.what());
+            LOG_INFO("xxx recreate_index");
             recreate_index(field_meta_.get_data_type(), field_raw_data);
             return;
         }
@@ -307,6 +315,7 @@ VectorFieldIndexing::AppendSegmentIndexDense(int64_t reserved_offset,
     int64_t vec_num = vector_id_end - vector_id_beg + 1;
 
     if (vec_num <= 0) {
+        LOG_INFO("xxx AppendSegmentIndexDense, vec_num <= 0, vector_id_beg : {}, vector_id_end: {}", vector_id_beg, vector_id_end);
         sync_with_index_.store(true);
         return;
     }
@@ -336,6 +345,10 @@ VectorFieldIndexing::AppendSegmentIndexDense(int64_t reserved_offset,
         }
         sync_with_index_.store(true);
     }
+    LOG_INFO("xxx AppendSegmentIndexDense, offset: {}, row_count: {}, index_cur: {}",
+             reserved_offset,
+             size,
+             index_cur_.load());
 }
 
 knowhere::Json
