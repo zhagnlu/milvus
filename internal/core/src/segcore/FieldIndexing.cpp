@@ -223,6 +223,10 @@ VectorFieldIndexing::AppendSegmentIndexSparse(int64_t reserved_offset,
     dataset->SetIsSparse(true);
     index_->AddWithDataset(dataset, conf);
     index_cur_.fetch_add(size);
+    LOG_INFO("xxx AppendSegmentIndexSparse, offset: {}, row_count: {}, index_cur: {}",
+             reserved_offset,
+             size,
+             index_cur_.load());
 }
 
 void
@@ -336,6 +340,10 @@ VectorFieldIndexing::AppendSegmentIndexDense(int64_t reserved_offset,
         }
         sync_with_index_.store(true);
     }
+    LOG_INFO("xxx AppendSegmentIndexDense, offset: {}, row_count: {}, index_cur: {}",
+             reserved_offset,
+             size,
+             index_cur_.load());
 }
 
 knowhere::Json
