@@ -188,7 +188,7 @@ class FieldMeta {
         return id_;
     }
 
-    DataType
+    const DataType&
     get_data_type() const {
         return type_;
     }

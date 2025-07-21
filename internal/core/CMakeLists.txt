@@ -130,9 +130,30 @@ if (LINUX OR MSYS)
                   "-Wno-all"
                   )
     if (USE_ASAN STREQUAL "ON") 
-        message( STATUS "Building Milvus Core Using AddressSanitizer")
-        add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
-        add_link_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
+    message( STATUS "Building Milvus Core Using AddressSanitizer")
+    
+    # 添加调试信息
+    add_compile_options(-g -O1)
+    
+    # ASAN 编译选项
+    add_compile_options(
+        -fno-stack-protector 
+        -fno-omit-frame-pointer 
+        -fno-var-tracking 
+        -fsanitize=address
+        -fsanitize-address-use-after-scope
+    )
+    
+    # ASAN 链接选项
+    add_link_options(
+        -fno-stack-protector 
+        -fno-omit-frame-pointer 
+        -fno-var-tracking 
+        -fsanitize=address
+    )
+    
+    # 定义宏
+    add_compile_definitions(ADDRESS_SANITIZER=1)
     endif()
     if (CMAKE_BUILD_TYPE STREQUAL "Release")
         append_flags( CMAKE_CXX_FLAGS

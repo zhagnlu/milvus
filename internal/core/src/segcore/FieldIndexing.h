@@ -327,14 +327,22 @@ class IndexingRecord {
         auto& indexing = field_indexings_.at(fieldId);
         
         auto type = indexing->get_field_meta().get_data_type();
+        auto field_name = indexing->get_field_meta().get_name();
+        auto field_id = indexing->get_field_meta().get_id();
 
         auto field_raw_data = record.get_data_base(fieldId);
-        LOG_INFO("xxx AppendingIndex, fieldId: {}, type: {}, type addr: {}, field_meta_addr: {}, indexing_addr: {}, reserved_offset: {}, size: {}, build_threshold: {}",
+#ifdef ADDRESS_SANITIZER
+        LOG_INFO("xxx use asan");
+#endif
+        LOG_INFO("xxx AppendingIndex, fieldId: {}, type: {}, type addr: {}, field_meta_addr: {}, \
+            indexing_addr: {}, field_id: {}, field_name: {}, reserved_offset: {}, size: {}, build_threshold: {}",
                  fieldId.get(),
                  type,
                  static_cast<void*>(&type),
                  static_cast<void*>(const_cast<FieldMeta*>(&indexing->get_field_meta())),
                  static_cast<void*>(indexing.get()),
+                 field_id.get(),
+                 field_name.get(),
                  reserved_offset,
                  size,
                  indexing->get_build_threshold());
