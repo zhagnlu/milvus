@@ -325,11 +325,16 @@ class IndexingRecord {
             return;
         }
         auto& indexing = field_indexings_.at(fieldId);
+        
         auto type = indexing->get_field_meta().get_data_type();
+
         auto field_raw_data = record.get_data_base(fieldId);
-        LOG_INFO("xxx AppendingIndex, fieldId: {}, type: {}, reserved_offset: {}, size: {}, build_threshold: {}",
+        LOG_INFO("xxx AppendingIndex, fieldId: {}, type: {}, type addr: {}, field_meta_addr: {}, indexing_addr: {}, reserved_offset: {}, size: {}, build_threshold: {}",
                  fieldId.get(),
                  type,
+                 static_cast<void*>(&type),
+                 static_cast<void*>(const_cast<FieldMeta*>(&indexing->get_field_meta())),
+                 static_cast<void*>(indexing.get()),
                  reserved_offset,
                  size,
                  indexing->get_build_threshold());
