@@ -23,6 +23,7 @@
 
 #include "common/EasyAssert.h"
 #include "common/Types.h"
+#include "log/Log.h"
 
 namespace milvus {
 using TypeParams = std::map<std::string, std::string>;
@@ -37,7 +38,7 @@ class FieldMeta {
     FieldMeta(const FieldMeta&) = default;
     FieldMeta(FieldMeta&&) = default;
     FieldMeta&
-    operator=(const FieldMeta&) = delete;
+    operator=(const FieldMeta&) = default;
     FieldMeta&
     operator=(FieldMeta&&) = default;
 
@@ -141,6 +142,38 @@ class FieldMeta {
           vector_info_(VectorInfo{dim, std::move(metric_type)}) {
         Assert(type_ == DataType::VECTOR_ARRAY);
         Assert(IsVectorDataType(element_type_));
+    }
+
+    // 显式拷贝构造函数
+    FieldMeta(const FieldMeta& other)
+        : name_(other.name_),
+          id_(other.id_),
+          type_(other.type_),
+          element_type_(other.element_type_),
+          nullable_(other.nullable_),
+          default_value_(other.default_value_),
+          vector_info_(other.vector_info_),
+          string_info_(other.string_info_) {
+        LOG_INFO("xxx FieldMeta copy constructor, name: {}, id: {}, type: {}, addr: {}", 
+            name_.get(), id_.get(), type_, static_cast<void*>(this));
+    }
+
+    // 拷贝赋值运算符
+    FieldMeta& operator=(const FieldMeta& other) {
+        if (this != &other) {
+            name_ = other.name_;
+            id_ = other.id_;
+            type_ = other.type_;
+            element_type_ = other.element_type_;
+            nullable_ = other.nullable_;
+            default_value_ = other.default_value_;
+            vector_info_ = other.vector_info_;
+            string_info_ = other.string_info_;
+            
+            LOG_INFO("xxx FieldMeta copy assignment, name: {}, id: {}, type: {}, addr: {}", 
+                name_.get(), id_.get(), type_, static_cast<void*>(this));
+        }
+        return *this;
     }
 
     int64_t
@@ -249,6 +282,11 @@ class FieldMeta {
         } else {
             return GetDataTypeSize(type_);
         }
+    }
+
+    ~FieldMeta() {
+        LOG_INFO("xxx FieldMeta destructor, name: {}, id: {}, type: {}, addr: {}", 
+            name_.get(), id_.get(), type_, static_cast<void*>(this));
     }
 
  public:

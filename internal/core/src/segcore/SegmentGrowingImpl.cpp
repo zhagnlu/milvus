@@ -178,12 +178,25 @@ SegmentGrowingImpl::Insert(int64_t reserved_offset,
         }
         //insert vector data into index
         if (segcore_config_.get_enable_interim_segment_index()) {
+            for (auto& [field_id, field_meta] : schema_->get_fields()) {
+                auto field_name = field_meta.get_name();
+                auto fieldid = field_meta.get_id();
+                auto type = field_meta.get_data_type();
+                LOG_INFO("xxx segment {} FieldIndexingInfos, fieldmeta addr: {}, map field_id: {}, meta field_id: {}, field_name: {}, type: {}", 
+                    this->get_segment_id(),
+                    static_cast<void*>(&field_meta),
+                    field_id.get(),
+                    fieldid.get(),
+                    field_name.get(),
+                    type);
+            }
             indexing_record_.AppendingIndex(
                 reserved_offset,
                 num_rows,
                 field_id,
                 &insert_record_proto->fields_data(data_offset),
                 insert_record_);
+
             LOG_INFO("xxx segment {} appending index, offset: {}, row_count: {}, field_id: {}",
                      this->get_segment_id(),
                      reserved_offset,
@@ -1294,6 +1307,7 @@ SegmentGrowingImpl::LazyCheckSchema(SchemaPtr sch) {
 
 void
 SegmentGrowingImpl::Reopen(SchemaPtr sch) {
+    LOG_INFO("xxx segment {} Reopen, sch_addr: {}", this->get_segment_id(), static_cast<void*>(sch.get()));
     std::unique_lock lck(sch_mutex_);
 
     auto absent_fields = sch->AbsentFields(*schema_);

@@ -330,6 +330,7 @@ class IndexingRecord {
         auto field_name = indexing->get_field_meta().get_name();
         auto field_id = indexing->get_field_meta().get_id();
 
+        PrintFieldIndexingInfos();
         auto field_raw_data = record.get_data_base(fieldId);
 #ifdef ADDRESS_SANITIZER
         LOG_INFO("xxx use asan");
@@ -496,6 +497,17 @@ class IndexingRecord {
         auto ptr = dynamic_cast<const ScalarFieldIndexing<T>*>(&entry);
         AssertInfo(ptr, "invalid indexing");
         return *ptr;
+    }
+
+    void PrintFieldIndexingInfos() const {
+        for (auto& [field_id, indexing] : field_indexings_) {
+            auto field_name = indexing->get_field_meta().get_name();
+            auto fieldid = indexing->get_field_meta().get_id();
+            auto type = indexing->get_field_meta().get_data_type();
+            LOG_INFO("xxx FieldIndexingInfos, field_id: {}, field_name: {}, \
+                type: {}, indexing_addr: {}, field_meta_addr: {}", fieldid.get(), field_name.get(),
+                 type, static_cast<void*>(indexing.get()), static_cast<void*>(const_cast<FieldMeta*>(&indexing->get_field_meta())));
+        }
     }
 
  private:
