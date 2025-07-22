@@ -102,7 +102,7 @@ class FieldIndexing {
 
  protected:
     // additional info
-    const FieldMeta& field_meta_;
+    FieldMeta field_meta_;
     const SegcoreConfig& segcore_config_;
 };
 
