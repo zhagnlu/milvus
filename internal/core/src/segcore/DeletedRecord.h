@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -212,6 +213,13 @@ class DeletedRecord {
             }
             it++;
         }
+        LOG_INFO("Query deleted record end, segment_id: {}, query_timestamp: {}, bitset size: {}, bitset count: {} ,\
+            hit_snapshot: {}",
+                 segment_id_,
+                 query_timestamp,
+                 bitset.size(),
+                 bitset.count(),
+                 hit_snapshot);
     }
 
     size_t
