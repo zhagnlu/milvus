@@ -33,9 +33,12 @@ if ( USE_DYNAMIC_SIMD )
     add_definitions(-DUSE_DYNAMIC_SIMD)
 endif()
 
-if (USE_OPENDAL) 
+if (USE_OPENDAL)
     add_definitions(-DUSE_OPENDAL)
 endif()
+
+# Enable jemalloc memory statistics
+add_definitions(-DMILVUS_JEMALLOC_ENABLED)
 
 project(core)
 include(CheckCXXCompilerFlag)
