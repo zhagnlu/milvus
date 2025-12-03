@@ -722,7 +722,10 @@ JsonKeyStats::GetColumnSchemaFromParquet(int64_t column_group_id,
     LOG_DEBUG("get column schema: [{}] for segment {}",
               file_schema->ToString(true),
               segment_id_);
-    column_group_schemas_[column_group_id] = file_schema;
+    // Note: Do NOT store file_schema in column_group_schemas_ here.
+    // The arrow::Schema's field metadata shares references to parquet::FileMetaData's
+    // KeyValueMetadata (allocated in InitKeyValueMetadata). Storing schema would prevent
+    // the parquet metadata from being released, causing significant memory overhead.
 
     for (const auto& field : file_schema->fields()) {
         auto field_name = field->name();

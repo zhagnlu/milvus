@@ -648,8 +648,6 @@ class JsonKeyStats : public ScalarIndex<std::string> {
     std::unordered_map<int64_t, std::string> field_id_to_name_map_;
     // field_name vector, the sequece is the same as the order of files
     std::vector<std::string> field_names_;
-    // column_group_id -> schema, the sequence of schemas is the same as the order of files
-    std::map<int64_t, std::shared_ptr<arrow::Schema>> column_group_schemas_;
     // field_name -> column
     mutable std::unordered_map<std::string,
                                std::shared_ptr<milvus::ChunkedColumnInterface>>
