@@ -113,6 +113,18 @@ DiskFileManagerImpl::GetRemoteJsonStatsShreddingPrefix() {
     return (prefix / suffix).string();
 }
 
+std::string
+DiskFileManagerImpl::GetRemoteJsonStatsMetaPath(const std::string& file_name) {
+    namespace fs = std::filesystem;
+    fs::path prefix = GetRemoteJsonStatsLogPrefix();
+    return (prefix / file_name).string();
+}
+
+std::string
+DiskFileManagerImpl::GetLocalJsonStatsMetaPrefix() {
+    return GetLocalJsonStatsPrefix();
+}
+
 bool
 DiskFileManagerImpl::AddFileInternal(
     const std::string& file,
@@ -227,6 +239,38 @@ DiskFileManagerImpl::AddJsonSharedIndexLog(const std::string& file) noexcept {
         file, [this](const std::string& file_name, int slice_num) {
             return GetRemoteJsonStatsSharedIndexPath(file_name, slice_num);
         });
+}
+
+bool
+DiskFileManagerImpl::AddJsonStatsMetaLog(const std::string& file) noexcept {
+    auto local_chunk_manager =
+        LocalChunkManagerSingleton::GetInstance().GetChunkManager();
+    FILEMANAGER_TRY
+    if (!local_chunk_manager->Exist(file)) {
+        LOG_ERROR("local meta file {} not exists", file);
+        return false;
+    }
+
+    local_paths_.emplace_back(file);
+    auto fileName = GetFileName(file);
+    auto fileSize = local_chunk_manager->Size(file);
+    added_total_file_size_ += fileSize;
+
+    // Meta file is small, upload directly without slicing
+    auto remote_path = GetRemoteJsonStatsMetaPath(fileName);
+    auto buf = std::shared_ptr<uint8_t[]>(new uint8_t[fileSize]);
+    local_chunk_manager->Read(file, buf.get(), fileSize);
+    rcm_->Write(remote_path, buf.get(), fileSize);
+
+    remote_paths_to_size_[remote_path] = fileSize;
+    LOG_INFO("upload json stats meta file: {} to remote: {}, size: {}",
+             file,
+             remote_path,
+             fileSize);
+
+    FILEMANAGER_CATCH
+    FILEMANAGER_END
+    return true;
 }
 
 bool

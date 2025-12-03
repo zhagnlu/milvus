@@ -87,6 +87,9 @@ class DiskFileManagerImpl : public FileManagerImpl {
     bool
     AddJsonSharedIndexLog(const std::string& filename) noexcept;
 
+    bool
+    AddJsonStatsMetaLog(const std::string& filename) noexcept;
+
  public:
     std::string
     GetName() const override {
@@ -141,6 +144,12 @@ class DiskFileManagerImpl : public FileManagerImpl {
     std::string
     GetRemoteJsonStatsSharedIndexPath(const std::string& file_name,
                                       int64_t slice_num);
+
+    std::string
+    GetRemoteJsonStatsMetaPath(const std::string& file_name);
+
+    std::string
+    GetLocalJsonStatsMetaPrefix();
 
     std::string
     GetLocalRawDataObjectPrefix();
