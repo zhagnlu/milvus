@@ -74,11 +74,11 @@ ExternalProject_Add(
         BUILD_BYPRODUCTS "${JEMALLOC_STATIC_LIB}"
         INSTALL_COMMAND ${MAKE} install)
 
-add_library(jemalloc SHARED IMPORTED)
+add_library(jemalloc SHARED IMPORTED GLOBAL)
 set_target_properties(jemalloc
         PROPERTIES INTERFACE_LINK_LIBRARIES Threads::Threads
         IMPORTED_LOCATION "${JEMALLOC_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libjemalloc.so"
-        INTERFACE_INCLUDE_DIRECTORIES "${JEMALLOC_PREFIX}/jemalloc/include")
+        INTERFACE_INCLUDE_DIRECTORIES "${JEMALLOC_PREFIX}/include")
 add_dependencies(jemalloc jemalloc_ep)
 
 get_target_property(JEMALLOC_IMPORTED_LOCATION jemalloc IMPORTED_LOCATION)
