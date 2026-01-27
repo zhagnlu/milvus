@@ -14,8 +14,8 @@
 # Update milvus-storage_VERSION for the first occurrence
 milvus_add_pkg_config("milvus-storage")
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES "")
-set( milvus-storage_VERSION 50dd3c9)
-set( GIT_REPOSITORY  "https://github.com/milvus-io/milvus-storage.git")
+set( milvus-storage_VERSION  9ec8d9dd2215b66b5b4b0)
+set( GIT_REPOSITORY  "https://github.com/zhagnlu/milvus-storage.git")
 message(STATUS "milvus-storage repo: ${GIT_REPOSITORY}")
 message(STATUS "milvus-storage version: ${milvus-storage_VERSION}")
 
@@ -51,6 +51,7 @@ if(_PROTOC_PROGRAM)
     message(STATUS "Setting Protobuf_PROTOC_EXECUTABLE for milvus-storage: ${_PROTOC_PROGRAM}")
     set(Protobuf_PROTOC_EXECUTABLE "${_PROTOC_PROGRAM}" CACHE FILEPATH "" FORCE)
 endif()
+
 FetchContent_Declare(
         milvus-storage
         GIT_REPOSITORY  ${GIT_REPOSITORY}
@@ -71,6 +72,9 @@ if ( NOT milvus-storage_POPULATED )
 
     # Enable S3 filesystem support on all platforms
     target_compile_definitions(milvus-storage PRIVATE MILVUS_S3_FS)
+
+    # Enable Vortex format support (requires Rust bridge prsbridge)
+    target_compile_definitions(milvus-storage PRIVATE BUILD_VORTEX_BRIDGE)
 
     # milvus-storage uses Aws::S3::S3Client and Aws::S3::Model::* directly but only
     # links AWS::aws-sdk-cpp-identity-management in its own CMakeLists.txt. The S3

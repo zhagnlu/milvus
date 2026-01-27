@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -135,6 +136,16 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 		}
 		growing.UpdateBloomFilter(insertData.PrimaryKeys)
 
+		// record batch info for checkpoint tracking (TEXT collections only)
+		if sd.checkpointTracker != nil {
+			endOffset := growing.RowNum()
+			sd.checkpointTracker.RecordBatch(
+				growing.ID(),
+				endOffset,
+				insertData.StartPosition,
+			)
+		}
+
 		if newGrowingSegment {
 			sd.growingSegmentLock.Lock()
 			// Forbid create growing segment in excluded segment
@@ -223,6 +234,52 @@ func (sd *shardDelegator) ProcessDelete(deleteData []*DeleteData, ts uint64) {
 
 	metrics.QueryNodeProcessCost.WithLabelValues(paramtable.GetStringNodeID(), metrics.DeleteLabel).
 		Observe(float64(tr.ElapseSpan().Milliseconds()))
+}
+
+// ProcessManualFlush handles manual flush request for TEXT collections.
+// It triggers immediate flush of all unflushed data in Growing Segments.
+// This is called when user explicitly requests flush via collection.flush().
+func (sd *shardDelegator) ProcessManualFlush(ctx context.Context, flushTs uint64) {
+	// Only process for TEXT collections that have GrowingFlushManager
+	if sd.growingFlushManager == nil || sd.checkpointTracker == nil {
+		return
+	}
+
+	log := sd.getLogger(ctx).With(zap.Uint64("flushTs", flushTs))
+	log.Info("processing manual flush for TEXT collection")
+
+	// Get all tracked segment IDs
+	segmentIDs := sd.checkpointTracker.GetSegmentIDs()
+	if len(segmentIDs) == 0 {
+		log.Debug("no segments to flush")
+		return
+	}
+
+	// Force sync all segments with unflushed data
+	var wg sync.WaitGroup
+	for _, segID := range segmentIDs {
+		segment := sd.segmentManager.GetGrowing(segID)
+		if segment == nil {
+			continue
+		}
+
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			// Use ForceSyncAndSeal to set Flushed=true, triggering DataCoord handoff
+			if err := sd.growingFlushManager.ForceSyncAndSeal(ctx, id); err != nil {
+				log.Warn("failed to ForceSyncAndSeal during manual flush",
+					zap.Int64("segmentID", id),
+					zap.Error(err))
+			} else {
+				log.Info("ForceSyncAndSeal completed during manual flush",
+					zap.Int64("segmentID", id))
+			}
+		}(segID)
+	}
+
+	wg.Wait()
+	log.Info("manual flush completed", zap.Int("segmentCount", len(segmentIDs)))
 }
 
 type BatchApplyRet = struct {
@@ -385,6 +442,18 @@ func (sd *shardDelegator) LoadGrowing(ctx context.Context, infos []*querypb.Segm
 
 	segmentIDs = lo.Map(loaded, func(segment segments.Segment, _ int) int64 { return segment.ID() })
 	log.Info("load growing segments done", zap.Int64s("segmentIDs", segmentIDs))
+
+	// initialize checkpoint tracking for recovered growing segments (TEXT collections only)
+	if sd.checkpointTracker != nil {
+		for _, segment := range loaded {
+			// the segment was recovered from binlog, so the current row count is the flushed offset
+			flushedOffset := segment.RowNum()
+			sd.checkpointTracker.InitSegment(segment.ID(), flushedOffset)
+			log.Info("initialized checkpoint tracker for recovered growing segment",
+				zap.Int64("segmentID", segment.ID()),
+				zap.Int64("flushedOffset", flushedOffset))
+		}
+	}
 
 	for _, segment := range loaded {
 		if sd.idfOracle != nil {
@@ -973,6 +1042,46 @@ func (sd *shardDelegator) ReleaseSegments(ctx context.Context, req *querypb.Rele
 	// Note: Candidate cleanup is handled by RemoveDistributions above
 	// - Sealed segment candidates (BloomFilterSet) are refunded in RemoveDistributions
 	// - Growing segment candidates (LocalSegment) are managed by segmentManager.Release()
+	if len(growing) > 0 {
+		// For TEXT collections: best-effort flush before releasing growing segments.
+		// Flush failure does NOT block release because:
+		// 1. Data is still in WAL — channel checkpoint clamping ensures WAL won't
+		//    be truncated beyond unflushed growing segment data.
+		// 2. On recovery, WAL replays from the clamped checkpoint, restoring data.
+		// 3. Blocking release on flush failure would prevent QueryCoord balance
+		//    and QueryNode graceful shutdown.
+		if sd.growingFlushManager != nil && sd.checkpointTracker != nil {
+			for _, entry := range growing {
+				segID := entry.SegmentID
+				segment := sd.segmentManager.GetGrowing(segID)
+				if segment == nil {
+					continue
+				}
+
+				flushedOffset := sd.checkpointTracker.GetFlushedOffset(segID)
+				currentOffset := segment.RowNum()
+				if flushedOffset >= currentOffset {
+					continue
+				}
+
+				log := sd.getLogger(ctx).With(zap.Int64("segmentID", segID))
+				log.Info("best-effort flush before release",
+					zap.Int64("unflushedRows", currentOffset-flushedOffset))
+
+				if err := sd.growingFlushManager.ForceSync(ctx, segID); err != nil {
+					log.Warn("best-effort flush failed before release, data will be recovered from WAL",
+						zap.Error(err))
+				}
+			}
+		}
+
+		// clean up checkpoint tracking for released growing segments (TEXT collections only)
+		if sd.checkpointTracker != nil {
+			for _, entry := range growing {
+				sd.checkpointTracker.RemoveSegment(entry.SegmentID)
+			}
+		}
+	}
 
 	var releaseErr error
 	if !force {

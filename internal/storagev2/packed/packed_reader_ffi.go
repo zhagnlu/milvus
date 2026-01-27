@@ -140,16 +140,12 @@ func NewFFIPackedReader(manifestPath string, schema *arrow.Schema, neededColumns
 }
 
 // ReadNext reads the next record batch from the reader
-func (r *FFIPackedReader) ReadNext() (arrow.Record, error) {
+func (r *FFIPackedReader) ReadNext() (rec arrow.Record, err error) {
 	if r.recordReader == nil {
 		return nil, io.EOF
 	}
 
-	// no need to manual release
-	// stream reader will release previous one
-
-	// Read next record from the stream
-	rec, err := r.recordReader.Read()
+	rec, err = r.recordReader.Read()
 	if err != nil {
 		if err == io.EOF {
 			return nil, io.EOF
@@ -204,7 +200,7 @@ func GetManifestHandle(manifestPath string, storageConfig *indexpb.StorageConfig
 	defer C.free(unsafe.Pointer(cBasePath))
 
 	var cTransactionHandle C.LoonTransactionHandle
-	result := C.loon_transaction_begin(cBasePath, cProperties, C.int64_t(version), 1, &cTransactionHandle)
+	result := C.loon_transaction_begin(cBasePath, cProperties, C.int64_t(version), C.int32_t(0) /* resolve_id */, C.uint32_t(1) /* retry_limit */, &cTransactionHandle)
 	err = HandleLoonFFIResult(result)
 	if err != nil {
 		return cManifestHandle, err

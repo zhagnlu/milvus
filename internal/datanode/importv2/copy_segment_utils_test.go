@@ -101,6 +101,63 @@ func TestGenerateTargetPath(t *testing.T) {
 	}
 }
 
+func TestGenerateTargetLOBPath(t *testing.T) {
+	source := &datapb.CopySegmentSource{
+		CollectionId: 111,
+		PartitionId:  222,
+		SegmentId:    333,
+	}
+	target := &datapb.CopySegmentTarget{
+		CollectionId: 444,
+		PartitionId:  555,
+		SegmentId:    666,
+	}
+
+	tests := []struct {
+		name       string
+		sourcePath string
+		wantPath   string
+		wantErr    bool
+	}{
+		{
+			name:       "standard LOB file path",
+			sourcePath: "files/insert_log/111/222/lobs/100/_data/abc123.vx",
+			wantPath:   "files/insert_log/444/555/lobs/100/_data/abc123.vx",
+			wantErr:    false,
+		},
+		{
+			name:       "LOB file with nested field path",
+			sourcePath: "root/data/insert_log/111/222/lobs/200/_data/xyz.vx",
+			wantPath:   "root/data/insert_log/444/555/lobs/200/_data/xyz.vx",
+			wantErr:    false,
+		},
+		{
+			name:       "invalid path - no insert_log",
+			sourcePath: "files/other/111/222/lobs/100/_data/abc.vx",
+			wantPath:   "",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid path - too short after insert_log",
+			sourcePath: "files/insert_log/111",
+			wantPath:   "",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, err := generateTargetLOBPath(tt.sourcePath, source, target)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.wantPath, gotPath)
+			}
+		})
+	}
+}
+
 func TestGenerateTargetIndexPath(t *testing.T) {
 	source := &datapb.CopySegmentSource{
 		CollectionId: 111,

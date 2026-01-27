@@ -23,6 +23,7 @@ import (
 	"github.com/blang/semver/v4"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
@@ -128,6 +129,15 @@ func (policy *storageVersionUpgradePolicy) triggerOneCollection(ctx context.Cont
 	}
 
 	targetVersion := policy.targetVersion()
+	// TEXT fields require at least V3 manifest storage for LOB support.
+	if targetVersion < storage.StorageV3 {
+		for _, field := range collection.Schema.GetFields() {
+			if field.GetDataType() == schemapb.DataType_Text {
+				targetVersion = storage.StorageV3
+				break
+			}
+		}
+	}
 
 	segments := policy.meta.SelectSegments(ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
 		return isSegmentHealthy(segment) &&

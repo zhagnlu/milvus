@@ -34,6 +34,8 @@
 #include "storage/PluginLoader.h"
 #include "storage/loon_ffi/ffi_reader_c.h"
 #include "storage/loon_ffi/util.h"
+#include <arrow/array.h>
+#include <arrow/record_batch.h>
 
 /**
  * @brief Creates a Loon reader with optional CMEK decryption support.
@@ -169,12 +171,23 @@ GetFFIReaderStream(CFFIPackedReader c_packed_reader,
         auto reader =
             static_cast<milvus_storage::api::Reader*>(c_packed_reader);
 
+        LOG_INFO("GetFFIReaderStream: calling get_record_batch_reader");
         auto result = reader->get_record_batch_reader();
         AssertInfo(result.ok(),
                    "failed to get record batch reader, {}",
                    result.status().ToString());
 
         auto array_stream = result.ValueOrDie();
+        LOG_INFO("GetFFIReaderStream: got batch reader, schema has {} fields",
+                 array_stream->schema()->num_fields());
+        for (int i = 0; i < array_stream->schema()->num_fields(); i++) {
+            auto field = array_stream->schema()->field(i);
+            LOG_INFO("  stream field[{}]: name={}, type={}",
+                     i,
+                     field->name(),
+                     field->type()->ToString());
+        }
+
         arrow::Status status =
             arrow::ExportRecordBatchReader(array_stream, out_stream);
         AssertInfo(status.ok(),

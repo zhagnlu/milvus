@@ -178,7 +178,7 @@ func (pw *FFIPackedWriter) Close() (string, error) {
 	defer C.free(unsafe.Pointer(cBasePath))
 	var transationHandle C.LoonTransactionHandle
 
-	result = C.loon_transaction_begin(cBasePath, pw.cProperties, C.int64_t(pw.baseVersion), 1, &transationHandle)
+	result = C.loon_transaction_begin(cBasePath, pw.cProperties, C.int64_t(pw.baseVersion), C.int32_t(0) /* resolve_id */, C.uint32_t(1) /* retry_limit */, &transationHandle)
 	if err := HandleLoonFFIResult(result); err != nil {
 		return "", err
 	}

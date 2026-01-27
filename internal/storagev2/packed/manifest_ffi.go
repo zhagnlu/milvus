@@ -78,7 +78,7 @@ func CreateManifestForSegment(
 
 	// Begin transaction (read_version=-1 for latest, retry_limit=1)
 	var transactionHandle C.LoonTransactionHandle
-	result := C.loon_transaction_begin(cBasePath, cProperties, C.int64_t(-1), C.uint32_t(1), &transactionHandle)
+	result := C.loon_transaction_begin(cBasePath, cProperties, C.int64_t(-1), C.int32_t(0) /* resolve_id */, C.uint32_t(1) /* retry_limit */, &transactionHandle)
 	if err := HandleLoonFFIResult(result); err != nil {
 		return "", fmt.Errorf("loon_transaction_begin failed: %w", err)
 	}
