@@ -41,6 +41,9 @@ type SegmentFiles struct {
 	// From manifest (when storage_version >= StorageV3) or pb (when < StorageV3)
 	InsertBinlogs []string
 
+	// LOB files at partition level (only for StorageV3+ with TEXT fields)
+	LobFiles []string
+
 	// Always from pb
 	DeltaBinlogs      []string
 	StatsBinlogs      []string
@@ -231,6 +234,25 @@ func collectSegmentFiles(
 			zap.String("basePath", basePath),
 			zap.Int("fileCount", len(allFiles)),
 			zap.Int64("storageVersion", source.GetStorageVersion()))
+
+		// Collect LOB files at partition level.
+		// LOB path: {root}/insert_log/{coll}/{part}/lobs/
+		// Segment basePath: {root}/insert_log/{coll}/{part}/{seg}/
+		// We derive the partition path by going up one level from segment basePath.
+		partitionPath := basePath[:strings.LastIndex(basePath, "/")]
+		lobPath := partitionPath + "/lobs/"
+		lobFiles, lobErr := listAllFiles(ctx, cm, lobPath)
+		if lobErr != nil {
+			// LOB directory may not exist if collection has no TEXT fields — not an error
+			log.Debug("no LOB files found at partition level (may not have TEXT fields)",
+				zap.String("lobPath", lobPath),
+				zap.Error(lobErr))
+		} else if len(lobFiles) > 0 {
+			files.LobFiles = lobFiles
+			log.Info("collected LOB files from partition level",
+				zap.String("lobPath", lobPath),
+				zap.Int("lobFileCount", len(lobFiles)))
+		}
 	} else {
 		// StorageV1/V2: use pb paths (traditional non-packed format)
 		files.InsertBinlogs = extractFromPb(source.GetInsertBinlogs())
@@ -269,6 +291,8 @@ func generateMappingsFromFiles(
 			switch fileType {
 			case IndexTypeVectorScalar, IndexTypeText, IndexTypeJSONKey, IndexTypeJSONStats:
 				dstPath, err = generateTargetIndexPath(srcPath, source, target, fileType)
+			case FileTypeLOB:
+				dstPath, err = generateTargetLOBPath(srcPath, source, target)
 			default:
 				dstPath, err = generateTargetPath(srcPath, source, target)
 			}
@@ -304,6 +328,9 @@ func generateMappingsFromFiles(
 		return nil, err
 	}
 	if err := addMappings(files.JsonStats, IndexTypeJSONStats); err != nil {
+		return nil, err
+	}
+	if err := addMappings(files.LobFiles, FileTypeLOB); err != nil {
 		return nil, err
 	}
 
@@ -591,6 +618,32 @@ func generateTargetPath(sourcePath string, source *datapb.CopySegmentSource, tar
 	return strings.Join(parts, "/"), nil
 }
 
+// generateTargetLOBPath replaces collection and partition IDs in a LOB file path.
+// LOB path structure: {root}/insert_log/{coll}/{part}/lobs/{field}/_data/{file}.vx
+// Unlike segment paths, LOB paths have no segment ID component.
+func generateTargetLOBPath(sourcePath string, source *datapb.CopySegmentSource, target *datapb.CopySegmentTarget) (string, error) {
+	parts := strings.Split(sourcePath, "/")
+
+	logTypeIndex := -1
+	for i, part := range parts {
+		if part == BinlogTypeInsert {
+			logTypeIndex = i
+			break
+		}
+	}
+
+	// Path: .../{insert_log}/{coll}/{part}/lobs/...
+	// Need at least logTypeIndex + 2 (coll and part) after insert_log
+	if logTypeIndex == -1 || logTypeIndex+2 >= len(parts) {
+		return "", fmt.Errorf("invalid LOB path structure: %s", sourcePath)
+	}
+
+	parts[logTypeIndex+1] = strconv.FormatInt(target.GetCollectionId(), 10)
+	parts[logTypeIndex+2] = strconv.FormatInt(target.GetPartitionId(), 10)
+
+	return strings.Join(parts, "/"), nil
+}
+
 // buildIndexInfoFromSource builds complete index metadata from source information.
 //
 // This function extracts and transforms all index metadata (vector/scalar, text, JSON)
@@ -695,6 +748,7 @@ const (
 	IndexTypeText         = "text_log"
 	IndexTypeJSONKey      = "json_key_index_log" // Legacy: JSON Key Inverted Index
 	IndexTypeJSONStats    = "json_stats"         // New: JSON Stats with Shredding Design
+	FileTypeLOB           = "lob"               // LOB files at partition level for TEXT fields
 )
 
 // generateTargetIndexPath is the unified function for generating target paths for all index types

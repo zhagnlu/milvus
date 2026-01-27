@@ -1193,6 +1193,39 @@ func TestUpdateSegmentsInfo(t *testing.T) {
 		assert.Equal(t, updated.State, commonpb.SegmentState_Dropped)
 	})
 
+	t.Run("v3 storage segment with empty binlogs uses checkpoint NumOfRows", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		assert.NoError(t, err)
+
+		// Create a V3 segment with no binlogs (V3 storage uses ManifestPath instead)
+		segment1 := NewSegmentInfo(&datapb.SegmentInfo{
+			ID:           1,
+			State:        commonpb.SegmentState_Growing,
+			Binlogs:      []*datapb.FieldBinlog{},
+			Statslogs:    []*datapb.FieldBinlog{},
+			ManifestPath: "files/binlogs/1/2/1000/manifest_0",
+		})
+		err = meta.AddSegment(context.TODO(), segment1)
+		assert.NoError(t, err)
+		assert.EqualValues(t, 0, segment1.NumOfRows)
+
+		// UpdateCheckPointOperator with cpNumRows=100, segment has no binlogs
+		// CalcRowCountFromBinLog will return 0, so should fall back to cpNumRows
+		err = meta.UpdateSegmentsInfo(
+			context.TODO(),
+			UpdateCheckPointOperator(1, []*datapb.CheckPoint{{
+				SegmentID: 1,
+				NumOfRows: 100,
+				Position:  &msgpb.MsgPosition{MsgID: []byte{1, 2, 3}, Timestamp: 100},
+			}}, true),
+		)
+		assert.NoError(t, err)
+
+		updated := meta.GetHealthySegment(context.TODO(), 1)
+		// NumOfRows should be set from checkpoint, not left at 0
+		assert.EqualValues(t, 100, updated.NumOfRows)
+	})
+
 	t.Run("update compacted segment", func(t *testing.T) {
 		meta, err := newMemoryMeta(t)
 		assert.NoError(t, err)
@@ -2093,4 +2126,195 @@ func Test_meta_DropSegmentsOfPartition(t *testing.T) {
 	assert.Equal(t, commonpb.SegmentState_Dropped, segment.GetState())
 	segment = meta.GetSegment(context.Background(), 3)
 	assert.NotEqual(t, commonpb.SegmentState_Dropped, segment.GetState())
+}
+
+func TestGetMinGrowingSegmentCheckpoint(t *testing.T) {
+	mockVChannel := "fake-by-dev-rootcoord-dml-1-testgrowing-v0"
+
+	t.Run("empty returns nil", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		assert.NoError(t, err)
+
+		pos := meta.GetMinGrowingSegmentCheckpoint(mockVChannel)
+		assert.Nil(t, pos)
+	})
+
+	t.Run("growing L1 segments return min DmlPosition", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		assert.NoError(t, err)
+
+		// Growing L1 segment with T300
+		seg1 := &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{
+				ID:            1,
+				CollectionID:  1,
+				PartitionID:   1,
+				InsertChannel: mockVChannel,
+				State:         commonpb.SegmentState_Growing,
+				Level:         datapb.SegmentLevel_L1,
+				DmlPosition: &msgpb.MsgPosition{
+					ChannelName: mockVChannel,
+					MsgID:       []byte{1},
+					Timestamp:   300,
+				},
+			},
+		}
+		err = meta.AddSegment(context.TODO(), seg1)
+		assert.NoError(t, err)
+
+		// Growing L1 segment with T500
+		seg2 := &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{
+				ID:            2,
+				CollectionID:  1,
+				PartitionID:   1,
+				InsertChannel: mockVChannel,
+				State:         commonpb.SegmentState_Growing,
+				Level:         datapb.SegmentLevel_L1,
+				DmlPosition: &msgpb.MsgPosition{
+					ChannelName: mockVChannel,
+					MsgID:       []byte{2},
+					Timestamp:   500,
+				},
+			},
+		}
+		err = meta.AddSegment(context.TODO(), seg2)
+		assert.NoError(t, err)
+
+		pos := meta.GetMinGrowingSegmentCheckpoint(mockVChannel)
+		assert.NotNil(t, pos)
+		assert.Equal(t, uint64(300), pos.GetTimestamp())
+	})
+
+	t.Run("L0 segments excluded", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		assert.NoError(t, err)
+
+		// Growing L0 segment with T100
+		seg := &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{
+				ID:            1,
+				CollectionID:  1,
+				PartitionID:   1,
+				InsertChannel: mockVChannel,
+				State:         commonpb.SegmentState_Growing,
+				Level:         datapb.SegmentLevel_L0,
+				DmlPosition: &msgpb.MsgPosition{
+					ChannelName: mockVChannel,
+					MsgID:       []byte{1},
+					Timestamp:   100,
+				},
+			},
+		}
+		err = meta.AddSegment(context.TODO(), seg)
+		assert.NoError(t, err)
+
+		pos := meta.GetMinGrowingSegmentCheckpoint(mockVChannel)
+		assert.Nil(t, pos)
+	})
+
+	t.Run("non-Growing segments excluded", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		assert.NoError(t, err)
+
+		// Flushed L1 segment with T100
+		seg := &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{
+				ID:            1,
+				CollectionID:  1,
+				PartitionID:   1,
+				InsertChannel: mockVChannel,
+				State:         commonpb.SegmentState_Flushed,
+				Level:         datapb.SegmentLevel_L1,
+				DmlPosition: &msgpb.MsgPosition{
+					ChannelName: mockVChannel,
+					MsgID:       []byte{1},
+					Timestamp:   100,
+				},
+			},
+		}
+		err = meta.AddSegment(context.TODO(), seg)
+		assert.NoError(t, err)
+
+		pos := meta.GetMinGrowingSegmentCheckpoint(mockVChannel)
+		assert.Nil(t, pos)
+	})
+}
+
+func TestUpdateChannelCheckpoint_ClampedByGrowing(t *testing.T) {
+	mockVChannel := "fake-by-dev-rootcoord-dml-1-testclamp-v0"
+
+	meta, err := newMemoryMeta(t)
+	assert.NoError(t, err)
+
+	// Add a growing L1 segment at T300
+	seg := &SegmentInfo{
+		SegmentInfo: &datapb.SegmentInfo{
+			ID:            1,
+			CollectionID:  1,
+			PartitionID:   1,
+			InsertChannel: mockVChannel,
+			State:         commonpb.SegmentState_Growing,
+			Level:         datapb.SegmentLevel_L1,
+			DmlPosition: &msgpb.MsgPosition{
+				ChannelName: mockVChannel,
+				MsgID:       []byte{1},
+				Timestamp:   300,
+			},
+		},
+	}
+	err = meta.AddSegment(context.TODO(), seg)
+	assert.NoError(t, err)
+
+	// Update checkpoint with T500, should be clamped to T300
+	err = meta.UpdateChannelCheckpoint(context.TODO(), mockVChannel, &msgpb.MsgPosition{
+		ChannelName: mockVChannel,
+		MsgID:       []byte{0, 0, 0, 0, 0, 0, 0, 0},
+		Timestamp:   500,
+	})
+	assert.NoError(t, err)
+
+	cp := meta.GetChannelCheckpoint(mockVChannel)
+	assert.NotNil(t, cp)
+	assert.Equal(t, uint64(300), cp.GetTimestamp())
+}
+
+func TestUpdateChannelCheckpoints_ClampedByGrowing(t *testing.T) {
+	mockVChannel := "fake-by-dev-rootcoord-dml-1-testclampbatch-v0"
+
+	meta, err := newMemoryMeta(t)
+	assert.NoError(t, err)
+
+	// Add a growing L1 segment at T300
+	seg := &SegmentInfo{
+		SegmentInfo: &datapb.SegmentInfo{
+			ID:            1,
+			CollectionID:  1,
+			PartitionID:   1,
+			InsertChannel: mockVChannel,
+			State:         commonpb.SegmentState_Growing,
+			Level:         datapb.SegmentLevel_L1,
+			DmlPosition: &msgpb.MsgPosition{
+				ChannelName: mockVChannel,
+				MsgID:       []byte{1},
+				Timestamp:   300,
+			},
+		},
+	}
+	err = meta.AddSegment(context.TODO(), seg)
+	assert.NoError(t, err)
+
+	// Batch update checkpoint with T500, should be clamped to T300
+	err = meta.UpdateChannelCheckpoints(context.TODO(), []*msgpb.MsgPosition{
+		{
+			ChannelName: mockVChannel,
+			MsgID:       []byte{0, 0, 0, 0, 0, 0, 0, 0},
+			Timestamp:   500,
+		},
+	})
+	assert.NoError(t, err)
+
+	cp := meta.GetChannelCheckpoint(mockVChannel)
+	assert.NotNil(t, cp)
+	assert.Equal(t, uint64(300), cp.GetTimestamp())
 }

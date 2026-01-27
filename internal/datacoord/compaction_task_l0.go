@@ -336,7 +336,7 @@ func (t *l0CompactionTask) selectFlushedSegment() ([]*SegmentInfo, []*datapb.Com
 }
 
 func (t *l0CompactionTask) BuildCompactionRequest() (*datapb.CompactionPlan, error) {
-	compactionParams, err := compaction.GenerateJSONParams()
+	compactionParams, err := compaction.GenerateJSONParams(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +387,7 @@ func (t *l0CompactionTask) BuildCompactionRequest() (*datapb.CompactionPlan, err
 	}
 
 	segments = append(segments, flushedSegments...)
-	logIDRange, err := PreAllocateBinlogIDs(t.allocator, segments)
+	logIDRange, err := PreAllocateBinlogIDs(t.allocator, segments, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -28,7 +28,7 @@ import (
 
 func TestGetJSONParams(t *testing.T) {
 	paramtable.Init()
-	jsonStr, err := GenerateJSONParams()
+	jsonStr, err := GenerateJSONParams(nil)
 	assert.NoError(t, err)
 
 	storageVersion := storage.StorageV2

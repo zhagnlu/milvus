@@ -80,6 +80,9 @@ type sortCompactionTask struct {
 
 	compactionParams compaction.Params
 	sortByFieldIDs   []int64
+
+	// lobContext holds LOB compaction strategy decisions for TEXT columns
+	lobContext *compaction.LOBCompactionContext
 }
 
 var _ Compactor = (*sortCompactionTask)(nil)
@@ -174,11 +177,18 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 	targetSegmentID := t.plan.GetPreAllocatedSegmentIDs().GetBegin()
 
 	phaseStart := time.Now()
+
+	// For manifest-based segments, filter out RowID since manifest doesn't store it
+	writerSchema := t.plan.GetSchema()
+	if t.manifest != "" {
+		writerSchema = storage.FilterRowIDFromSchema(writerSchema)
+	}
+
 	srw, err := storage.NewBinlogRecordWriter(ctx,
 		t.collectionID,
 		t.partitionID,
 		targetSegmentID,
-		t.plan.GetSchema(),
+		writerSchema,
 		alloc,
 		t.compactionParams.BinLogMaxSize,
 		numRows,
@@ -266,7 +276,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 	initReaderCost := time.Since(phaseStart)
 
 	rrs := []storage.RecordReader{rr}
-	numValidRows, sortTimings, err := storage.Sort(t.compactionParams.BinLogMaxSize, t.plan.GetSchema(), rrs, srw, predicate, t.sortByFieldIDs)
+	numValidRows, sortTimings, err := storage.Sort(t.compactionParams.BinLogMaxSize, writerSchema, rrs, srw, predicate, t.sortByFieldIDs)
 	if err != nil {
 		log.Warn("sort failed", zap.Error(err))
 		return nil, err
@@ -378,6 +388,15 @@ func (t *sortCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	defer span.End()
 	if err := t.preCompact(); err != nil {
 		log.Warn("failed to preCompact", zap.Error(err))
+		return &datapb.CompactionPlanResult{
+			PlanID: t.GetPlanID(),
+			State:  datapb.CompactionTaskState_failed,
+		}, nil
+	}
+
+	// init LOB compaction context for TEXT columns (if any)
+	if err := t.initLOBCompactionContext(ctx); err != nil {
+		log.Ctx(ctx).Warn("failed to init LOB compaction context", zap.Error(err))
 		return &datapb.CompactionPlanResult{
 			PlanID: t.GetPlanID(),
 			State:  datapb.CompactionTaskState_failed,
@@ -611,4 +630,73 @@ func (t *sortCompactionTask) createTextIndex(ctx context.Context,
 	}
 
 	return textIndexLogs, nil
+}
+
+// initLOBCompactionContext initializes the LOB compaction context for TEXT columns.
+// For sort compaction, data is reordered but not redistributed, so TEXT columns
+// use REUSE_ALL strategy (LOB references remain valid after reordering).
+// The LOB file references need to be copied to the output segment's manifest.
+func (t *sortCompactionTask) initLOBCompactionContext(ctx context.Context) error {
+	// check if there are TEXT fields in schema
+	textFieldIDs := compaction.GetTEXTFieldIDsFromSchema(t.plan.GetSchema())
+	if len(textFieldIDs) == 0 {
+		return nil // no TEXT fields, nothing to do
+	}
+
+	// only apply for manifest-based storage (storage v2/v3)
+	if t.manifest == "" {
+		return nil // no manifest-based segment, nothing to do
+	}
+
+	log := log.Ctx(ctx).With(
+		zap.Int64("planID", t.GetPlanID()),
+		zap.Int64("segmentID", t.segmentID),
+		zap.Int64s("textFieldIDs", textFieldIDs),
+	)
+	log.Info("initializing LOB compaction context for TEXT columns (sort compaction)")
+
+	// collect LOB files from source manifest
+	sourceManifests := map[int64]string{t.segmentID: t.manifest}
+	lobFilesBySegment, err := compaction.CollectLobFilesFromManifests(sourceManifests, t.compactionParams.StorageConfig)
+	if err != nil {
+		return err
+	}
+
+	// check if there are any LOB files
+	hasLobFiles := false
+	for _, files := range lobFilesBySegment {
+		if len(files) > 0 {
+			hasLobFiles = true
+			break
+		}
+	}
+	if !hasLobFiles {
+		log.Info("no LOB files found in source segment")
+		return nil
+	}
+
+	// create LOB compaction context
+	t.lobContext = compaction.NewLOBCompactionContext()
+	for segID, files := range lobFilesBySegment {
+		t.lobContext.AddSegmentLobFiles(segID, files)
+	}
+
+	// set compaction type - sort compaction forces REUSE_ALL
+	// sort compaction always has 1 source segment and 1 output segment
+	t.lobContext.SetCompactionType(datapb.CompactionType_SortCompaction, 1, 1)
+
+	// compute strategies (will use forced REUSE_ALL for all TEXT fields)
+	t.lobContext.ComputeStrategies(textFieldIDs, t.compactionParams.LOBHoleRatioThreshold)
+
+	// log strategy decisions
+	for fieldID, decision := range t.lobContext.Decisions {
+		log.Info("LOB compaction strategy decided",
+			zap.Int64("fieldID", fieldID),
+			zap.String("strategy", "REUSE_ALL"),
+			zap.Bool("isForced", t.lobContext.IsForced),
+			zap.Float64("holeRatio", decision.OverallHoleRatio),
+		)
+	}
+
+	return nil
 }
