@@ -17,6 +17,7 @@
 #include "FilterBitsNode.h"
 #include "common/Tracer.h"
 #include "fmt/format.h"
+#include "log/Log.h"
 
 #include "monitor/Monitor.h"
 
@@ -78,6 +79,18 @@ PhyFilterBitsNode::GetOutput() {
 
     TargetBitmap bitset;
     TargetBitmap valid_bitset;
+
+    // optimization: if all expressions can be executed at once,
+    // set batch size to execute all at once for better performance.
+    if (exprs_->CanExecuteAllAtOnce()) {
+        LOG_DEBUG(
+            "FilterBitsNode: all expressions can use index, "
+            "execute all at once, rows={}",
+            need_process_rows_);
+        tracer::AddEvent("expr_execute_all_at_once");
+        exprs_->SetExecuteAllAtOnce();
+    }
+
     while (num_processed_rows_ < need_process_rows_) {
         exprs_->Eval(0, 1, true, eval_ctx, results_);
 

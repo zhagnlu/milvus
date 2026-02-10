@@ -115,7 +115,7 @@ IsMaterializedViewSupported(const DataType& data_type) {
 struct ColumnInfo {
     FieldId field_id_;
     DataType data_type_;
-    DataType element_type_;
+    DataType element_type_{DataType::NONE};
     std::vector<std::string> nested_path_;
     bool nullable_;
 

@@ -774,10 +774,14 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
                 pinned_ngram_index_ = segment->GetNgramIndex(op_ctx_, field_id);
             }
         }
+        DetermineUseIndex();
     }
 
     void
     Eval(EvalCtx& context, VectorPtr& result) override;
+
+    void
+    DetermineUseIndex() override;
 
     bool
     SupportOffsetInput() override {
@@ -872,9 +876,6 @@ class PhyUnaryRangeFilterExpr : public SegmentExpr {
     template <typename T>
     bool
     CanUseIndexForArray();
-
-    bool
-    CanUseIndexForJson(DataType val_type);
 
     VectorPtr
     ExecTextMatch();

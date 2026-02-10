@@ -120,12 +120,19 @@ namespace exec {
                processed_size,                                                 \
                real_batch_size);                                               \
     return res_vec;
+
+void
+PhyGISFunctionFilterExpr::DetermineUseIndex() {
+    use_index_ = SegmentExpr::CanUseIndex();
+}
+
 void
 PhyGISFunctionFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
     AssertInfo(expr_->column_.data_type_ == DataType::GEOMETRY,
                "unsupported data type: {}",
                expr_->column_.data_type_);
-    if (SegmentExpr::CanUseIndex()) {
+    // use_index_ is already determined during initialization by DetermineUseIndex()
+    if (use_index_) {
         result = EvalForIndexSegment();
     } else {
         result = EvalForDataSegment();
