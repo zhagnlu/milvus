@@ -71,8 +71,7 @@ ExecPlanNodeVisitor::ExecuteTask(
         }
     }
 
-    // span.GetSpan()->SetAttribute("total_rows", processed_num);
-    // span.GetSpan()->SetAttribute("matched_rows", bitset_holder.count());
+    span.GetSpan()->SetAttribute("total_rows", processed_num);
 
     return bitset_holder;
 }
