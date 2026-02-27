@@ -104,7 +104,7 @@ PhyMvccNode::GetOutput() {
         segment_->mask_with_delete(data, active_count_, query_timestamp_);
         is_finished_ = true;
 
-        auto output_rows = active_count_ - data.count();
+        // auto output_rows = active_count_ - data.count();
         // tracer::AddEvent(fmt::format(
         //     "output_rows: {}, filtered: {}", output_rows, data.count()));
         return std::make_shared<RowVector>(

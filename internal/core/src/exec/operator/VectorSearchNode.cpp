@@ -100,9 +100,9 @@ PhyVectorSearchNode::GetOutput() {
                                 op_context,
                                 search_result);
         search_result.total_data_cnt_ = active_count_;
-        span.GetSpan()->SetAttribute(
-            "result_count",
-            static_cast<int>(search_result.seg_offsets_.size()));
+        // span.GetSpan()->SetAttribute(
+        //     "result_count",
+        //     static_cast<int>(search_result.seg_offsets_.size()));
         query_context_->set_search_result(std::move(search_result));
         std::chrono::high_resolution_clock::time_point vector_end =
             std::chrono::high_resolution_clock::now();
