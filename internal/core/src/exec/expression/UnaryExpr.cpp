@@ -156,9 +156,9 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplArrayForIndex<proto::plan::Array>(
 void
 PhyUnaryRangeFilterExpr::Eval(EvalCtx& context, VectorPtr& result) {
     // tracer::AutoSpan span(
-        // "PhyUnaryRangeFilterExpr::Eval", tracer::GetRootSpan(), true);
+    // "PhyUnaryRangeFilterExpr::Eval", tracer::GetRootSpan(), true);
     // span.GetSpan()->SetAttribute("data_type",
-                                 // static_cast<int>(expr_->column_.data_type_));
+    // static_cast<int>(expr_->column_.data_type_));
     // span.GetSpan()->SetAttribute("op_type", static_cast<int>(expr_->op_type_));
 
     auto input = context.get_offset_input();
@@ -1380,76 +1380,136 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForIndex() {
     if (real_batch_size == 0) {
         return nullptr;
     }
-    auto op_type = expr_->op_type_;
-    auto execute_sub_batch = [op_type](Index* index_ptr, IndexInnerType val) {
-        TargetBitmap res;
-        switch (op_type) {
-            case proto::plan::GreaterThan: {
-                UnaryIndexFunc<T, proto::plan::GreaterThan> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::GreaterEqual: {
-                UnaryIndexFunc<T, proto::plan::GreaterEqual> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::LessThan: {
-                UnaryIndexFunc<T, proto::plan::LessThan> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::LessEqual: {
-                UnaryIndexFunc<T, proto::plan::LessEqual> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::Equal: {
-                UnaryIndexFunc<T, proto::plan::Equal> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::NotEqual: {
-                UnaryIndexFunc<T, proto::plan::NotEqual> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::PrefixMatch: {
-                UnaryIndexFunc<T, proto::plan::PrefixMatch> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::PostfixMatch: {
-                UnaryIndexFunc<T, proto::plan::PostfixMatch> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::InnerMatch: {
-                UnaryIndexFunc<T, proto::plan::InnerMatch> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            case proto::plan::Match: {
-                UnaryIndexFunc<T, proto::plan::Match> func;
-                res = std::move(func(index_ptr, val));
-                break;
-            }
-            default:
-                ThrowInfo(
-                    OpTypeInvalid,
-                    fmt::format("unsupported operator type for unary expr: {}",
-                                op_type));
+    // Try process-level ExprResCacheManager for sealed segments
+    if (cached_index_chunk_res_ == nullptr &&
+        exec::ExprResCacheManager::IsEnabled() &&
+        segment_->type() == SegmentType::Sealed) {
+        exec::ExprResCacheManager::Key key{segment_->get_segment_id(),
+                                           this->ToString()};
+        exec::ExprResCacheManager::Value v;
+        if (exec::ExprResCacheManager::Instance().Get(key, v)) {
+            cached_index_chunk_res_ = v.result;
+            cached_index_chunk_valid_res_ = v.valid_result;
+            LOG_DEBUG("UnaryRangeExpr cache hit for segment_id={}, expr={}",
+                      segment_->get_segment_id(),
+                      this->ToString());
         }
-        return res;
-    };
-    IndexInnerType val = value_arg_.GetValue<IndexInnerType>();
-    auto res = ProcessIndexChunks<T>(execute_sub_batch, val);
-    AssertInfo(res->size() == real_batch_size,
-               "internal error: expr processed rows {} not equal "
-               "expect batch size {}",
-               res->size(),
-               real_batch_size);
-    return res;
+    }
+
+    // Cache miss: compute full result via index and store in cache
+    if (cached_index_chunk_res_ == nullptr) {
+        auto op_type = expr_->op_type_;
+        auto index_result = GetIndexPtrForChunk<IndexInnerType>(0);
+        Index* index_ptr = index_result.index_ptr;
+        IndexInnerType val = value_arg_.GetValue<IndexInnerType>();
+
+        auto execute_on_index = [op_type](Index* idx, IndexInnerType v) {
+            TargetBitmap res;
+            switch (op_type) {
+                case proto::plan::GreaterThan: {
+                    UnaryIndexFunc<T, proto::plan::GreaterThan> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::GreaterEqual: {
+                    UnaryIndexFunc<T, proto::plan::GreaterEqual> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::LessThan: {
+                    UnaryIndexFunc<T, proto::plan::LessThan> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::LessEqual: {
+                    UnaryIndexFunc<T, proto::plan::LessEqual> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::Equal: {
+                    UnaryIndexFunc<T, proto::plan::Equal> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::NotEqual: {
+                    UnaryIndexFunc<T, proto::plan::NotEqual> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::PrefixMatch: {
+                    UnaryIndexFunc<T, proto::plan::PrefixMatch> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::PostfixMatch: {
+                    UnaryIndexFunc<T, proto::plan::PostfixMatch> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::InnerMatch: {
+                    UnaryIndexFunc<T, proto::plan::InnerMatch> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                case proto::plan::Match: {
+                    UnaryIndexFunc<T, proto::plan::Match> func;
+                    res = std::move(func(idx, v));
+                    break;
+                }
+                default:
+                    ThrowInfo(
+                        OpTypeInvalid,
+                        fmt::format(
+                            "unsupported operator type for unary expr: {}",
+                            op_type));
+            }
+            return res;
+        };
+
+        cached_index_chunk_res_ = std::make_shared<TargetBitmap>(
+            std::move(execute_on_index(index_ptr, val)));
+        cached_index_chunk_valid_res_ =
+            std::make_shared<TargetBitmap>(index_ptr->IsNotNull());
+
+        // Store into process-level cache for future queries
+        if (exec::ExprResCacheManager::IsEnabled() &&
+            segment_->type() == SegmentType::Sealed) {
+            exec::ExprResCacheManager::Key key{segment_->get_segment_id(),
+                                               this->ToString()};
+            exec::ExprResCacheManager::Value v;
+            v.result = cached_index_chunk_res_;
+            v.valid_result = cached_index_chunk_valid_res_;
+            v.active_count = active_count_;
+            exec::ExprResCacheManager::Instance().Put(key, v);
+        }
+    }
+
+    // Fast path: entire cached result consumed in one batch — move without copy
+    if (current_index_chunk_pos_ == 0 &&
+        real_batch_size ==
+            static_cast<int64_t>(cached_index_chunk_res_->size()) &&
+        cached_index_chunk_res_.use_count() == 1 &&
+        cached_index_chunk_valid_res_.use_count() == 1) {
+        auto result = std::move(*cached_index_chunk_res_);
+        auto valid_result = std::move(*cached_index_chunk_valid_res_);
+        cached_index_chunk_res_.reset();
+        cached_index_chunk_valid_res_.reset();
+        MoveCursor();
+        return std::make_shared<ColumnVector>(std::move(result),
+                                              std::move(valid_result));
+    }
+
+    // Slow path: slice from cached result
+    TargetBitmap result;
+    TargetBitmap valid_result;
+    result.append(
+        *cached_index_chunk_res_, current_index_chunk_pos_, real_batch_size);
+    valid_result.append(*cached_index_chunk_valid_res_,
+                        current_index_chunk_pos_,
+                        real_batch_size);
+    MoveCursor();
+    return std::make_shared<ColumnVector>(std::move(result),
+                                          std::move(valid_result));
 }
 
 template <typename T>
