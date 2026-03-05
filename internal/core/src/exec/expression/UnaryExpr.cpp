@@ -1494,7 +1494,7 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplForIndex() {
         auto valid_result = std::move(*cached_index_chunk_valid_res_);
         cached_index_chunk_res_.reset();
         cached_index_chunk_valid_res_.reset();
-        MoveCursor();
+        // MoveCursor();
         return std::make_shared<ColumnVector>(std::move(result),
                                               std::move(valid_result));
     }
