@@ -27,10 +27,12 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
+	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/metastore"
 	catalogmocks "github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -673,4 +675,88 @@ func (s *CopySegmentTaskSuite) TestSyncVectorScalarIndexes_AddSegmentIndexError(
 	syncErr := syncVectorScalarIndexes(context.Background(), result, task, m, copyMeta)
 	s.Error(syncErr)
 	s.Contains(syncErr.Error(), "catalog error")
+}
+
+// TestAllocateNewBuildIDs_OnlyVectorScalarIndexes verifies that allocateNewBuildIDs
+// only remaps buildIDs for vector/scalar indexes (IndexFiles), NOT for json_key_index
+// or text_index. This is critical for snapshot restore correctness: the LOON manifest
+// is copied as-is and references old buildIDs, so json/text stats must keep their
+// original buildIDs to match the manifest.
+func (s *CopySegmentTaskSuite) TestAllocateNewBuildIDs_OnlyVectorScalarIndexes() {
+	vectorBuildID := int64(1001)
+	jsonBuildID := int64(2001)
+	textBuildID := int64(3001)
+
+	sourceSegDesc := &datapb.SegmentDescription{
+		SegmentId: 100,
+		IndexFiles: []*indexpb.IndexFilePathInfo{
+			{BuildID: vectorBuildID, FieldID: 101, IndexName: "vec_index"},
+		},
+		JsonKeyIndexFiles: map[int64]*datapb.JsonKeyStats{
+			102: {FieldID: 102, BuildID: jsonBuildID, Files: []string{"meta.json"}},
+		},
+		TextIndexFiles: map[int64]*datapb.TextIndexStats{
+			103: {FieldID: 103, BuildID: textBuildID, Files: []string{"tantivy_file"}},
+		},
+	}
+
+	nextID := int64(9000)
+	mockAlloc := allocator.NewMockAllocator(s.T())
+	mockAlloc.EXPECT().AllocID(mock.Anything).RunAndReturn(func(ctx context.Context) (int64, error) {
+		nextID++
+		return nextID, nil
+	})
+
+	newBuildIDs, err := allocateNewBuildIDs(context.Background(), mockAlloc, sourceSegDesc)
+	s.NoError(err)
+
+	// Vector/scalar index buildID MUST be remapped
+	s.Contains(newBuildIDs, vectorBuildID, "vector index buildID should be remapped")
+	s.NotEqual(vectorBuildID, newBuildIDs[vectorBuildID])
+
+	// json_key_index buildID must NOT be in the map
+	s.NotContains(newBuildIDs, jsonBuildID, "json_key_index buildID must NOT be remapped")
+
+	// text_index buildID must NOT be in the map
+	s.NotContains(newBuildIDs, textBuildID, "text_index buildID must NOT be remapped")
+
+	// AllocID should be called exactly once (for the single vector index)
+	mockAlloc.AssertNumberOfCalls(s.T(), "AllocID", 1)
+}
+
+func (s *CopySegmentTaskSuite) TestAllocateNewBuildIDs_DeduplicatesSameBuildID() {
+	sharedBuildID := int64(1001)
+
+	sourceSegDesc := &datapb.SegmentDescription{
+		SegmentId: 100,
+		IndexFiles: []*indexpb.IndexFilePathInfo{
+			{BuildID: sharedBuildID, FieldID: 101, IndexName: "idx1"},
+			{BuildID: sharedBuildID, FieldID: 102, IndexName: "idx2"},
+		},
+	}
+
+	mockAlloc := allocator.NewMockAllocator(s.T())
+	mockAlloc.EXPECT().AllocID(mock.Anything).Return(int64(9001), nil).Once()
+
+	newBuildIDs, err := allocateNewBuildIDs(context.Background(), mockAlloc, sourceSegDesc)
+	s.NoError(err)
+	s.Len(newBuildIDs, 1)
+	s.Equal(int64(9001), newBuildIDs[sharedBuildID])
+}
+
+func (s *CopySegmentTaskSuite) TestAllocateNewBuildIDs_NoIndexFiles() {
+	sourceSegDesc := &datapb.SegmentDescription{
+		SegmentId: 100,
+		JsonKeyIndexFiles: map[int64]*datapb.JsonKeyStats{
+			102: {FieldID: 102, BuildID: 2001, Files: []string{"meta.json"}},
+		},
+	}
+
+	mockAlloc := allocator.NewMockAllocator(s.T())
+	// AllocID should NOT be called at all
+
+	newBuildIDs, err := allocateNewBuildIDs(context.Background(), mockAlloc, sourceSegDesc)
+	s.NoError(err)
+	s.Empty(newBuildIDs)
+	mockAlloc.AssertNotCalled(s.T(), "AllocID")
 }

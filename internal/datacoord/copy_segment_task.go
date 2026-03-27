@@ -570,33 +570,10 @@ func AssembleCopySegmentRequest(task CopySegmentTask, job CopySegmentJob) (*data
 		}
 		sources = append(sources, source)
 
-		// Collect all unique source build IDs from index files and allocate new ones
-		// to avoid buildID reuse across copy segments, which would corrupt the
-		// 1:1 segmentBuildInfo map in DataCoord indexMeta.
-		newBuildIDs := make(map[int64]int64)
-		allocNewBuildID := func(srcBuildID int64) error {
-			if _, exists := newBuildIDs[srcBuildID]; !exists {
-				newID, err := t.alloc.AllocID(ctx)
-				if err != nil {
-					return merr.WrapErrServiceInternal(fmt.Sprintf("failed to allocate new buildID for source buildID %d", srcBuildID), err.Error())
-				}
-				newBuildIDs[srcBuildID] = newID
-			}
-			return nil
+		newBuildIDs, err := allocateNewBuildIDs(ctx, t.alloc, sourceSegDesc)
+		if err != nil {
+			return nil, err
 		}
-		for _, indexFile := range sourceSegDesc.GetIndexFiles() {
-			if err := allocNewBuildID(indexFile.GetBuildID()); err != nil {
-				return nil, err
-			}
-		}
-		// NOTE: json_key_index buildIDs are intentionally NOT remapped here.
-		// Unlike vector/scalar indexes (which use segmentBuildInfo with a 1:1
-		// buildID map), json_key_index stats are stored in SegmentInfo.JsonKeyStats
-		// keyed by fieldID — no buildID uniqueness constraint.
-		// Remapping would cause the copied manifest's json_key_index metadata
-		// (which references the old buildID) to mismatch the actual file paths
-		// (copied to the new buildID), resulting in QueryNode 404 errors.
-		// Keeping the original buildID aligns with text_index behavior.
 
 		// Build target with IDs and buildID mappings
 		target := &datapb.CopySegmentTarget{
@@ -1014,4 +991,31 @@ func syncJsonKeyIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 			zap.Int64("segmentID", result.GetSegmentId()),
 			zap.Int("count", len(result.GetJsonKeyIndexInfos())))...)
 	return nil
+}
+
+// allocateNewBuildIDs allocates new buildIDs for vector/scalar index files in a
+// source segment to avoid buildID reuse that would corrupt the 1:1 segmentBuildInfo
+// map in DataCoord indexMeta.
+//
+// Only vector/scalar index buildIDs are remapped. json_key_index and text_index
+// buildIDs are intentionally NOT remapped because:
+//   - They are stored in SegmentInfo.JsonKeyStats/TextStatsLogs keyed by fieldID,
+//     not in segmentBuildInfo — no buildID uniqueness constraint.
+//   - For StorageV3 segments, the LOON manifest is copied as-is during CopySegment.
+//     Remapping buildIDs would cause the manifest's stat metadata to reference the
+//     old buildID while files are copied to the new buildID path, resulting in
+//     QueryNode 404 errors when loading restored segments.
+func allocateNewBuildIDs(ctx context.Context, alloc allocator.Allocator, sourceSegDesc *datapb.SegmentDescription) (map[int64]int64, error) {
+	newBuildIDs := make(map[int64]int64)
+	for _, indexFile := range sourceSegDesc.GetIndexFiles() {
+		srcBuildID := indexFile.GetBuildID()
+		if _, exists := newBuildIDs[srcBuildID]; !exists {
+			newID, err := alloc.AllocID(ctx)
+			if err != nil {
+				return nil, merr.WrapErrServiceInternal(fmt.Sprintf("failed to allocate new buildID for source buildID %d", srcBuildID), err.Error())
+			}
+			newBuildIDs[srcBuildID] = newID
+		}
+	}
+	return newBuildIDs, nil
 }
