@@ -589,11 +589,14 @@ func AssembleCopySegmentRequest(task CopySegmentTask, job CopySegmentJob) (*data
 				return nil, err
 			}
 		}
-		for _, jsonKeyIndex := range sourceSegDesc.GetJsonKeyIndexFiles() {
-			if err := allocNewBuildID(jsonKeyIndex.GetBuildID()); err != nil {
-				return nil, err
-			}
-		}
+		// NOTE: json_key_index buildIDs are intentionally NOT remapped here.
+		// Unlike vector/scalar indexes (which use segmentBuildInfo with a 1:1
+		// buildID map), json_key_index stats are stored in SegmentInfo.JsonKeyStats
+		// keyed by fieldID — no buildID uniqueness constraint.
+		// Remapping would cause the copied manifest's json_key_index metadata
+		// (which references the old buildID) to mismatch the actual file paths
+		// (copied to the new buildID), resulting in QueryNode 404 errors.
+		// Keeping the original buildID aligns with text_index behavior.
 
 		// Build target with IDs and buildID mappings
 		target := &datapb.CopySegmentTarget{
