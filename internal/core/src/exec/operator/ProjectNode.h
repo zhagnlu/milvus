@@ -70,6 +70,7 @@ class PhyProjectNode : public Operator {
     const segcore::SegmentInternalInterface* segment_;
     bool is_finished_{false};
     const std::vector<FieldId> fields_to_project_;
+    const std::vector<std::vector<std::string>> nested_paths_;
     OpContext* op_context_;
 };
 }  // namespace exec
