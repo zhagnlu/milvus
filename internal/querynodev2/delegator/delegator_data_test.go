@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/util/mock_segcore"
 	"github.com/milvus-io/milvus/internal/querynodev2/cluster"
@@ -178,6 +179,40 @@ func (s *DelegatorDataSuite) genNormalCollection() {
 	}, &querypb.LoadMetaInfo{
 		LoadType:      querypb.LoadType_LoadCollection,
 		PartitionIDs:  []int64{1001, 1002},
+		SchemaVersion: tsoutil.ComposeTSByTime(time.Now(), 0),
+	})
+}
+
+func (s *DelegatorDataSuite) genTextCollection() {
+	s.manager.Collection.PutOrRef(s.collectionID, &schemapb.CollectionSchema{
+		Name: "TestTextCollection",
+		Fields: []*schemapb.FieldSchema{
+			{
+				Name:         "id",
+				FieldID:      100,
+				IsPrimaryKey: true,
+				DataType:     schemapb.DataType_Int64,
+			},
+			{
+				Name:     "text",
+				FieldID:  101,
+				DataType: schemapb.DataType_Text,
+			},
+			{
+				Name:     "vector",
+				FieldID:  102,
+				DataType: schemapb.DataType_FloatVector,
+				TypeParams: []*commonpb.KeyValuePair{
+					{
+						Key:   common.DimKey,
+						Value: "128",
+					},
+				},
+			},
+		},
+	}, nil, &querypb.LoadMetaInfo{
+		LoadType:      querypb.LoadType_LoadCollection,
+		PartitionIDs:  []int64{1001},
 		SchemaVersion: tsoutil.ComposeTSByTime(time.Now(), 0),
 	})
 }
@@ -577,6 +612,40 @@ func (s *DelegatorDataSuite) TestLoadGrowingWithBM25() {
 
 	err := s.delegator.LoadGrowing(context.Background(), []*querypb.SegmentLoadInfo{{SegmentID: 1}}, 1)
 	s.NoError(err)
+}
+
+func (s *DelegatorDataSuite) TestLoadLegacyTextGrowingWithoutManifest() {
+	s.manager = segments.NewManager()
+	s.genTextCollection()
+	delegator, err := NewShardDelegator(context.Background(), s.collectionID, s.replicaID, s.vchannelName, s.version, s.workerManager, s.manager, s.loader, 10000, nil, s.chunkManager, NewChannelQueryView(nil, nil, nil, initialTargetVersion), nil)
+	s.Require().NoError(err)
+	sd, ok := delegator.(*shardDelegator)
+	s.Require().True(ok)
+	s.Require().NotNil(sd.checkpointTracker)
+	s.delegator = sd
+
+	loadInfo := &querypb.SegmentLoadInfo{
+		SegmentID:     1001,
+		CollectionID:  s.collectionID,
+		PartitionID:   500,
+		InsertChannel: s.vchannelName,
+		NumOfRows:     50,
+	}
+	s.loader.EXPECT().
+		Load(mock.Anything, s.collectionID, segments.SegmentTypeGrowing, int64(0), mock.Anything).
+		Call.Return(func(ctx context.Context, collectionID int64, segmentType segments.SegmentType, version int64, infos ...*querypb.SegmentLoadInfo) []segments.Segment {
+		ms := segments.NewMockSegment(s.T())
+		ms.EXPECT().ID().Return(loadInfo.GetSegmentID())
+		ms.EXPECT().Partition().Return(loadInfo.GetPartitionID())
+		ms.EXPECT().RowNum().Return(loadInfo.GetNumOfRows())
+		ms.EXPECT().LoadInfo().Return(loadInfo)
+		return []segments.Segment{ms}
+	}, nil)
+
+	err = s.delegator.LoadGrowing(context.Background(), []*querypb.SegmentLoadInfo{loadInfo}, 0)
+	s.Require().NoError(err)
+	s.Equal(int64(50), s.delegator.checkpointTracker.GetFlushedOffset(loadInfo.GetSegmentID()))
+	s.Empty(s.delegator.checkpointTracker.GetAcknowledgedManifest(loadInfo.GetSegmentID()))
 }
 
 func (s *DelegatorDataSuite) TestLoadSegmentsWithBm25() {
@@ -1451,6 +1520,332 @@ func (s *DelegatorDataSuite) TestReleaseSegment() {
 	s.NoError(err)
 }
 
+func (s *DelegatorDataSuite) TestReleaseTextGrowingAfterPreparedHandoff() {
+	ctx := context.Background()
+	s.workerManager = &cluster.MockManager{}
+	s.manager = segments.NewManager()
+	s.loader = &segments.MockLoader{}
+	s.genTextCollection()
+
+	delegator, err := NewShardDelegator(
+		ctx,
+		s.collectionID,
+		s.replicaID,
+		s.vchannelName,
+		s.version,
+		s.workerManager,
+		s.manager,
+		s.loader,
+		10000,
+		nil,
+		s.chunkManager,
+		NewChannelQueryView(nil, nil, nil, initialTargetVersion),
+		nil)
+	s.Require().NoError(err)
+	sd := delegator.(*shardDelegator)
+	defer sd.Close()
+
+	const (
+		segmentID    = int64(1001)
+		partitionID  = int64(500)
+		targetOffset = int64(10)
+	)
+
+	segment := segments.NewMockSegment(s.T())
+	segment.EXPECT().ID().Return(segmentID).Maybe()
+	segment.EXPECT().Version().Return(int64(1)).Maybe()
+	segment.EXPECT().Shard().Return(s.channel).Maybe()
+	segment.EXPECT().Collection().Return(s.collectionID).Maybe()
+	segment.EXPECT().Partition().Return(partitionID).Maybe()
+	segment.EXPECT().Type().Return(segments.SegmentTypeGrowing).Maybe()
+	segment.EXPECT().Level().Return(datapb.SegmentLevel_Legacy).Maybe()
+	segment.EXPECT().PinIfNotReleased().Return(nil).Once()
+	segment.EXPECT().InsertCount().Return(targetOffset).Once()
+	segment.EXPECT().Unpin().Maybe()
+
+	s.manager.Segment.Put(ctx, segments.SegmentTypeGrowing, segment)
+	sd.distribution.AddGrowing(SegmentEntry{
+		NodeID:      paramtable.GetNodeID(),
+		SegmentID:   segmentID,
+		PartitionID: partitionID,
+		Version:     1,
+	})
+	worker := &cluster.MockWorker{}
+	worker.EXPECT().ReleaseSegments(mock.Anything, mock.AnythingOfType("*querypb.ReleaseSegmentsRequest")).Return(nil).Once()
+	s.workerManager.EXPECT().GetWorker(mock.Anything, paramtable.GetNodeID()).Return(worker, nil).Once()
+
+	err = sd.textSourceProvider.PrepareTextReleaseHandoff(ctx, 10000, []syncmgr.TextReleaseHandoffSegment{
+		{
+			SegmentID:    segmentID,
+			TargetOffset: targetOffset,
+		},
+	})
+	s.Require().NoError(err)
+
+	err = sd.ReleaseSegments(ctx, &querypb.ReleaseSegmentsRequest{
+		Base:         commonpbutil.NewMsgBase(),
+		NodeID:       paramtable.GetNodeID(),
+		CollectionID: s.collectionID,
+		SegmentIDs:   []int64{segmentID},
+		Scope:        querypb.DataScope_Streaming,
+		Shard:        s.vchannelName,
+	}, false)
+	s.Require().NoError(err)
+}
+
+func (s *DelegatorDataSuite) TestReleaseTextGrowingAfterFencePreparedHandoff() {
+	ctx := context.Background()
+	s.workerManager = &cluster.MockManager{}
+	s.manager = segments.NewManager()
+	s.loader = &segments.MockLoader{}
+	s.genTextCollection()
+
+	delegator, err := NewShardDelegator(
+		ctx,
+		s.collectionID,
+		s.replicaID,
+		s.vchannelName,
+		s.version,
+		s.workerManager,
+		s.manager,
+		s.loader,
+		10000,
+		nil,
+		s.chunkManager,
+		NewChannelQueryView(nil, nil, nil, initialTargetVersion),
+		nil)
+	s.Require().NoError(err)
+	sd := delegator.(*shardDelegator)
+	defer sd.Close()
+
+	const segmentID = int64(1001)
+	sd.distribution.AddGrowing(SegmentEntry{
+		NodeID:      paramtable.GetNodeID(),
+		SegmentID:   segmentID,
+		PartitionID: 500,
+		Version:     1,
+	})
+
+	err = sd.textSourceProvider.PrepareTextReleaseHandoff(ctx, 10000, []syncmgr.TextReleaseHandoffSegment{
+		{SegmentID: segmentID},
+	})
+	s.Require().NoError(err)
+	worker := &cluster.MockWorker{}
+	worker.EXPECT().ReleaseSegments(mock.Anything, mock.AnythingOfType("*querypb.ReleaseSegmentsRequest")).Return(nil).Once()
+	s.workerManager.EXPECT().GetWorker(mock.Anything, paramtable.GetNodeID()).Return(worker, nil).Once()
+
+	err = sd.ReleaseSegments(ctx, &querypb.ReleaseSegmentsRequest{
+		Base:         commonpbutil.NewMsgBase(),
+		NodeID:       paramtable.GetNodeID(),
+		CollectionID: s.collectionID,
+		SegmentIDs:   []int64{segmentID},
+		Scope:        querypb.DataScope_Streaming,
+		Shard:        s.vchannelName,
+		Checkpoint:   &msgpb.MsgPosition{Timestamp: 10000},
+	}, false)
+	s.Require().NoError(err)
+}
+
+func (s *DelegatorDataSuite) TestReleaseTextGrowingAfterFencePreparedHandoffRejectedBeyondFence() {
+	ctx := context.Background()
+	s.workerManager = &cluster.MockManager{}
+	s.manager = segments.NewManager()
+	s.loader = &segments.MockLoader{}
+	s.genTextCollection()
+
+	delegator, err := NewShardDelegator(
+		ctx,
+		s.collectionID,
+		s.replicaID,
+		s.vchannelName,
+		s.version,
+		s.workerManager,
+		s.manager,
+		s.loader,
+		10000,
+		nil,
+		s.chunkManager,
+		NewChannelQueryView(nil, nil, nil, initialTargetVersion),
+		nil)
+	s.Require().NoError(err)
+	sd := delegator.(*shardDelegator)
+	defer sd.Close()
+
+	const segmentID = int64(1001)
+	sd.distribution.AddGrowing(SegmentEntry{
+		NodeID:      paramtable.GetNodeID(),
+		SegmentID:   segmentID,
+		PartitionID: 500,
+		Version:     1,
+	})
+
+	err = sd.textSourceProvider.PrepareTextReleaseHandoff(ctx, 10000, []syncmgr.TextReleaseHandoffSegment{
+		{SegmentID: segmentID},
+	})
+	s.Require().NoError(err)
+
+	err = sd.ReleaseSegments(ctx, &querypb.ReleaseSegmentsRequest{
+		Base:         commonpbutil.NewMsgBase(),
+		NodeID:       paramtable.GetNodeID(),
+		CollectionID: s.collectionID,
+		SegmentIDs:   []int64{segmentID},
+		Scope:        querypb.DataScope_Streaming,
+		Shard:        s.vchannelName,
+		Checkpoint:   &msgpb.MsgPosition{Timestamp: 10001},
+	}, false)
+	s.Require().Error(err)
+	s.ErrorIs(err, merr.ErrServiceTooManyRequests)
+}
+
+func (s *DelegatorDataSuite) TestReleaseTextGrowingAfterNoRetainPreparedHandoff() {
+	ctx := context.Background()
+	s.workerManager = &cluster.MockManager{}
+	s.manager = segments.NewManager()
+	s.loader = &segments.MockLoader{}
+	s.genTextCollection()
+
+	delegator, err := NewShardDelegator(
+		ctx,
+		s.collectionID,
+		s.replicaID,
+		s.vchannelName,
+		s.version,
+		s.workerManager,
+		s.manager,
+		s.loader,
+		10000,
+		nil,
+		s.chunkManager,
+		NewChannelQueryView(nil, nil, nil, initialTargetVersion),
+		nil)
+	s.Require().NoError(err)
+	sd := delegator.(*shardDelegator)
+	defer sd.Close()
+
+	const segmentID = int64(1001)
+	sd.distribution.AddGrowing(SegmentEntry{
+		NodeID:      paramtable.GetNodeID(),
+		SegmentID:   segmentID,
+		PartitionID: 500,
+		Version:     1,
+	})
+
+	err = sd.textSourceProvider.PrepareTextReleaseHandoff(ctx, 10000, []syncmgr.TextReleaseHandoffSegment{
+		{SegmentID: segmentID},
+	})
+	s.Require().NoError(err)
+
+	worker := &cluster.MockWorker{}
+	worker.EXPECT().ReleaseSegments(mock.Anything, mock.AnythingOfType("*querypb.ReleaseSegmentsRequest")).Return(nil).Once()
+	s.workerManager.EXPECT().GetWorker(mock.Anything, paramtable.GetNodeID()).Return(worker, nil).Once()
+
+	err = sd.ReleaseSegments(ctx, &querypb.ReleaseSegmentsRequest{
+		Base:         commonpbutil.NewMsgBase(),
+		NodeID:       paramtable.GetNodeID(),
+		CollectionID: s.collectionID,
+		SegmentIDs:   []int64{segmentID},
+		Scope:        querypb.DataScope_Streaming,
+		Shard:        s.vchannelName,
+		Checkpoint:   &msgpb.MsgPosition{Timestamp: 10000},
+	}, false)
+	s.Require().NoError(err)
+}
+
+func (s *DelegatorDataSuite) TestReleaseTextGrowingWithoutPreparedHandoffRejected() {
+	ctx := context.Background()
+	s.workerManager = &cluster.MockManager{}
+	s.manager = segments.NewManager()
+	s.loader = &segments.MockLoader{}
+	s.genTextCollection()
+
+	delegator, err := NewShardDelegator(
+		ctx,
+		s.collectionID,
+		s.replicaID,
+		s.vchannelName,
+		s.version,
+		s.workerManager,
+		s.manager,
+		s.loader,
+		10000,
+		nil,
+		s.chunkManager,
+		NewChannelQueryView(nil, nil, nil, initialTargetVersion),
+		nil)
+	s.Require().NoError(err)
+	sd := delegator.(*shardDelegator)
+	defer sd.Close()
+
+	const segmentID = int64(1001)
+	sd.distribution.AddGrowing(SegmentEntry{
+		NodeID:      paramtable.GetNodeID(),
+		SegmentID:   segmentID,
+		PartitionID: 500,
+		Version:     1,
+	})
+
+	err = sd.ReleaseSegments(ctx, &querypb.ReleaseSegmentsRequest{
+		Base:         commonpbutil.NewMsgBase(),
+		NodeID:       paramtable.GetNodeID(),
+		CollectionID: s.collectionID,
+		SegmentIDs:   []int64{segmentID},
+		Scope:        querypb.DataScope_Streaming,
+		Shard:        s.vchannelName,
+		Checkpoint:   &msgpb.MsgPosition{Timestamp: 10000},
+	}, false)
+	s.Require().Error(err)
+	s.True(errors.Is(err, merr.ErrServiceTooManyRequests), "unexpected error: %v", err)
+}
+
+func (s *DelegatorDataSuite) TestReleaseTextGrowingDroppedChannelWithoutPreparedHandoff() {
+	ctx := context.Background()
+	s.workerManager = &cluster.MockManager{}
+	s.manager = segments.NewManager()
+	s.loader = &segments.MockLoader{}
+	s.genTextCollection()
+
+	delegator, err := NewShardDelegator(
+		ctx,
+		s.collectionID,
+		s.replicaID,
+		s.vchannelName,
+		s.version,
+		s.workerManager,
+		s.manager,
+		s.loader,
+		10000,
+		nil,
+		s.chunkManager,
+		NewChannelQueryView(nil, nil, nil, initialTargetVersion),
+		nil)
+	s.Require().NoError(err)
+	sd := delegator.(*shardDelegator)
+	defer sd.Close()
+
+	const segmentID = int64(1001)
+	sd.distribution.AddGrowing(SegmentEntry{
+		NodeID:      paramtable.GetNodeID(),
+		SegmentID:   segmentID,
+		PartitionID: 500,
+		Version:     1,
+	})
+
+	worker := &cluster.MockWorker{}
+	worker.EXPECT().ReleaseSegments(mock.Anything, mock.AnythingOfType("*querypb.ReleaseSegmentsRequest")).Return(nil).Once()
+	s.workerManager.EXPECT().GetWorker(mock.Anything, paramtable.GetNodeID()).Return(worker, nil).Once()
+
+	err = sd.ReleaseSegments(ctx, &querypb.ReleaseSegmentsRequest{
+		Base:         commonpbutil.NewMsgBase(),
+		NodeID:       paramtable.GetNodeID(),
+		CollectionID: s.collectionID,
+		SegmentIDs:   []int64{segmentID},
+		Scope:        querypb.DataScope_Streaming,
+		Shard:        s.vchannelName,
+		Checkpoint:   &msgpb.MsgPosition{Timestamp: typeutil.MaxTimestamp},
+	}, false)
+	s.Require().NoError(err)
+}
+
 func (s *DelegatorDataSuite) TestLoadPartitionStats() {
 	segStats := make(map[UniqueID]storage.SegmentStats)
 	centroid := []float32{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0}
@@ -1763,18 +2158,6 @@ func (s *DelegatorDataSuite) TestDelegatorData_ExcludeSegments() {
 	s.delegator.TryCleanExcludedSegments(4)
 	s.True(s.delegator.VerifyExcludedSegments(1, 1))
 	s.True(s.delegator.VerifyExcludedSegments(1, 5))
-}
-
-func (s *DelegatorDataSuite) TestProcessManualFlush_NilManager() {
-	// When growingFlushManager is nil (non-TEXT collection), should return immediately without panic
-	s.Nil(s.delegator.growingFlushManager)
-	s.delegator.ProcessManualFlush(context.Background(), 1000)
-}
-
-func (s *DelegatorDataSuite) TestProcessManualFlush_NilTracker() {
-	// When checkpointTracker is nil, should return immediately without panic
-	s.delegator.checkpointTracker = nil
-	s.delegator.ProcessManualFlush(context.Background(), 1000)
 }
 
 func TestDelegatorDataSuite(t *testing.T) {

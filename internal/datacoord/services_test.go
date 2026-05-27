@@ -77,7 +77,7 @@ func (s *ServerSuite) SetupSuite() {
 		<-ctx.Done()
 		return ctx.Err()
 	})
-	b.EXPECT().GetLatestWALLocated(mock.Anything, mock.Anything).Return(0, true)
+	b.EXPECT().GetLatestWALLocated(mock.Anything, mock.Anything).Return(0, true).Maybe()
 	balance.Register(b)
 }
 
@@ -144,6 +144,21 @@ func (s *ServerSuite) TestGetFlushState_ByFlushTs() {
 	s.EqualValues(&milvuspb.GetFlushStateResponse{
 		Status:  merr.Success(),
 		Flushed: true,
+	}, resp)
+}
+
+func (s *ServerSuite) TestGetFlushState_ByFlushTsMissingCheckpoint() {
+	s.mockMixCoord.EXPECT().DescribeCollectionInternal(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{
+		Status:              merr.Success(),
+		CollectionID:        0,
+		VirtualChannelNames: []string{"missing-cp-channel"},
+	}, nil)
+
+	resp, err := s.testServer.GetFlushState(context.TODO(), &datapb.GetFlushStateRequest{FlushTs: 13})
+	s.NoError(err)
+	s.EqualValues(&milvuspb.GetFlushStateResponse{
+		Status:  merr.Success(),
+		Flushed: false,
 	}, resp)
 }
 

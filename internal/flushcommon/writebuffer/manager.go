@@ -49,6 +49,9 @@ type BufferManager interface {
 
 	// HasTextFields returns true if the collection on this channel has TEXT fields.
 	HasTextFields(channel string) bool
+	// GetTextFlushProgress returns TEXT growing-source progress for the given channel.
+	// If segmentIDs is empty, all tracked TEXT growing-source segments are returned.
+	GetTextFlushProgress(ctx context.Context, channel string, segmentIDs []int64, fenceTs uint64) ([]TextFlushSegmentProgress, error)
 
 	// Start makes the background check start to work.
 	Start()
@@ -247,6 +250,18 @@ func (m *bufferManager) HasTextFields(channel string) bool {
 		return false
 	}
 	return buf.HasTextFields()
+}
+
+func (m *bufferManager) GetTextFlushProgress(ctx context.Context, channel string, segmentIDs []int64, fenceTs uint64) ([]TextFlushSegmentProgress, error) {
+	buf, loaded := m.buffers.Get(channel)
+	if !loaded {
+		log.Ctx(ctx).Warn("write buffer not found when get text flush progress",
+			zap.String("channel", channel),
+			zap.Int64s("segmentIDs", segmentIDs),
+			zap.Uint64("fenceTs", fenceTs))
+		return nil, merr.WrapErrChannelNotFound(channel)
+	}
+	return buf.GetTextFlushProgress(ctx, segmentIDs, fenceTs)
 }
 
 // GetCheckpoint returns checkpoint for provided channel.

@@ -115,6 +115,53 @@ func (_c *MockMetaWriter_UpdateSync_Call) RunAndReturn(run func(context.Context,
 	return _c
 }
 
+// UpdateTextSourceSync provides a mock function with given fields: _a0, _a1
+func (_m *MockMetaWriter) UpdateTextSourceSync(_a0 context.Context, _a1 *TextSourceSyncTask) error {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateTextSourceSync")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *TextSourceSyncTask) error); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockMetaWriter_UpdateTextSourceSync_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateTextSourceSync'
+type MockMetaWriter_UpdateTextSourceSync_Call struct {
+	*mock.Call
+}
+
+// UpdateTextSourceSync is a helper method to define mock.On call
+//   - _a0 context.Context
+//   - _a1 *TextSourceSyncTask
+func (_e *MockMetaWriter_Expecter) UpdateTextSourceSync(_a0 interface{}, _a1 interface{}) *MockMetaWriter_UpdateTextSourceSync_Call {
+	return &MockMetaWriter_UpdateTextSourceSync_Call{Call: _e.mock.On("UpdateTextSourceSync", _a0, _a1)}
+}
+
+func (_c *MockMetaWriter_UpdateTextSourceSync_Call) Run(run func(_a0 context.Context, _a1 *TextSourceSyncTask)) *MockMetaWriter_UpdateTextSourceSync_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*TextSourceSyncTask))
+	})
+	return _c
+}
+
+func (_c *MockMetaWriter_UpdateTextSourceSync_Call) Return(_a0 error) *MockMetaWriter_UpdateTextSourceSync_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockMetaWriter_UpdateTextSourceSync_Call) RunAndReturn(run func(context.Context, *TextSourceSyncTask) error) *MockMetaWriter_UpdateTextSourceSync_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewMockMetaWriter creates a new instance of MockMetaWriter. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockMetaWriter(t interface {

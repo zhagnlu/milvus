@@ -3,6 +3,7 @@ package writebuffer
 import (
 	"time"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
@@ -13,6 +14,12 @@ type WriteBufferOption func(opt *writeBufferOption)
 
 type TaskObserverCallback func(t syncmgr.Task, err error)
 
+// TextGrowingSourceResolver resolves an optional in-memory growing segment source
+// for TEXT flush. TextSourcePending means the growing source exists but has not
+// caught up to targetOffset yet; WriteBuffer should only be used when the state
+// is TextSourceUnavailable.
+type TextGrowingSourceResolver func(segmentID int64, targetOffset int64, endPos *msgpb.MsgPosition) (syncmgr.TextFlushSource, syncmgr.TextSourceState)
+
 type writeBufferOption struct {
 	idAllocator  allocator.Interface
 	syncPolicies []SyncPolicy
@@ -22,6 +29,9 @@ type writeBufferOption struct {
 	errorHandler         func(error)
 	taskObserverCallback TaskObserverCallback
 	storageVersion       int64
+
+	textGrowingSourceResolver TextGrowingSourceResolver
+	textSourceRetryInterval   time.Duration
 }
 
 func defaultWBOption(metacache metacache.MetaCache) *writeBufferOption {
@@ -74,5 +84,11 @@ func WithErrorHandler(handler func(err error)) WriteBufferOption {
 func WithTaskObserverCallback(callback TaskObserverCallback) WriteBufferOption {
 	return func(opt *writeBufferOption) {
 		opt.taskObserverCallback = callback
+	}
+}
+
+func WithTextGrowingSourceResolver(resolver TextGrowingSourceResolver) WriteBufferOption {
+	return func(opt *writeBufferOption) {
+		opt.textGrowingSourceResolver = resolver
 	}
 }

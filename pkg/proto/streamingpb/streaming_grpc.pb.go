@@ -469,6 +469,7 @@ var StreamingCoordAssignmentService_ServiceDesc = grpc.ServiceDesc{
 const (
 	StreamingNodeHandlerService_GetReplicateCheckpoint_FullMethodName = "/milvus.proto.streaming.StreamingNodeHandlerService/GetReplicateCheckpoint"
 	StreamingNodeHandlerService_GetSalvageCheckpoint_FullMethodName   = "/milvus.proto.streaming.StreamingNodeHandlerService/GetSalvageCheckpoint"
+	StreamingNodeHandlerService_GetTextFlushProgress_FullMethodName   = "/milvus.proto.streaming.StreamingNodeHandlerService/GetTextFlushProgress"
 	StreamingNodeHandlerService_Produce_FullMethodName                = "/milvus.proto.streaming.StreamingNodeHandlerService/Produce"
 	StreamingNodeHandlerService_Consume_FullMethodName                = "/milvus.proto.streaming.StreamingNodeHandlerService/Consume"
 )
@@ -483,6 +484,9 @@ type StreamingNodeHandlerServiceClient interface {
 	// GetSalvageCheckpoint returns all salvage checkpoints captured during force promote.
 	// Returns an empty list if no force promote has occurred.
 	GetSalvageCheckpoint(ctx context.Context, in *GetSalvageCheckpointRequest, opts ...grpc.CallOption) (*GetSalvageCheckpointResponse, error)
+	// GetTextFlushProgress returns the WriteBuffer-owned TEXT flush progress
+	// after the flusher has processed the requested fence timestamp.
+	GetTextFlushProgress(ctx context.Context, in *GetTextFlushProgressRequest, opts ...grpc.CallOption) (*GetTextFlushProgressResponse, error)
 	// Produce is a bi-directional streaming RPC to send messages to a channel.
 	// All messages sent to a channel will be assigned a unique messageID.
 	// The messageID is used to identify the message in the channel.
@@ -520,6 +524,15 @@ func (c *streamingNodeHandlerServiceClient) GetReplicateCheckpoint(ctx context.C
 func (c *streamingNodeHandlerServiceClient) GetSalvageCheckpoint(ctx context.Context, in *GetSalvageCheckpointRequest, opts ...grpc.CallOption) (*GetSalvageCheckpointResponse, error) {
 	out := new(GetSalvageCheckpointResponse)
 	err := c.cc.Invoke(ctx, StreamingNodeHandlerService_GetSalvageCheckpoint_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *streamingNodeHandlerServiceClient) GetTextFlushProgress(ctx context.Context, in *GetTextFlushProgressRequest, opts ...grpc.CallOption) (*GetTextFlushProgressResponse, error) {
+	out := new(GetTextFlushProgressResponse)
+	err := c.cc.Invoke(ctx, StreamingNodeHandlerService_GetTextFlushProgress_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -598,6 +611,9 @@ type StreamingNodeHandlerServiceServer interface {
 	// GetSalvageCheckpoint returns all salvage checkpoints captured during force promote.
 	// Returns an empty list if no force promote has occurred.
 	GetSalvageCheckpoint(context.Context, *GetSalvageCheckpointRequest) (*GetSalvageCheckpointResponse, error)
+	// GetTextFlushProgress returns the WriteBuffer-owned TEXT flush progress
+	// after the flusher has processed the requested fence timestamp.
+	GetTextFlushProgress(context.Context, *GetTextFlushProgressRequest) (*GetTextFlushProgressResponse, error)
 	// Produce is a bi-directional streaming RPC to send messages to a channel.
 	// All messages sent to a channel will be assigned a unique messageID.
 	// The messageID is used to identify the message in the channel.
@@ -624,6 +640,9 @@ func (UnimplementedStreamingNodeHandlerServiceServer) GetReplicateCheckpoint(con
 }
 func (UnimplementedStreamingNodeHandlerServiceServer) GetSalvageCheckpoint(context.Context, *GetSalvageCheckpointRequest) (*GetSalvageCheckpointResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSalvageCheckpoint not implemented")
+}
+func (UnimplementedStreamingNodeHandlerServiceServer) GetTextFlushProgress(context.Context, *GetTextFlushProgressRequest) (*GetTextFlushProgressResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTextFlushProgress not implemented")
 }
 func (UnimplementedStreamingNodeHandlerServiceServer) Produce(StreamingNodeHandlerService_ProduceServer) error {
 	return status.Errorf(codes.Unimplemented, "method Produce not implemented")
@@ -675,6 +694,24 @@ func _StreamingNodeHandlerService_GetSalvageCheckpoint_Handler(srv interface{}, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StreamingNodeHandlerServiceServer).GetSalvageCheckpoint(ctx, req.(*GetSalvageCheckpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StreamingNodeHandlerService_GetTextFlushProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTextFlushProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamingNodeHandlerServiceServer).GetTextFlushProgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamingNodeHandlerService_GetTextFlushProgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamingNodeHandlerServiceServer).GetTextFlushProgress(ctx, req.(*GetTextFlushProgressRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -745,6 +782,10 @@ var StreamingNodeHandlerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSalvageCheckpoint",
 			Handler:    _StreamingNodeHandlerService_GetSalvageCheckpoint_Handler,
+		},
+		{
+			MethodName: "GetTextFlushProgress",
+			Handler:    _StreamingNodeHandlerService_GetTextFlushProgress_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -26,11 +26,14 @@ import "C"
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/cdata"
+	"github.com/samber/lo"
 
+	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 )
 
@@ -47,10 +50,11 @@ type TextColumnConfig struct {
 // SegmentWriterConfig represents configuration for SegmentWriter.
 // ReadVersion and RetryLimit are used by the Go-layer transaction logic,
 type SegmentWriterConfig struct {
-	SegmentPath string
-	ReadVersion int64  // manifest version for transaction (Go-layer only)
-	RetryLimit  uint32 // transaction retry limit (Go-layer only)
-	TextColumns []TextColumnConfig
+	SegmentPath  string
+	ReadVersion  int64  // manifest version for transaction (Go-layer only)
+	RetryLimit   uint32 // transaction retry limit (Go-layer only)
+	TextColumns  []TextColumnConfig
+	ColumnGroups []storagecommon.ColumnGroup
 }
 
 // SegmentWriterResult contains the result of closing a SegmentWriter.
@@ -85,8 +89,8 @@ func NewFFISegmentWriter(
 		return nil, fmt.Errorf("storageConfig must not be nil")
 	}
 
-	// create properties
-	cProperties, err := MakePropertiesFromStorageConfig(storageConfig, nil)
+	extra := segmentWriterProperties(schema, config.ColumnGroups)
+	cProperties, err := MakePropertiesFromStorageConfig(storageConfig, extra)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +114,26 @@ func NewFFISegmentWriter(
 		basePath:    config.SegmentPath,
 		readVersion: config.ReadVersion,
 	}, nil
+}
+
+func segmentWriterProperties(schema *arrow.Schema, columnGroups []storagecommon.ColumnGroup) map[string]string {
+	extra := map[string]string{
+		PropertyWriterFormat: "parquet",
+	}
+	if len(columnGroups) == 0 {
+		extra[PropertyWriterPolicy] = "single"
+		return extra
+	}
+
+	pattern := strings.Join(lo.Map(columnGroups, func(columnGroup storagecommon.ColumnGroup, _ int) string {
+		return strings.Join(lo.Map(columnGroup.Columns, func(index int, _ int) string {
+			return schema.Field(index).Name
+		}), "|")
+	}), ",")
+
+	extra[PropertyWriterPolicy] = "schema_based"
+	extra[PropertyWriterSchemaBasedPattern] = pattern
+	return extra
 }
 
 // Write writes a record batch to the segment writer.

@@ -476,10 +476,11 @@ func NewPackedTextManifestWriter(
 
 	// build segment writer config
 	config := &packed.SegmentWriterConfig{
-		SegmentPath: basePath,
-		ReadVersion: baseVersion,
-		RetryLimit:  3,
-		TextColumns: textColumnConfigs,
+		SegmentPath:  basePath,
+		ReadVersion:  baseVersion,
+		RetryLimit:   3,
+		TextColumns:  textColumnConfigs,
+		ColumnGroups: columnGroups,
 	}
 
 	writer, err := packed.NewFFISegmentWriter(arrowSchema, config, storageConfig)

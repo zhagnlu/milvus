@@ -18,7 +18,7 @@ import (
 )
 
 // asyncAllocSegment allocates a new growing segment asynchronously.
-func (m *partitionManager) asyncAllocSegment(schemaVersion int32) {
+func (m *partitionManager) asyncAllocSegment(schemaVersion int32, hasTextFields bool) {
 	if m.onAllocating != nil {
 		m.Logger().Debug("segment alloc worker is already on allocating")
 		// manager is already on allocating.
@@ -33,6 +33,7 @@ func (m *partitionManager) asyncAllocSegment(schemaVersion int32) {
 		vchannel:      m.vchannel,
 		wal:           m.wal.Get(),
 		schemaVersion: schemaVersion,
+		hasTextFields: hasTextFields,
 	}
 	w.SetLogger(m.Logger())
 	// It should always done asynchronously.
@@ -54,6 +55,7 @@ type segmentAllocWorker struct {
 	storageVersion int64             // storage version determined at first attempt
 	limitation     segmentLimitation // segment limitation determined at first attempt
 	schemaVersion  int32
+	hasTextFields  bool
 }
 
 // do is the main loop of the segment allocation worker.
@@ -145,7 +147,7 @@ func (w *segmentAllocWorker) initSegmentConfig() error {
 
 	// Determine storage version.
 	w.storageVersion = storage.StorageV2
-	if paramtable.Get().CommonCfg.UseLoonFFI.GetAsBool() {
+	if w.hasTextFields || paramtable.Get().CommonCfg.UseLoonFFI.GetAsBool() {
 		w.storageVersion = storage.StorageV3
 	}
 

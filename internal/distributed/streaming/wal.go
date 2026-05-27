@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/consumer"
 	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/producer"
+	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/client"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
@@ -81,6 +82,10 @@ func (w *walAccesserImpl) Balancer() Balancer {
 
 func (w *walAccesserImpl) Local() Local {
 	return localServiceImpl{w}
+}
+
+func (w *walAccesserImpl) GetTextFlushProgress(ctx context.Context, vchannel string, segmentIDs []int64, fenceTs uint64) ([]writebuffer.TextFlushSegmentProgress, error) {
+	return w.handlerClient.GetTextFlushProgress(ctx, vchannel, segmentIDs, fenceTs)
 }
 
 // ControlChannel returns the control channel name of the wal.

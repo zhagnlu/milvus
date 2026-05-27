@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache/pkoracle"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -72,6 +73,36 @@ func (s *WriteBufferSuite) TestHasSegment() {
 	s.wb.getOrCreateBuffer(segmentID, 0)
 
 	s.True(s.wb.HasSegment(segmentID))
+}
+
+func (s *WriteBufferSuite) TestCreateNewGrowingSegmentStorageVersion() {
+	param := paramtable.Get()
+	param.Save(param.CommonCfg.UseLoonFFI.Key, "false")
+	defer param.Reset(param.CommonCfg.UseLoonFFI.Key)
+
+	s.Run("non_text_uses_v2_when_ffi_disabled", func() {
+		s.wb.hasTextFields = false
+		s.metacache.EXPECT().GetSegmentByID(int64(2001)).Return(nil, false).Once()
+		s.metacache.EXPECT().AddSegment(mock.MatchedBy(func(info *datapb.SegmentInfo) bool {
+			return info.GetStorageVersion() == storage.StorageV2 &&
+				info.GetManifestPath() == "" &&
+				info.GetSchemaVersion() == 11
+		}), mock.Anything, mock.Anything, mock.Anything).Return().Once()
+
+		s.wb.CreateNewGrowingSegment(10, 2001, nil, 11)
+	})
+
+	s.Run("text_forces_v3_manifest_when_ffi_disabled", func() {
+		s.wb.hasTextFields = true
+		s.metacache.EXPECT().GetSegmentByID(int64(2002)).Return(nil, false).Once()
+		s.metacache.EXPECT().AddSegment(mock.MatchedBy(func(info *datapb.SegmentInfo) bool {
+			return info.GetStorageVersion() == storage.StorageV3 &&
+				info.GetManifestPath() != "" &&
+				info.GetSchemaVersion() == 12
+		}), mock.Anything, mock.Anything, mock.Anything).Return().Once()
+
+		s.wb.CreateNewGrowingSegment(10, 2002, nil, 12)
+	})
 }
 
 func (s *WriteBufferSuite) TestFlushSegments() {

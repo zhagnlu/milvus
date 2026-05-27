@@ -8,6 +8,8 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
+	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/assignment"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
@@ -148,6 +150,73 @@ func (hc *handlerClientImpl) GetSalvageCheckpoint(ctx context.Context, pchannel 
 		return nil, nil
 	}
 	return cps.([]*wal.ReplicateCheckpoint), nil
+}
+
+// GetTextFlushProgress gets TEXT flush progress of segments on the vchannel.
+func (hc *handlerClientImpl) GetTextFlushProgress(ctx context.Context, vchannel string, segmentIDs []int64, fenceTs uint64) ([]writebuffer.TextFlushSegmentProgress, error) {
+	if !hc.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return nil, ErrClientClosed
+	}
+	defer hc.lifetime.Done()
+
+	pchannel := funcutil.ToPhysicalChannel(vchannel)
+	logger := log.With(
+		zap.String("pchannel", pchannel),
+		zap.String("vchannel", vchannel),
+		zap.Int64s("segmentIDs", segmentIDs),
+		zap.Uint64("fenceTs", fenceTs),
+		zap.String("handler", "text flush progress"),
+	)
+	progress, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+		if assign.Channel.AccessMode != types.AccessModeRW {
+			return nil, errors.New("text flush progress can only be read for RW channel")
+		}
+		handlerService, err := hc.service.GetService(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := handlerService.GetTextFlushProgress(ctx, &streamingpb.GetTextFlushProgressRequest{
+			Pchannel:   types.NewProtoFromPChannelInfo(assign.Channel),
+			Vchannel:   vchannel,
+			SegmentIds: segmentIDs,
+			FenceTs:    fenceTs,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return unmarshalTextFlushSegmentProgress(resp.GetProgress()), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		return nil, nil
+	}
+	return progress.([]writebuffer.TextFlushSegmentProgress), nil
+}
+
+func unmarshalTextFlushSegmentProgress(progress []*streamingpb.TextFlushSegmentProgress) []writebuffer.TextFlushSegmentProgress {
+	result := make([]writebuffer.TextFlushSegmentProgress, 0, len(progress))
+	for _, item := range progress {
+		result = append(result, writebuffer.TextFlushSegmentProgress{
+			SegmentID:          item.GetSegmentId(),
+			TargetOffset:       item.GetTargetOffset(),
+			HasGrowingProgress: item.GetHasGrowingProgress(),
+			SourceMode:         unmarshalTextFlushSourceMode(item.GetSourceMode()),
+		})
+	}
+	return result
+}
+
+func unmarshalTextFlushSourceMode(mode streamingpb.TextFlushSourceMode) metacache.FlushSourceMode {
+	switch mode {
+	case streamingpb.TextFlushSourceMode_TEXT_FLUSH_SOURCE_WRITE_BUFFER:
+		return metacache.FlushSourceWriteBuffer
+	case streamingpb.TextFlushSourceMode_TEXT_FLUSH_SOURCE_GROWING:
+		return metacache.FlushSourceGrowing
+	default:
+		return metacache.FlushSourceUnknown
+	}
 }
 
 // GetWALMetricsIfLocal gets the metrics of the local wal.

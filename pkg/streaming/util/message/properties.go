@@ -17,7 +17,10 @@ const (
 	messageNotPersisteted                   = "_np"  // check if the message is unpersisted.
 	messagePChannelLevel                    = "_pcl" // mark the message as pchannel level message.
 	messageReplicateMesssageHeader          = "_rh"  // replicate message header.
+	messageTextReleaseFence                 = "_trf" // marks an internal TEXT release fence ManualFlush message.
 )
+
+const messageTextReleaseFenceValue = "true"
 
 var (
 	_ RProperties = propertiesImpl{}
@@ -84,6 +87,19 @@ func (prop propertiesImpl) EstimateSize() int {
 		size += len(k) + len(v)
 	}
 	return size
+}
+
+// IsTextReleaseFence returns true for an internal TEXT release fence ManualFlush
+// message.
+func IsTextReleaseFence(msg BasicMessage) bool {
+	value, ok := msg.Properties().Get(messageTextReleaseFence)
+	return ok && value == messageTextReleaseFenceValue
+}
+
+// TextReleaseFenceProperty returns the internal property used to mark a
+// ManualFlush message as a TEXT release fence.
+func TextReleaseFenceProperty() (string, string) {
+	return messageTextReleaseFence, messageTextReleaseFenceValue
 }
 
 // CheckIfMessageFromStreaming checks if the message is from streaming.

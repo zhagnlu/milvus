@@ -242,52 +242,6 @@ func (_c *MockBufferManager_FlushChannel_Call) RunAndReturn(run func(context.Con
 	return _c
 }
 
-// HasTextFields provides a mock function with given fields: channel
-func (_m *MockBufferManager) HasTextFields(channel string) bool {
-	ret := _m.Called(channel)
-
-	if len(ret) == 0 {
-		panic("no return value specified for HasTextFields")
-	}
-
-	var r0 bool
-	if rf, ok := ret.Get(0).(func(string) bool); ok {
-		r0 = rf(channel)
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-
-	return r0
-}
-
-// MockBufferManager_HasTextFields_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasTextFields'
-type MockBufferManager_HasTextFields_Call struct {
-	*mock.Call
-}
-
-// HasTextFields is a helper method to define mock.On call
-//   - channel string
-func (_e *MockBufferManager_Expecter) HasTextFields(channel interface{}) *MockBufferManager_HasTextFields_Call {
-	return &MockBufferManager_HasTextFields_Call{Call: _e.mock.On("HasTextFields", channel)}
-}
-
-func (_c *MockBufferManager_HasTextFields_Call) Run(run func(channel string)) *MockBufferManager_HasTextFields_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(string))
-	})
-	return _c
-}
-
-func (_c *MockBufferManager_HasTextFields_Call) Return(_a0 bool) *MockBufferManager_HasTextFields_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MockBufferManager_HasTextFields_Call) RunAndReturn(run func(string) bool) *MockBufferManager_HasTextFields_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetCheckpoint provides a mock function with given fields: channel
 func (_m *MockBufferManager) GetCheckpoint(channel string) (*msgpb.MsgPosition, bool, error) {
 	ret := _m.Called(channel)
@@ -349,6 +303,113 @@ func (_c *MockBufferManager_GetCheckpoint_Call) Return(_a0 *msgpb.MsgPosition, _
 }
 
 func (_c *MockBufferManager_GetCheckpoint_Call) RunAndReturn(run func(string) (*msgpb.MsgPosition, bool, error)) *MockBufferManager_GetCheckpoint_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetTextFlushProgress provides a mock function with given fields: ctx, channel, segmentIDs, fenceTs
+func (_m *MockBufferManager) GetTextFlushProgress(ctx context.Context, channel string, segmentIDs []int64, fenceTs uint64) ([]TextFlushSegmentProgress, error) {
+	ret := _m.Called(ctx, channel, segmentIDs, fenceTs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetTextFlushProgress")
+	}
+
+	var r0 []TextFlushSegmentProgress
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, []int64, uint64) ([]TextFlushSegmentProgress, error)); ok {
+		return rf(ctx, channel, segmentIDs, fenceTs)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, []int64, uint64) []TextFlushSegmentProgress); ok {
+		r0 = rf(ctx, channel, segmentIDs, fenceTs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]TextFlushSegmentProgress)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string, []int64, uint64) error); ok {
+		r1 = rf(ctx, channel, segmentIDs, fenceTs)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockBufferManager_GetTextFlushProgress_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetTextFlushProgress'
+type MockBufferManager_GetTextFlushProgress_Call struct {
+	*mock.Call
+}
+
+// GetTextFlushProgress is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channel string
+//   - segmentIDs []int64
+//   - fenceTs uint64
+func (_e *MockBufferManager_Expecter) GetTextFlushProgress(ctx interface{}, channel interface{}, segmentIDs interface{}, fenceTs interface{}) *MockBufferManager_GetTextFlushProgress_Call {
+	return &MockBufferManager_GetTextFlushProgress_Call{Call: _e.mock.On("GetTextFlushProgress", ctx, channel, segmentIDs, fenceTs)}
+}
+
+func (_c *MockBufferManager_GetTextFlushProgress_Call) Run(run func(ctx context.Context, channel string, segmentIDs []int64, fenceTs uint64)) *MockBufferManager_GetTextFlushProgress_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].([]int64), args[3].(uint64))
+	})
+	return _c
+}
+
+func (_c *MockBufferManager_GetTextFlushProgress_Call) Return(_a0 []TextFlushSegmentProgress, _a1 error) *MockBufferManager_GetTextFlushProgress_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockBufferManager_GetTextFlushProgress_Call) RunAndReturn(run func(context.Context, string, []int64, uint64) ([]TextFlushSegmentProgress, error)) *MockBufferManager_GetTextFlushProgress_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// HasTextFields provides a mock function with given fields: channel
+func (_m *MockBufferManager) HasTextFields(channel string) bool {
+	ret := _m.Called(channel)
+
+	if len(ret) == 0 {
+		panic("no return value specified for HasTextFields")
+	}
+
+	var r0 bool
+	if rf, ok := ret.Get(0).(func(string) bool); ok {
+		r0 = rf(channel)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	return r0
+}
+
+// MockBufferManager_HasTextFields_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasTextFields'
+type MockBufferManager_HasTextFields_Call struct {
+	*mock.Call
+}
+
+// HasTextFields is a helper method to define mock.On call
+//   - channel string
+func (_e *MockBufferManager_Expecter) HasTextFields(channel interface{}) *MockBufferManager_HasTextFields_Call {
+	return &MockBufferManager_HasTextFields_Call{Call: _e.mock.On("HasTextFields", channel)}
+}
+
+func (_c *MockBufferManager_HasTextFields_Call) Run(run func(channel string)) *MockBufferManager_HasTextFields_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(string))
+	})
+	return _c
+}
+
+func (_c *MockBufferManager_HasTextFields_Call) Return(_a0 bool) *MockBufferManager_HasTextFields_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockBufferManager_HasTextFields_Call) RunAndReturn(run func(string) bool) *MockBufferManager_HasTextFields_Call {
 	_c.Call.Return(run)
 	return _c
 }

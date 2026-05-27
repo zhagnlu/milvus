@@ -103,7 +103,35 @@ func TestFlushMsgHandler_HandleManualFlush(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestFlushMsgHandler_HandleCreateSegment_TextSkip(t *testing.T) {
+func TestFlushMsgHandler_HandleTextReleaseFenceManualFlush(t *testing.T) {
+	vchannel := "ch-0"
+	textReleaseFenceKey, textReleaseFenceValue := message.TextReleaseFenceProperty()
+
+	wbMgr := writebuffer.NewMockBufferManager(t)
+	wbMgr.EXPECT().FlushChannel(mock.Anything, vchannel, uint64(1000)).Return(nil)
+
+	msg := message.NewManualFlushMessageBuilderV2().
+		WithBroadcast([]string{vchannel}).
+		WithHeader(&message.ManualFlushMessageHeader{
+			CollectionId: 0,
+			FlushTs:      1000,
+			SegmentIds:   []int64{1001},
+		}).
+		WithBody(&message.ManualFlushMessageBody{}).
+		WithProperty(textReleaseFenceKey, textReleaseFenceValue).
+		MustBuildBroadcast().
+		WithBroadcastID(1).
+		SplitIntoMutableMessage()[0]
+
+	handler := newMsgHandler(wbMgr)
+	msgID := mock_message.NewMockMessageID(t)
+	im, err := message.AsImmutableManualFlushMessageV2(msg.WithTimeTick(1000).IntoImmutableMessage(msgID))
+	assert.NoError(t, err)
+	err = handler.HandleManualFlush(im)
+	assert.NoError(t, err)
+}
+
+func TestFlushMsgHandler_HandleCreateSegment(t *testing.T) {
 	vchannel := "ch-0"
 
 	// Build a CreateSegment message with L0 level so that createNewGrowingSegment
@@ -130,11 +158,9 @@ func TestFlushMsgHandler_HandleCreateSegment_TextSkip(t *testing.T) {
 	)
 	assert.NoError(t, err)
 
-	t.Run("TEXT collection skips CreateNewGrowingSegment", func(t *testing.T) {
+	t.Run("TEXT collection creates WriteBuffer shell", func(t *testing.T) {
 		wbMgr := writebuffer.NewMockBufferManager(t)
-		wbMgr.EXPECT().HasTextFields(vchannel).Return(true)
-		// CreateNewGrowingSegment should NOT be called — no expectation set.
-		// If called, testify will fail the test.
+		wbMgr.EXPECT().CreateNewGrowingSegment(mock.Anything, vchannel, int64(10), int64(1001), mock.Anything).Return(nil)
 
 		handler := newMsgHandler(wbMgr)
 		err := handler.HandleCreateSegment(context.Background(), im)
@@ -143,7 +169,6 @@ func TestFlushMsgHandler_HandleCreateSegment_TextSkip(t *testing.T) {
 
 	t.Run("non-TEXT collection calls CreateNewGrowingSegment", func(t *testing.T) {
 		wbMgr := writebuffer.NewMockBufferManager(t)
-		wbMgr.EXPECT().HasTextFields(vchannel).Return(false)
 		wbMgr.EXPECT().CreateNewGrowingSegment(mock.Anything, vchannel, int64(10), int64(1001), mock.Anything).Return(nil)
 
 		handler := newMsgHandler(wbMgr)

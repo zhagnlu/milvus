@@ -2675,6 +2675,7 @@ type queryCoordConfig struct {
 	AutoBalanceInterval        ParamItem `refreshable:"true"`
 	IndexCheckInterval         ParamItem `refreshable:"true"`
 	ChannelTaskTimeout         ParamItem `refreshable:"true"`
+	TextReleaseDrainTimeout    ParamItem `refreshable:"true"`
 	SegmentTaskTimeout         ParamItem `refreshable:"true"`
 	DistPullInterval           ParamItem `refreshable:"false"`
 	HeartbeatAvailableInterval ParamItem `refreshable:"true"`
@@ -3034,6 +3035,16 @@ If this parameter is set false, Milvus simply searches the growing segments with
 		Export:       true,
 	}
 	p.ChannelTaskTimeout.Init(base.mgr)
+
+	p.TextReleaseDrainTimeout = ParamItem{
+		Key:          "queryCoord.textReleaseDrainTimeout",
+		Version:      "2.3",
+		DefaultValue: "120000",
+		PanicIfEmpty: true,
+		Doc:          "timeout in milliseconds for waiting TEXT release fence to be drained by WAL flusher",
+		Export:       true,
+	}
+	p.TextReleaseDrainTimeout.Init(base.mgr)
 
 	p.SegmentTaskTimeout = ParamItem{
 		Key:          "queryCoord.segmentTaskTimeout",

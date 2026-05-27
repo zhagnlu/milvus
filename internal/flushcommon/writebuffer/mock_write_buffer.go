@@ -223,51 +223,6 @@ func (_c *MockWriteBuffer_EvictBuffer_Call) RunAndReturn(run func(...SyncPolicy)
 	return _c
 }
 
-// HasTextFields provides a mock function with no fields
-func (_m *MockWriteBuffer) HasTextFields() bool {
-	ret := _m.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for HasTextFields")
-	}
-
-	var r0 bool
-	if rf, ok := ret.Get(0).(func() bool); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Get(0).(bool)
-	}
-
-	return r0
-}
-
-// MockWriteBuffer_HasTextFields_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasTextFields'
-type MockWriteBuffer_HasTextFields_Call struct {
-	*mock.Call
-}
-
-// HasTextFields is a helper method to define mock.On call
-func (_e *MockWriteBuffer_Expecter) HasTextFields() *MockWriteBuffer_HasTextFields_Call {
-	return &MockWriteBuffer_HasTextFields_Call{Call: _e.mock.On("HasTextFields")}
-}
-
-func (_c *MockWriteBuffer_HasTextFields_Call) Run(run func()) *MockWriteBuffer_HasTextFields_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockWriteBuffer_HasTextFields_Call) Return(_a0 bool) *MockWriteBuffer_HasTextFields_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MockWriteBuffer_HasTextFields_Call) RunAndReturn(run func() bool) *MockWriteBuffer_HasTextFields_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetCheckpoint provides a mock function with no fields
 func (_m *MockWriteBuffer) GetCheckpoint() *msgpb.MsgPosition {
 	ret := _m.Called()
@@ -360,6 +315,66 @@ func (_c *MockWriteBuffer_GetFlushTimestamp_Call) RunAndReturn(run func() uint64
 	return _c
 }
 
+// GetTextFlushProgress provides a mock function with given fields: ctx, segmentIDs, fenceTs
+func (_m *MockWriteBuffer) GetTextFlushProgress(ctx context.Context, segmentIDs []int64, fenceTs uint64) ([]TextFlushSegmentProgress, error) {
+	ret := _m.Called(ctx, segmentIDs, fenceTs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetTextFlushProgress")
+	}
+
+	var r0 []TextFlushSegmentProgress
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, []int64, uint64) ([]TextFlushSegmentProgress, error)); ok {
+		return rf(ctx, segmentIDs, fenceTs)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, []int64, uint64) []TextFlushSegmentProgress); ok {
+		r0 = rf(ctx, segmentIDs, fenceTs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]TextFlushSegmentProgress)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, []int64, uint64) error); ok {
+		r1 = rf(ctx, segmentIDs, fenceTs)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockWriteBuffer_GetTextFlushProgress_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetTextFlushProgress'
+type MockWriteBuffer_GetTextFlushProgress_Call struct {
+	*mock.Call
+}
+
+// GetTextFlushProgress is a helper method to define mock.On call
+//   - ctx context.Context
+//   - segmentIDs []int64
+//   - fenceTs uint64
+func (_e *MockWriteBuffer_Expecter) GetTextFlushProgress(ctx interface{}, segmentIDs interface{}, fenceTs interface{}) *MockWriteBuffer_GetTextFlushProgress_Call {
+	return &MockWriteBuffer_GetTextFlushProgress_Call{Call: _e.mock.On("GetTextFlushProgress", ctx, segmentIDs, fenceTs)}
+}
+
+func (_c *MockWriteBuffer_GetTextFlushProgress_Call) Run(run func(ctx context.Context, segmentIDs []int64, fenceTs uint64)) *MockWriteBuffer_GetTextFlushProgress_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].([]int64), args[2].(uint64))
+	})
+	return _c
+}
+
+func (_c *MockWriteBuffer_GetTextFlushProgress_Call) Return(_a0 []TextFlushSegmentProgress, _a1 error) *MockWriteBuffer_GetTextFlushProgress_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockWriteBuffer_GetTextFlushProgress_Call) RunAndReturn(run func(context.Context, []int64, uint64) ([]TextFlushSegmentProgress, error)) *MockWriteBuffer_GetTextFlushProgress_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // HasSegment provides a mock function with given fields: segmentID
 func (_m *MockWriteBuffer) HasSegment(segmentID int64) bool {
 	ret := _m.Called(segmentID)
@@ -402,6 +417,51 @@ func (_c *MockWriteBuffer_HasSegment_Call) Return(_a0 bool) *MockWriteBuffer_Has
 }
 
 func (_c *MockWriteBuffer_HasSegment_Call) RunAndReturn(run func(int64) bool) *MockWriteBuffer_HasSegment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// HasTextFields provides a mock function with no fields
+func (_m *MockWriteBuffer) HasTextFields() bool {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for HasTextFields")
+	}
+
+	var r0 bool
+	if rf, ok := ret.Get(0).(func() bool); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	return r0
+}
+
+// MockWriteBuffer_HasTextFields_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasTextFields'
+type MockWriteBuffer_HasTextFields_Call struct {
+	*mock.Call
+}
+
+// HasTextFields is a helper method to define mock.On call
+func (_e *MockWriteBuffer_Expecter) HasTextFields() *MockWriteBuffer_HasTextFields_Call {
+	return &MockWriteBuffer_HasTextFields_Call{Call: _e.mock.On("HasTextFields")}
+}
+
+func (_c *MockWriteBuffer_HasTextFields_Call) Run(run func()) *MockWriteBuffer_HasTextFields_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockWriteBuffer_HasTextFields_Call) Return(_a0 bool) *MockWriteBuffer_HasTextFields_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockWriteBuffer_HasTextFields_Call) RunAndReturn(run func() bool) *MockWriteBuffer_HasTextFields_Call {
 	_c.Call.Return(run)
 	return _c
 }

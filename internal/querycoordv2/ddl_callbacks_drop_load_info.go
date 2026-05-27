@@ -21,6 +21,8 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/querycoordv2/job"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
@@ -32,12 +34,6 @@ var errReleaseCollectionNotLoaded = errors.New("release collection not loaded")
 
 // broadcastDropLoadConfigCollectionV2ForReleaseCollection broadcasts the drop load config message for release collection.
 func (s *Server) broadcastDropLoadConfigCollectionV2ForReleaseCollection(ctx context.Context, req *querypb.ReleaseCollectionRequest) error {
-	broadcaster, err := s.startBroadcastWithCollectionIDLock(ctx, req.GetCollectionID())
-	if err != nil {
-		return err
-	}
-	defer broadcaster.Close()
-
 	// double check if the collection is already dropped.
 	coll, err := s.broker.DescribeCollection(ctx, req.GetCollectionID())
 	if err != nil {
@@ -47,6 +43,27 @@ func (s *Server) broadcastDropLoadConfigCollectionV2ForReleaseCollection(ctx con
 	if !s.meta.Exist(ctx, req.GetCollectionID()) {
 		return errReleaseCollectionNotLoaded
 	}
+
+	if err := s.drainTextReleaseIfNeeded(ctx, coll); err != nil {
+		return errors.Wrap(err, "drain TEXT release")
+	}
+
+	broadcaster, err := s.startBroadcastWithCollectionIDLock(ctx, req.GetCollectionID())
+	if err != nil {
+		return err
+	}
+	defer broadcaster.Close()
+
+	// Re-check the collection after TEXT release drain acquires and releases its
+	// own broadcast lock.
+	coll, err = s.broker.DescribeCollection(ctx, req.GetCollectionID())
+	if err != nil {
+		return err
+	}
+	if !s.meta.Exist(ctx, req.GetCollectionID()) {
+		return errReleaseCollectionNotLoaded
+	}
+
 	msg := message.NewDropLoadConfigMessageBuilderV2().
 		WithHeader(&message.DropLoadConfigMessageHeader{
 			DbId:         coll.GetDbId(),
@@ -58,6 +75,30 @@ func (s *Server) broadcastDropLoadConfigCollectionV2ForReleaseCollection(ctx con
 
 	_, err = broadcaster.Broadcast(ctx, msg)
 	return err
+}
+
+func (s *Server) drainTextReleaseIfNeeded(ctx context.Context, coll *milvuspb.DescribeCollectionResponse) error {
+	if !hasTextField(coll.GetSchema()) {
+		return nil
+	}
+	if s.textReleaseDrainer == nil {
+		return errors.New("text release drainer is not initialized")
+	}
+	_, err := s.textReleaseDrainer.DrainTextReleaseChannels(
+		ctx,
+		coll.GetCollectionID(),
+		s.textReleaseDrainer.ReleaseDrainChannels(ctx, coll.GetCollectionID()),
+	)
+	return err
+}
+
+func hasTextField(schema *schemapb.CollectionSchema) bool {
+	for _, field := range schema.GetFields() {
+		if field.GetDataType() == schemapb.DataType_Text {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) dropLoadConfigV2AckCallback(ctx context.Context, result message.BroadcastResultDropLoadConfigMessageV2) error {
