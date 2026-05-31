@@ -33,6 +33,25 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
+func patchCreateSnapshotCollectionInfo(schema *schemapb.CollectionSchema) func() {
+	if schema == nil {
+		schema = &schemapb.CollectionSchema{
+			Name: "test_collection",
+			Fields: []*schemapb.FieldSchema{
+				{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+				{FieldID: 101, Name: "vec", DataType: schemapb.DataType_FloatVector},
+			},
+		}
+	}
+	mockGetCollectionInfo := mockey.Mock((*MetaCache).GetCollectionInfo).
+		Return(&collectionInfo{
+			collID: 100,
+			dbName: "default",
+			schema: newSchemaInfo(schema),
+		}, nil).Build()
+	return mockGetCollectionInfo.UnPatch
+}
+
 // =========================== CreateSnapshotTask Tests ===========================
 
 func TestCreateSnapshotTask_OnEnqueue_Success(t *testing.T) {
@@ -85,11 +104,40 @@ func TestCreateSnapshotTask_PreExecute_Success(t *testing.T) {
 	globalMetaCache = &MetaCache{}
 	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
 	defer mockGetCollectionID.UnPatch()
+	defer patchCreateSnapshotCollectionInfo(nil)()
 
 	err := task.PreExecute(context.Background())
 
 	assert.NoError(t, err)
 	assert.Equal(t, int64(100), task.collectionID)
+}
+
+func TestCreateSnapshotTask_PreExecute_TextFieldRejected(t *testing.T) {
+	task := &createSnapshotTask{
+		req: &milvuspb.CreateSnapshotRequest{
+			Name:           "test_snapshot",
+			DbName:         "default",
+			CollectionName: "test_collection",
+		},
+	}
+
+	globalMetaCache = &MetaCache{}
+	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
+	defer mockGetCollectionID.UnPatch()
+	defer patchCreateSnapshotCollectionInfo(&schemapb.CollectionSchema{
+		Name: "test_collection",
+		Fields: []*schemapb.FieldSchema{
+			{FieldID: 100, Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+			{FieldID: 101, Name: "text", DataType: schemapb.DataType_Text},
+			{FieldID: 102, Name: "vec", DataType: schemapb.DataType_FloatVector},
+		},
+	})()
+
+	err := task.PreExecute(context.Background())
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, merr.ErrParameterInvalid)
+	assert.Contains(t, err.Error(), "snapshot does not support collections with Text field")
 }
 
 func TestCreateSnapshotTask_PreExecute_CollectionNotFound(t *testing.T) {
@@ -156,6 +204,7 @@ func TestCreateSnapshotTask_PreExecute_ProtectionZero(t *testing.T) {
 	globalMetaCache = &MetaCache{}
 	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
 	defer mockGetCollectionID.UnPatch()
+	defer patchCreateSnapshotCollectionInfo(nil)()
 
 	err := task.PreExecute(context.Background())
 	assert.NoError(t, err)
@@ -174,6 +223,7 @@ func TestCreateSnapshotTask_PreExecute_ProtectionValid(t *testing.T) {
 	globalMetaCache = &MetaCache{}
 	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
 	defer mockGetCollectionID.UnPatch()
+	defer patchCreateSnapshotCollectionInfo(nil)()
 
 	err := task.PreExecute(context.Background())
 	assert.NoError(t, err)
@@ -711,6 +761,7 @@ func TestCreateSnapshotTask_FullLifecycle(t *testing.T) {
 	// Mock PreExecute dependencies
 	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
 	defer mockGetCollectionID.UnPatch()
+	defer patchCreateSnapshotCollectionInfo(nil)()
 
 	// Test PreExecute
 	err = task.PreExecute(context.Background())
@@ -747,6 +798,7 @@ func TestCreateSnapshotTask_EmptyPartitionNames(t *testing.T) {
 	globalMetaCache = &MetaCache{}
 	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
 	defer mockGetCollectionID.UnPatch()
+	defer patchCreateSnapshotCollectionInfo(nil)()
 
 	err := task.PreExecute(context.Background())
 
@@ -918,6 +970,7 @@ func TestSnapshotTasks_PreExecute_ValidNames(t *testing.T) {
 				globalMetaCache = &MetaCache{}
 				mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(int64(100), nil).Build()
 				defer mockGetCollectionID.UnPatch()
+				defer patchCreateSnapshotCollectionInfo(nil)()
 
 				err := task.PreExecute(context.Background())
 

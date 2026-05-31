@@ -930,6 +930,9 @@ func validateAddFieldRequest(schema *schemapb.CollectionSchema, newFieldSchema *
 	if _, ok := schemapb.DataType_name[int32(newFieldSchema.GetDataType())]; !ok || newFieldSchema.GetDataType() == schemapb.DataType_None {
 		return merr.WrapErrParameterInvalid("valid field", fmt.Sprintf("field data type: %s is not supported", newFieldSchema.GetDataType()))
 	}
+	if typeutil.IsTextType(newFieldSchema.GetDataType()) {
+		return merr.WrapErrParameterInvalidMsg("add field operation does not support Text type, field name = %s", newFieldSchema.GetName())
+	}
 	if newFieldSchema.GetExternalField() != "" {
 		return merr.WrapErrParameterInvalidMsg("add field operation does not support external field mapping, field name = %s", newFieldSchema.GetName())
 	}

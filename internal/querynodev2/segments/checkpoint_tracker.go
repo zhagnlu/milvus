@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -57,14 +58,27 @@ type CheckpointTracker struct {
 	// Updated ONLY after SaveBinlogPaths succeeds. The manifest version
 	// (used as FlushData read_version) is extracted from the path on demand.
 	acknowledgedManifests map[int64]string
+
+	// key: segmentID, value: committed storage manifest that is not yet
+	// acknowledged by DataCoord. This is process-local retry state for the
+	// gap between storage commit success and SaveBinlogPaths success.
+	pendingCommittedFlushes map[int64]*PendingCommittedFlush
+}
+
+type PendingCommittedFlush struct {
+	Offset       int64
+	ManifestPath string
+	Checkpoint   *msgpb.MsgPosition
+	BM25Stats    map[int64]*storage.BM25Stats
 }
 
 // NewCheckpointTracker creates a new CheckpointTracker instance.
 func NewCheckpointTracker() *CheckpointTracker {
 	return &CheckpointTracker{
-		segmentBatches:        make(map[int64][]*BatchInfo),
-		flushedOffsets:        make(map[int64]int64),
-		acknowledgedManifests: make(map[int64]string),
+		segmentBatches:          make(map[int64][]*BatchInfo),
+		flushedOffsets:          make(map[int64]int64),
+		acknowledgedManifests:   make(map[int64]string),
+		pendingCommittedFlushes: make(map[int64]*PendingCommittedFlush),
 	}
 }
 
@@ -214,10 +228,11 @@ func (t *CheckpointTracker) RemoveSegment(segID int64) {
 	delete(t.segmentBatches, segID)
 	delete(t.flushedOffsets, segID)
 	delete(t.acknowledgedManifests, segID)
+	delete(t.pendingCommittedFlushes, segID)
 }
 
 // GetAcknowledgedVersion returns the last manifest version acknowledged by DataCoord.
-// Returns -1 if no version has been acknowledged (first flush for this segment).
+// Returns ManifestEarliest if no version has been acknowledged (first flush for this segment).
 func (t *CheckpointTracker) GetAcknowledgedVersion(segID int64) int64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -226,7 +241,7 @@ func (t *CheckpointTracker) GetAcknowledgedVersion(segID int64) int64 {
 			return version
 		}
 	}
-	return -1
+	return packed.ManifestEarliest
 }
 
 // UpdateAcknowledgedManifest updates the acknowledged manifest after SaveBinlogPaths succeeds.
@@ -244,6 +259,60 @@ func (t *CheckpointTracker) GetAcknowledgedManifest(segID int64) string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.acknowledgedManifests[segID]
+}
+
+func (t *CheckpointTracker) SetPendingCommittedFlush(segID int64, offset int64, manifest string, checkpoint *msgpb.MsgPosition, bm25Stats map[int64]*storage.BM25Stats) {
+	if offset <= 0 || manifest == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pendingCommittedFlushes[segID] = &PendingCommittedFlush{
+		Offset:       offset,
+		ManifestPath: manifest,
+		Checkpoint:   checkpoint,
+		BM25Stats:    cloneBM25StatsMap(bm25Stats),
+	}
+}
+
+func (t *CheckpointTracker) GetPendingCommittedFlush(segID int64) (*PendingCommittedFlush, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	pending, ok := t.pendingCommittedFlushes[segID]
+	if !ok {
+		return nil, false
+	}
+	return &PendingCommittedFlush{
+		Offset:       pending.Offset,
+		ManifestPath: pending.ManifestPath,
+		Checkpoint:   pending.Checkpoint,
+		BM25Stats:    cloneBM25StatsMap(pending.BM25Stats),
+	}, true
+}
+
+func (t *CheckpointTracker) ClearPendingCommittedFlush(segID int64, manifest string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	pending, ok := t.pendingCommittedFlushes[segID]
+	if !ok {
+		return
+	}
+	if manifest == "" || pending.ManifestPath == manifest {
+		delete(t.pendingCommittedFlushes, segID)
+	}
+}
+
+func cloneBM25StatsMap(stats map[int64]*storage.BM25Stats) map[int64]*storage.BM25Stats {
+	if len(stats) == 0 {
+		return nil
+	}
+	cloned := make(map[int64]*storage.BM25Stats, len(stats))
+	for fieldID, stat := range stats {
+		if stat != nil {
+			cloned[fieldID] = stat.Clone()
+		}
+	}
+	return cloned
 }
 
 // GetMaxEndOffset returns the maximum EndOffset recorded for a segment.

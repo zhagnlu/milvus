@@ -307,6 +307,10 @@ typedef struct CFlushConfig {
     int64_t* text_field_ids;      // array of TEXT field IDs
     const char** text_lob_paths;  // array of LOB paths for each TEXT field
     size_t num_text_columns;      // number of TEXT columns
+    int64_t* bm25_field_ids;      // array of BM25 sparse output field IDs
+    int64_t* bm25_stats_log_ids;  // array of BM25 stats log IDs
+    size_t num_bm25_fields;       // number of BM25 output fields
+    bool write_merged_bm25_stats; // whether to write compound BM25 stats
 } CFlushConfig;
 
 /**
@@ -316,6 +320,10 @@ typedef struct CFlushResult {
     char* manifest_path;  // path to the committed manifest (caller must free)
     int64_t committed_version;  // committed version number
     int64_t num_rows;           // number of rows flushed
+    int64_t* bm25_field_ids;    // field ids for serialized BM25 stats
+    uint8_t** bm25_stats;       // serialized BM25 stats per field
+    size_t* bm25_stats_sizes;   // serialized BM25 stats sizes
+    size_t num_bm25_stats;      // number of BM25 stats entries
 } CFlushResult;
 
 /**

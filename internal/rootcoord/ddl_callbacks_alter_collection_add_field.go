@@ -38,6 +38,9 @@ func (c *Core) broadcastAlterCollectionForAddField(ctx context.Context, req *mil
 	if err = proto.Unmarshal(req.Schema, fieldSchema); err != nil {
 		return errors.Wrap(err, "failed to unmarshal field schema")
 	}
+	if typeutil.IsTextType(fieldSchema.GetDataType()) {
+		return merr.WrapErrParameterInvalidMsg("add field operation does not support Text type, field name = %s", fieldSchema.GetName())
+	}
 	if err := checkFieldSchema([]*schemapb.FieldSchema{fieldSchema}); err != nil {
 		return errors.Wrap(err, "failed to check field schema")
 	}

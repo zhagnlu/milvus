@@ -7042,6 +7042,18 @@ func TestValidateAddFieldRequest(t *testing.T) {
 		assert.Contains(t, err.Error(), "does not support external field mapping")
 	})
 
+	t.Run("text field type", func(t *testing.T) {
+		schema := baseSchema()
+		newField := &schemapb.FieldSchema{
+			Name:     "text_field",
+			DataType: schemapb.DataType_Text,
+		}
+		err := validateAddFieldRequest(schema, newField)
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, merr.ErrParameterInvalid)
+		assert.Contains(t, err.Error(), "does not support Text type")
+	})
+
 	t.Run("system field name RowID", func(t *testing.T) {
 		schema := baseSchema()
 		newField := &schemapb.FieldSchema{

@@ -872,6 +872,70 @@ func (s *L0WriteBufferSuite) TestBufferDataGrowingSourceMode() {
 		s.Equal("manifest-retry", segment.ManifestPath())
 	})
 
+	s.Run("source_task_retries_save_only_after_meta_failure", func() {
+		textSchema := s.textSchema()
+		metacache := s.newTextRealMetaCache(textSchema)
+		flushCalls := 0
+		source := fakeGrowingFlushSource{
+			flushFunc: func(context.Context, int64, int64, *syncmgr.GrowingFlushConfig) (*syncmgr.GrowingFlushResult, error) {
+				flushCalls++
+				return &syncmgr.GrowingFlushResult{ManifestPath: "manifest-committed", NumRows: 10}, nil
+			},
+		}
+		metaWriter := syncmgr.NewMockMetaWriter(s.T())
+		metaWriter.EXPECT().UpdateGrowingSourceSync(mock.Anything, mock.MatchedBy(func(task *syncmgr.GrowingSourceSyncTask) bool {
+			return task.ManifestPath() == "manifest-committed" && task.BatchRows() == 10
+		})).Return(fmt.Errorf("save failed")).Once()
+		metaWriter.EXPECT().UpdateGrowingSourceSync(mock.Anything, mock.MatchedBy(func(task *syncmgr.GrowingSourceSyncTask) bool {
+			return task.ManifestPath() == "manifest-committed" && task.BatchRows() == 10
+		})).Return(nil).Once()
+
+		wb, err := NewL0WriteBuffer(s.channelName, metacache, s.syncMgr, &writeBufferOption{
+			idAllocator:                s.allocator,
+			metaWriter:                 metaWriter,
+			growingSourceRetryInterval: time.Hour,
+			errorHandler:               func(error) {},
+			growingSourceResolver: func(segmentID int64, targetOffset int64, _ *msgpb.MsgPosition) (syncmgr.GrowingFlushSource, syncmgr.GrowingSourceState) {
+				return source, syncmgr.GrowingSourceUsable
+			},
+		})
+		s.NoError(err)
+
+		done := make(chan error, 2)
+		s.syncMgr.EXPECT().SyncData(mock.Anything, mock.AnythingOfType("*syncmgr.GrowingSourceSyncTask"), mock.Anything).
+			RunAndReturn(func(ctx context.Context, task syncmgr.Task, callbacks ...func(error) error) (*conc.Future[struct{}], error) {
+				textTask := task.(*syncmgr.GrowingSourceSyncTask)
+				textTask.WithChunkManager(storage.NewLocalChunkManager(objectstorage.RootPath(s.T().TempDir())))
+				return conc.Go(func() (struct{}, error) {
+					err := textTask.Run(ctx)
+					for _, callback := range callbacks {
+						if cbErr := callback(err); cbErr != nil {
+							err = cbErr
+						}
+					}
+					done <- err
+					return struct{}{}, nil
+				}), nil
+			}).Twice()
+
+		_, msg := s.composeTextInsertMsg(1014, 10)
+		insertData, err := PrepareInsert(textSchema, s.pkSchema, []*msgstream.InsertMsg{msg})
+		s.NoError(err)
+		err = wb.BufferData(insertData, nil, &msgpb.MsgPosition{Timestamp: 100}, &msgpb.MsgPosition{Timestamp: 200}, 100)
+		s.NoError(err)
+		s.Error(<-done)
+		s.Equal(1, flushCalls)
+
+		wb.EvictBuffer()
+		s.NoError(<-done)
+		s.Equal(1, flushCalls)
+		segment, ok := metacache.GetSegmentByID(1014)
+		s.True(ok)
+		s.EqualValues(10, segment.FlushedRows())
+		s.EqualValues(0, segment.SyncingRows())
+		s.Equal("manifest-committed", segment.ManifestPath())
+	})
+
 	s.Run("source_task_row_count_mismatch_retries_without_meta_update", func() {
 		textSchema := s.textSchema()
 		metacache := s.newTextRealMetaCache(textSchema)

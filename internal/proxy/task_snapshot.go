@@ -29,6 +29,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 const (
@@ -130,6 +131,13 @@ func (cst *createSnapshotTask) PreExecute(ctx context.Context) error {
 		return err
 	}
 	cst.collectionID = collectionID
+	collectionInfo, err := globalMetaCache.GetCollectionInfo(ctx, cst.req.GetDbName(), cst.req.GetCollectionName(), cst.collectionID)
+	if err != nil {
+		return err
+	}
+	if collectionInfo != nil && collectionInfo.schema != nil && typeutil.HasTextField(collectionInfo.schema.CollectionSchema) {
+		return merr.WrapErrParameterInvalidMsg("snapshot does not support collections with Text field")
+	}
 
 	return nil
 }

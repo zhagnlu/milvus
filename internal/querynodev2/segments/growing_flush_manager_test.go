@@ -18,6 +18,7 @@ package segments
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -27,10 +28,35 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/mocks/mock_storage"
+	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
+
+type fakeGrowingFlushAllocator struct {
+	next allocator.UniqueID
+	err  error
+}
+
+func (a *fakeGrowingFlushAllocator) Alloc(count uint32) (allocator.UniqueID, allocator.UniqueID, error) {
+	if a.err != nil {
+		return 0, 0, a.err
+	}
+	begin := a.next
+	a.next += allocator.UniqueID(count)
+	return begin, a.next, nil
+}
+
+func (a *fakeGrowingFlushAllocator) AllocOne() (allocator.UniqueID, error) {
+	if a.err != nil {
+		return 0, a.err
+	}
+	id := a.next
+	a.next++
+	return id, nil
+}
 
 func TestNewGrowingFlushManager(t *testing.T) {
 	paramtable.Init()
@@ -411,7 +437,16 @@ func TestGrowingFlushManager_BuildFlushConfig(t *testing.T) {
 		Name: "test_collection",
 		Fields: []*schemapb.FieldSchema{
 			{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
-			{FieldID: 101, Name: "text", DataType: schemapb.DataType_VarChar},
+			{FieldID: 101, Name: "text", DataType: schemapb.DataType_Text},
+			{FieldID: 102, Name: "sparse", DataType: schemapb.DataType_SparseFloatVector},
+		},
+		Functions: []*schemapb.FunctionSchema{
+			{
+				Name:           "bm25",
+				Type:           schemapb.FunctionType_BM25,
+				InputFieldIds:  []int64{101},
+				OutputFieldIds: []int64{102},
+			},
 		},
 	}
 
@@ -430,6 +465,7 @@ func TestGrowingFlushManager_BuildFlushConfig(t *testing.T) {
 		nil,            // broker
 		mockCM,         // chunkManager
 		tracker,        // checkpointTracker
+		WithIDAllocator(&fakeGrowingFlushAllocator{next: 500}),
 	)
 
 	// Create mock segment
@@ -437,14 +473,63 @@ func TestGrowingFlushManager_BuildFlushConfig(t *testing.T) {
 	seg.EXPECT().ID().Return(int64(1001)).Maybe()
 	seg.EXPECT().Partition().Return(int64(10)).Maybe()
 
-	config := m.buildFlushConfig(seg)
+	config, err := m.buildFlushConfig(seg)
 
+	assert.NoError(t, err)
 	assert.NotNil(t, config)
 	assert.Contains(t, config.SegmentBasePath, "/test/root")
 	assert.Contains(t, config.SegmentBasePath, "insert_log")
 	assert.Contains(t, config.PartitionBasePath, "/test/root")
 	assert.Equal(t, int64(1), config.CollectionID)
 	assert.Equal(t, int64(10), config.PartitionID)
+	assert.Equal(t, []int64{101}, config.TextFieldIDs)
+	assert.Equal(t, []string{"/test/root/insert_log/1/10/lobs/101"}, config.TextLobPaths)
+	assert.Equal(t, []int64{102}, config.BM25FieldIDs)
+	assert.Len(t, config.BM25StatsLogIDs, 1)
+	assert.Equal(t, []int64{500}, config.BM25StatsLogIDs)
+}
+
+func TestGrowingFlushManager_BuildFlushConfig_BM25RequiresAllocator(t *testing.T) {
+	paramtable.Init()
+
+	schema := &schemapb.CollectionSchema{
+		Name: "test_collection",
+		Fields: []*schemapb.FieldSchema{
+			{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+			{FieldID: 101, Name: "text", DataType: schemapb.DataType_Text},
+			{FieldID: 102, Name: "sparse", DataType: schemapb.DataType_SparseFloatVector},
+		},
+		Functions: []*schemapb.FunctionSchema{
+			{
+				Name:           "bm25",
+				Type:           schemapb.FunctionType_BM25,
+				InputFieldIds:  []int64{101},
+				OutputFieldIds: []int64{102},
+			},
+		},
+	}
+
+	tracker := NewCheckpointTracker()
+	mockCM := mock_storage.NewMockChunkManager(t)
+	mockCM.EXPECT().RootPath().Return("/test/root").Maybe()
+
+	m := NewGrowingFlushManager(
+		1,
+		"test-channel",
+		schema,
+		nil,
+		nil,
+		nil,
+		mockCM,
+		tracker,
+	)
+
+	seg := NewMockSegment(t)
+	seg.EXPECT().ID().Return(int64(1001)).Maybe()
+	seg.EXPECT().Partition().Return(int64(10)).Maybe()
+
+	_, err := m.buildFlushConfig(seg)
+	assert.ErrorContains(t, err, "id allocator is nil")
 }
 
 func TestGrowingFlushManager_DoSync_NoUnflushedData(t *testing.T) {
@@ -811,6 +896,137 @@ func TestGrowingFlushManager_DoSync_isSeal(t *testing.T) {
 
 		err := m.doSync(context.Background(), seg, false)
 		assert.NoError(t, err)
+		binlogSaver.AssertExpectations(t)
+	})
+
+	t.Run("isSeal true enables merged BM25 stats", func(t *testing.T) {
+		bm25Schema := &schemapb.CollectionSchema{
+			Name: "test_collection",
+			Fields: []*schemapb.FieldSchema{
+				{FieldID: 100, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+				{FieldID: 101, Name: "text", DataType: schemapb.DataType_Text},
+				{FieldID: 102, Name: "sparse", DataType: schemapb.DataType_SparseFloatVector},
+			},
+			Functions: []*schemapb.FunctionSchema{
+				{
+					Name:           "bm25",
+					Type:           schemapb.FunctionType_BM25,
+					InputFieldIds:  []int64{101},
+					OutputFieldIds: []int64{102},
+				},
+			},
+		}
+		tracker := NewCheckpointTracker()
+		mockCM := mock_storage.NewMockChunkManager(t)
+		mockCM.EXPECT().RootPath().Return("/test/root").Maybe()
+
+		binlogSaver := &MockBinlogSaver{}
+
+		m := NewGrowingFlushManager(
+			1,
+			"test-channel",
+			bm25Schema,
+			nil,
+			nil,
+			binlogSaver,
+			mockCM,
+			tracker,
+			WithIDAllocator(&fakeGrowingFlushAllocator{next: 700}),
+		)
+
+		seg := NewMockSegment(t)
+		seg.EXPECT().ID().Return(int64(4001)).Maybe()
+		seg.EXPECT().Partition().Return(int64(10)).Maybe()
+		seg.EXPECT().RowNum().Return(int64(40)).Maybe()
+		seg.EXPECT().Level().Return(datapb.SegmentLevel_L1).Once()
+
+		pos := &msgpb.MsgPosition{ChannelName: "test-channel", MsgID: []byte{1}, Timestamp: 400}
+		tracker.RecordBatch(4001, 40, pos)
+
+		flushResult := &FlushResult{
+			ManifestPath: "/test/manifest_bm25_seal.json",
+			NumRows:      40,
+		}
+		bm25Stats := storage.NewBM25Stats()
+		bm25Stats.Append(map[uint32]float32{10: 2})
+		flushResult.BM25Stats = map[int64]*storage.BM25Stats{102: bm25Stats}
+		seg.EXPECT().FlushData(mock.Anything, int64(0), int64(40), mock.MatchedBy(func(config *FlushConfig) bool {
+			return config.WriteMergedBM25Stats &&
+				assert.ObjectsAreEqual([]int64{102}, config.BM25FieldIDs) &&
+				assert.ObjectsAreEqual([]int64{700}, config.BM25StatsLogIDs)
+		})).Return(flushResult, nil).Once()
+		seg.EXPECT().UpdateBM25Stats(mock.MatchedBy(func(stats map[int64]*storage.BM25Stats) bool {
+			return len(stats) == 1 && stats[102] == bm25Stats
+		})).Return().Once()
+
+		binlogSaver.On("SaveBinlogPaths", mock.Anything, mock.MatchedBy(func(req *datapb.SaveBinlogPathsRequest) bool {
+			return req.Flushed == true
+		})).Return(nil).Once()
+
+		err := m.doSync(context.Background(), seg, true)
+		assert.NoError(t, err)
+		binlogSaver.AssertExpectations(t)
+	})
+
+	t.Run("reuses pending committed BM25 flush after SaveBinlogPaths fails", func(t *testing.T) {
+		tracker := NewCheckpointTracker()
+		mockCM := mock_storage.NewMockChunkManager(t)
+		mockCM.EXPECT().RootPath().Return("/test/root").Maybe()
+
+		binlogSaver := &MockBinlogSaver{}
+
+		m := NewGrowingFlushManager(
+			1,
+			"test-channel",
+			schema,
+			nil,
+			nil,
+			binlogSaver,
+			mockCM,
+			tracker,
+		)
+
+		seg := NewMockSegment(t)
+		seg.EXPECT().ID().Return(int64(5001)).Maybe()
+		seg.EXPECT().Partition().Return(int64(10)).Maybe()
+		seg.EXPECT().RowNum().Return(int64(30)).Maybe()
+
+		pos := &msgpb.MsgPosition{ChannelName: "test-channel", MsgID: []byte{1}, Timestamp: 500}
+		tracker.RecordBatch(5001, 30, pos)
+
+		bm25Stats := storage.NewBM25Stats()
+		bm25Stats.Append(map[uint32]float32{10: 2})
+		flushResult := &FlushResult{
+			ManifestPath: "/test/manifest_bm25_save_failed.json",
+			NumRows:      30,
+			BM25Stats:    map[int64]*storage.BM25Stats{102: bm25Stats},
+		}
+		seg.EXPECT().FlushData(mock.Anything, int64(0), int64(30), mock.Anything).Return(flushResult, nil).Once()
+
+		binlogSaver.On("SaveBinlogPaths", mock.Anything, mock.Anything).Return(errors.New("save failed")).Once()
+
+		err := m.doSync(context.Background(), seg, false)
+		assert.ErrorContains(t, err, "save failed")
+		assert.EqualValues(t, 0, tracker.GetFlushedOffset(5001))
+		pending, ok := tracker.GetPendingCommittedFlush(5001)
+		assert.True(t, ok)
+		assert.Equal(t, flushResult.ManifestPath, pending.ManifestPath)
+
+		seg.EXPECT().UpdateBM25Stats(mock.MatchedBy(func(stats map[int64]*storage.BM25Stats) bool {
+			if len(stats) != 1 || stats[102] == nil {
+				return false
+			}
+			return stats[102].NumRow() == 1 && stats[102].NumToken() == 2
+		})).Return().Once()
+		binlogSaver.On("SaveBinlogPaths", mock.Anything, mock.MatchedBy(func(req *datapb.SaveBinlogPathsRequest) bool {
+			return req.ManifestPath == flushResult.ManifestPath && req.Flushed == false
+		})).Return(nil).Once()
+
+		err = m.doSync(context.Background(), seg, false)
+		assert.NoError(t, err)
+		assert.EqualValues(t, 30, tracker.GetFlushedOffset(5001))
+		_, ok = tracker.GetPendingCommittedFlush(5001)
+		assert.False(t, ok)
 		binlogSaver.AssertExpectations(t)
 	})
 }

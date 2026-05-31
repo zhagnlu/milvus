@@ -82,6 +82,21 @@ func TestDDLCallbacksAlterCollectionAddField(t *testing.T) {
 	})
 	require.ErrorIs(t, merr.CheckRPCCall(resp, err), merr.ErrParameterInvalid)
 
+	// add text field schema
+	textFieldSchema := &schemapb.FieldSchema{
+		Name:     "text_field",
+		DataType: schemapb.DataType_Text,
+		Nullable: true,
+	}
+	textFieldSchemaBytes, _ := proto.Marshal(textFieldSchema)
+	resp, err = core.AddCollectionField(ctx, &milvuspb.AddCollectionFieldRequest{
+		DbName:         dbName,
+		CollectionName: collectionName,
+		Schema:         textFieldSchemaBytes,
+	})
+	require.ErrorIs(t, merr.CheckRPCCall(resp, err), merr.ErrParameterInvalid)
+	require.Contains(t, resp.GetReason(), "does not support Text type")
+
 	// add new field successfully
 	resp, err = core.AddCollectionField(ctx, &milvuspb.AddCollectionFieldRequest{
 		DbName:         dbName,

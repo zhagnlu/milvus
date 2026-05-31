@@ -107,13 +107,15 @@ GenTestSchema(std::map<std::string, std::string> params = {},
 }
 
 storage::FileManagerContext
-CreateTextMatchTestFileManagerContext(int64_t build_id) {
+CreateTextMatchTestFileManagerContext(
+    int64_t build_id,
+    proto::schema::DataType data_type = proto::schema::DataType::VarChar) {
     auto storage_config = get_default_local_storage_config();
     auto chunk_manager = storage::CreateChunkManager(storage_config);
     auto fs = storage::InitArrowFileSystem(storage_config);
 
     storage::FieldDataMeta field_meta{1, 2, 3, 101};
-    field_meta.field_schema.set_data_type(proto::schema::DataType::VarChar);
+    field_meta.field_schema.set_data_type(data_type);
     storage::IndexMeta index_meta{3, 101, build_id, 10000};
     return storage::FileManagerContext(
         field_meta, index_meta, chunk_manager, fs);
@@ -438,6 +440,21 @@ TEST(TextMatch, BuildIndexFromFieldDataMultiBatchNullable) {
             }
         }
     }
+}
+
+TEST(TextMatch, BuildIndexFromTextFieldData) {
+    auto ctx = CreateTextMatchTestFileManagerContext(
+        1002, proto::schema::DataType::Text);
+    auto index = std::make_unique<index::TextMatchIndex>(
+        ctx, index::TANTIVY_INDEX_LATEST_VERSION, "milvus_tokenizer", "{}", "");
+
+    std::vector<std::string> texts = {
+        "football basketball", "swimming football", "table tennis"};
+    auto field_data =
+        storage::CreateFieldData(DataType::TEXT, DataType::NONE, false);
+    field_data->FillFieldData(texts.data(), texts.size());
+
+    ASSERT_NO_THROW(index->BuildIndexFromFieldData({field_data}, false));
 }
 
 // Regression test: BuildIndexFromFieldData with a single batch should still

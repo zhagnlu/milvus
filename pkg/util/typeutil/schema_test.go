@@ -5441,6 +5441,7 @@ func TestNormalizeAndValidateExternalCollectionSchema(t *testing.T) {
 
 	t.Run("unsupported field types rejected", func(t *testing.T) {
 		unsupportedTypes := []schemapb.DataType{
+			schemapb.DataType_Text,
 			schemapb.DataType_SparseFloatVector,
 		}
 		for _, dt := range unsupportedTypes {
@@ -5469,7 +5470,6 @@ func TestNormalizeAndValidateExternalCollectionSchema(t *testing.T) {
 			{schemapb.DataType_Float, nil},
 			{schemapb.DataType_Double, nil},
 			{schemapb.DataType_VarChar, []*commonpb.KeyValuePair{{Key: common.MaxLengthKey, Value: "64"}}},
-			{schemapb.DataType_Text, []*commonpb.KeyValuePair{{Key: common.MaxLengthKey, Value: "64"}}},
 			{schemapb.DataType_JSON, nil},
 			{schemapb.DataType_Array, nil},
 			{schemapb.DataType_Timestamptz, nil},

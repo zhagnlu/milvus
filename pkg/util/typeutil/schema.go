@@ -2498,6 +2498,27 @@ func IsExternalCollection(schema *schemapb.CollectionSchema) bool {
 	return false
 }
 
+// HasTextField returns true when any top-level or struct-array sub field uses
+// DataType_Text.
+func HasTextField(schema *schemapb.CollectionSchema) bool {
+	if schema == nil {
+		return false
+	}
+	for _, field := range schema.GetFields() {
+		if IsTextType(field.GetDataType()) {
+			return true
+		}
+	}
+	for _, structField := range schema.GetStructArrayFields() {
+		for _, field := range structField.GetFields() {
+			if IsTextType(field.GetDataType()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // GetVectorFieldSchemas get vector fields schema from collection schema.
 func GetVectorFieldSchemas(schema *schemapb.CollectionSchema) []*schemapb.FieldSchema {
 	ret := make([]*schemapb.FieldSchema, 0)
@@ -2580,6 +2601,10 @@ func NormalizeAndValidateExternalCollectionSchema(schema *schemapb.CollectionSch
 	// field leaves the input schema untouched.
 	externalFieldOwners := make(map[string][]*schemapb.FieldSchema)
 	for _, field := range schema.GetFields() {
+		if IsTextType(field.GetDataType()) {
+			return fmt.Errorf("external collection %s does not support field type %s on field %s",
+				schema.GetName(), field.GetDataType().String(), field.GetName())
+		}
 		if IsExternalSystemOrVirtualField(field.GetName()) {
 			continue
 		}
@@ -2744,6 +2769,7 @@ func IsExternalSystemOrVirtualField(name string) bool {
 // reliably used in external collections (both load and take modes).
 //
 // Blocked types and reasons:
+//   - Text: TEXT column storage is not supported by the external collection pipeline.
 //   - SparseFloatVector: Custom binary encoding incompatible with external files
 func isExternalFieldTypeSupported(dt schemapb.DataType) bool {
 	switch dt {
@@ -2755,7 +2781,6 @@ func isExternalFieldTypeSupported(dt schemapb.DataType) bool {
 		schemapb.DataType_Float,
 		schemapb.DataType_Double,
 		schemapb.DataType_VarChar,
-		schemapb.DataType_Text,
 		schemapb.DataType_JSON,
 		schemapb.DataType_Array,
 		schemapb.DataType_Timestamptz,

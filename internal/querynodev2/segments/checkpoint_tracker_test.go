@@ -289,9 +289,9 @@ func testManifestPath(version int64) string {
 }
 
 func TestCheckpointTracker_AcknowledgedVersion(t *testing.T) {
-	t.Run("default returns -1", func(t *testing.T) {
+	t.Run("default returns earliest", func(t *testing.T) {
 		tracker := NewCheckpointTracker()
-		assert.Equal(t, int64(-1), tracker.GetAcknowledgedVersion(999))
+		assert.Equal(t, int64(0), tracker.GetAcknowledgedVersion(999))
 	})
 
 	t.Run("update and get", func(t *testing.T) {
@@ -311,7 +311,7 @@ func TestCheckpointTracker_AcknowledgedVersion(t *testing.T) {
 		tracker := NewCheckpointTracker()
 		tracker.UpdateAcknowledgedManifest(1001, testManifestPath(5))
 		tracker.RemoveSegment(1001)
-		assert.Equal(t, int64(-1), tracker.GetAcknowledgedVersion(1001))
+		assert.Equal(t, int64(0), tracker.GetAcknowledgedVersion(1001))
 	})
 }
 
@@ -367,7 +367,7 @@ func TestCheckpointTracker_InitSegmentWithManifest_Empty(t *testing.T) {
 	tracker.InitSegmentWithManifest(1002, 0, "")
 
 	assert.Equal(t, int64(0), tracker.GetFlushedOffset(1002))
-	assert.Equal(t, int64(-1), tracker.GetAcknowledgedVersion(1002))
+	assert.Equal(t, int64(0), tracker.GetAcknowledgedVersion(1002))
 	assert.Equal(t, "", tracker.GetAcknowledgedManifest(1002))
 }
 
@@ -382,7 +382,7 @@ func TestCheckpointTracker_MultipleSegments_AcknowledgedVersion(t *testing.T) {
 
 	// remove one, other unaffected
 	tracker.RemoveSegment(1001)
-	assert.Equal(t, int64(-1), tracker.GetAcknowledgedVersion(1001))
+	assert.Equal(t, int64(0), tracker.GetAcknowledgedVersion(1001))
 	assert.Equal(t, int64(10), tracker.GetAcknowledgedVersion(1002))
 }
 

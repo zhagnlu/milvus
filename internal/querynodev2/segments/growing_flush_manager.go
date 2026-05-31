@@ -28,6 +28,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -62,6 +63,7 @@ type GrowingFlushManager struct {
 	binlogSaver       BinlogSaver
 	chunkManager      storage.ChunkManager
 	checkpointTracker *CheckpointTracker
+	idAllocator       allocator.Interface
 
 	// sync policies
 	policies []GrowingSyncPolicy
@@ -101,6 +103,13 @@ func WithFlushInterval(interval time.Duration) GrowingFlushManagerOption {
 func WithSyncPolicies(policies ...GrowingSyncPolicy) GrowingFlushManagerOption {
 	return func(m *GrowingFlushManager) {
 		m.policies = policies
+	}
+}
+
+// WithIDAllocator sets the allocator for BM25 stats log IDs.
+func WithIDAllocator(idAllocator allocator.Interface) GrowingFlushManagerOption {
+	return func(m *GrowingFlushManager) {
+		m.idAllocator = idAllocator
 	}
 }
 
@@ -312,6 +321,25 @@ func (m *GrowingFlushManager) doSync(ctx context.Context, segment Segment, isSea
 	// determine how far to flush. This ensures we only flush data that has a
 	flushedOffset := m.checkpointTracker.GetFlushedOffset(segID)
 	currentOffset := m.checkpointTracker.GetMaxEndOffset(segID)
+	if pending, ok := m.checkpointTracker.GetPendingCommittedFlush(segID); ok && pending.Offset > flushedOffset {
+		pendingIsSeal := isSeal && pending.Offset >= currentOffset
+		if err := m.saveManifestAndCheckpoint(ctx, segment, pending.ManifestPath, pending.Checkpoint, pending.Offset, pendingIsSeal); err != nil {
+			return err
+		}
+		if len(pending.BM25Stats) > 0 {
+			segment.UpdateBM25Stats(pending.BM25Stats)
+		}
+		m.checkpointTracker.UpdateFlushedOffset(segID, pending.Offset)
+		m.checkpointTracker.UpdateAcknowledgedManifest(segID, pending.ManifestPath)
+		m.checkpointTracker.ClearPendingCommittedFlush(segID, pending.ManifestPath)
+		if pending.Offset >= currentOffset {
+			log.Info("pending committed flush acknowledged",
+				zap.Int64("flushedRows", pending.Offset),
+				zap.String("manifest", pending.ManifestPath))
+			return nil
+		}
+		flushedOffset = pending.Offset
+	}
 
 	if flushedOffset >= currentOffset {
 		if isSeal {
@@ -343,8 +371,15 @@ func (m *GrowingFlushManager) doSync(ctx context.Context, segment Segment, isSea
 
 	// 3. flush data directly via C++ milvus-storage (unified interface)
 	// Use the last acknowledged manifest version as read_version.
-	flushConfig := m.buildFlushConfig(segment)
+	flushConfig, err := m.buildFlushConfig(segment)
+	if err != nil {
+		return err
+	}
 	flushConfig.ReadVersion = m.checkpointTracker.GetAcknowledgedVersion(segID)
+	flushConfig.WriteMergedBM25Stats = isSeal &&
+		m.schema != nil &&
+		hasBM25Function(m.schema) &&
+		segment.Level() != datapb.SegmentLevel_L0
 	flushResult, err := segment.FlushData(ctx, flushedOffset, currentOffset, flushConfig)
 	if err != nil {
 		return errors.Wrap(err, "failed to flush data via C++ milvus-storage")
@@ -371,14 +406,19 @@ func (m *GrowingFlushManager) doSync(ctx context.Context, segment Segment, isSea
 
 	// 4. save manifest path and checkpoint to DataCoord
 	// In Storage V3 FFI mode, only manifest path is needed (all file info is in manifest)
+	m.checkpointTracker.SetPendingCommittedFlush(segID, currentOffset, flushResult.ManifestPath, checkpoint, flushResult.BM25Stats)
 	if err := m.saveManifestAndCheckpoint(ctx, segment, flushResult.ManifestPath, checkpoint, currentOffset, isSeal); err != nil {
 		return err
+	}
+	if len(flushResult.BM25Stats) > 0 {
+		segment.UpdateBM25Stats(flushResult.BM25Stats)
 	}
 
 	// 5. update flushed offset AND acknowledged version
 	// Both updates happen ONLY after SaveBinlogPaths succeeds.
 	m.checkpointTracker.UpdateFlushedOffset(segID, currentOffset)
 	m.checkpointTracker.UpdateAcknowledgedManifest(segID, flushResult.ManifestPath)
+	m.checkpointTracker.ClearPendingCommittedFlush(segID, flushResult.ManifestPath)
 
 	log.Info("sync completed",
 		zap.Int64("flushedRows", flushResult.NumRows),
@@ -390,7 +430,7 @@ func (m *GrowingFlushManager) doSync(ctx context.Context, segment Segment, isSea
 
 // buildFlushConfig builds FlushConfig for C++ FFI call.
 // Go layer only constructs paths and config, all logic is in C++ side.
-func (m *GrowingFlushManager) buildFlushConfig(segment Segment) *FlushConfig {
+func (m *GrowingFlushManager) buildFlushConfig(segment Segment) (*FlushConfig, error) {
 	// Build paths for C++ side
 	// Segment path: {root}/insert_log/{coll}/{part}/{seg}
 	segmentBasePath := m.chunkManager.RootPath() + "/insert_log/" +
@@ -403,6 +443,8 @@ func (m *GrowingFlushManager) buildFlushConfig(segment Segment) *FlushConfig {
 	// Collect TEXT field IDs and LOB paths from schema for LOB storage.
 	var textFieldIDs []int64
 	var textLobPaths []string
+	var bm25FieldIDs []int64
+	var bm25StatsLogIDs []int64
 	if m.schema != nil {
 		for _, field := range m.schema.GetFields() {
 			if field.GetDataType() == schemapb.DataType_Text {
@@ -413,6 +455,18 @@ func (m *GrowingFlushManager) buildFlushConfig(segment Segment) *FlushConfig {
 				textLobPaths = append(textLobPaths, lobPath)
 			}
 		}
+		for _, function := range m.schema.GetFunctions() {
+			if function.GetType() == schemapb.FunctionType_BM25 && len(function.GetOutputFieldIds()) > 0 {
+				bm25FieldIDs = append(bm25FieldIDs, function.GetOutputFieldIds()[0])
+			}
+		}
+	}
+	if len(bm25FieldIDs) > 0 {
+		var err error
+		bm25StatsLogIDs, err = m.allocBM25StatsLogIDs(len(bm25FieldIDs))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &FlushConfig{
@@ -422,7 +476,33 @@ func (m *GrowingFlushManager) buildFlushConfig(segment Segment) *FlushConfig {
 		PartitionID:       segment.Partition(),
 		TextFieldIDs:      textFieldIDs,
 		TextLobPaths:      textLobPaths,
+		BM25FieldIDs:      bm25FieldIDs,
+		BM25StatsLogIDs:   bm25StatsLogIDs,
+	}, nil
+}
+
+func (m *GrowingFlushManager) allocBM25StatsLogIDs(count int) ([]int64, error) {
+	if m.idAllocator == nil {
+		return nil, errors.New("id allocator is nil when allocating bm25 stats log ids")
 	}
+	ids := make([]int64, count)
+	for i := range ids {
+		id, err := m.idAllocator.AllocOne()
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil
+}
+
+func hasBM25Function(schema *schemapb.CollectionSchema) bool {
+	for _, function := range schema.GetFunctions() {
+		if function.GetType() == schemapb.FunctionType_BM25 {
+			return true
+		}
+	}
+	return false
 }
 
 // saveManifestAndCheckpoint saves manifest path and checkpoint to DataCoord.

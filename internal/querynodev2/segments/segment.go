@@ -1618,6 +1618,30 @@ func (s *LocalSegment) FlushData(ctx context.Context, startOffset, endOffset int
 		cConfig.text_lob_paths = nil
 		cConfig.num_text_columns = 0
 	}
+	numBM25Fields := len(config.BM25FieldIDs)
+	if numBM25Fields > 0 {
+		if len(config.BM25StatsLogIDs) != numBM25Fields {
+			return nil, errors.Errorf("BM25 stats log IDs count mismatch, fields=%d logIDs=%d", numBM25Fields, len(config.BM25StatsLogIDs))
+		}
+		cBM25FieldIDs := (*C.int64_t)(C.malloc(C.size_t(numBM25Fields) * C.size_t(unsafe.Sizeof(C.int64_t(0)))))
+		defer C.free(unsafe.Pointer(cBM25FieldIDs))
+		cBM25StatsLogIDs := (*C.int64_t)(C.malloc(C.size_t(numBM25Fields) * C.size_t(unsafe.Sizeof(C.int64_t(0)))))
+		defer C.free(unsafe.Pointer(cBM25StatsLogIDs))
+		bm25FieldIDSlice := unsafe.Slice(cBM25FieldIDs, numBM25Fields)
+		bm25StatsLogIDSlice := unsafe.Slice(cBM25StatsLogIDs, numBM25Fields)
+		for i, fieldID := range config.BM25FieldIDs {
+			bm25FieldIDSlice[i] = C.int64_t(fieldID)
+			bm25StatsLogIDSlice[i] = C.int64_t(config.BM25StatsLogIDs[i])
+		}
+		cConfig.bm25_field_ids = cBM25FieldIDs
+		cConfig.bm25_stats_log_ids = cBM25StatsLogIDs
+		cConfig.num_bm25_fields = C.size_t(numBM25Fields)
+	} else {
+		cConfig.bm25_field_ids = nil
+		cConfig.bm25_stats_log_ids = nil
+		cConfig.num_bm25_fields = 0
+	}
+	cConfig.write_merged_bm25_stats = C.bool(config.WriteMergedBM25Stats)
 
 	// call C FFI
 	var cResult C.CFlushResult
@@ -1653,9 +1677,24 @@ func (s *LocalSegment) FlushData(ctx context.Context, startOffset, endOffset int
 		basePath = rawPath[:idx]
 	}
 	manifestPath := packed.MarshalManifestPath(basePath, committedVersion)
+	bm25Stats := make(map[int64]*storage.BM25Stats, int(cResult.num_bm25_stats))
+	if cResult.num_bm25_stats > 0 {
+		fieldIDs := unsafe.Slice(cResult.bm25_field_ids, int(cResult.num_bm25_stats))
+		statsBytes := unsafe.Slice(cResult.bm25_stats, int(cResult.num_bm25_stats))
+		statsSizes := unsafe.Slice(cResult.bm25_stats_sizes, int(cResult.num_bm25_stats))
+		for i := 0; i < int(cResult.num_bm25_stats); i++ {
+			bytes := C.GoBytes(unsafe.Pointer(statsBytes[i]), C.int(statsSizes[i]))
+			stats, err := storage.NewBM25StatsWithBytes(bytes)
+			if err != nil {
+				return nil, err
+			}
+			bm25Stats[int64(fieldIDs[i])] = stats
+		}
+	}
 
 	return &FlushResult{
 		ManifestPath: manifestPath,
 		NumRows:      int64(cResult.num_rows),
+		BM25Stats:    bm25Stats,
 	}, nil
 }
