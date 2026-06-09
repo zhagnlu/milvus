@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/cockroachdb/errors"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 )
 
 // EventReader is used to parse the events contained in the Binlog file.
@@ -34,7 +36,7 @@ type EventReader struct {
 
 func (reader *EventReader) readHeader() error {
 	if reader.isClosed {
-		return fmt.Errorf("event reader is closed")
+		return errors.New("event reader is closed")
 	}
 	header, err := readEventHeader(reader.buffer)
 	if err != nil {
@@ -46,7 +48,7 @@ func (reader *EventReader) readHeader() error {
 
 func (reader *EventReader) readData() error {
 	if reader.isClosed {
-		return fmt.Errorf("event reader is closed")
+		return errors.New("event reader is closed")
 	}
 	var data eventData
 	var err error
@@ -85,7 +87,7 @@ func (reader *EventReader) Close() {
 	}
 }
 
-func newEventReader(datatype schemapb.DataType, buffer *bytes.Buffer) (*EventReader, error) {
+func newEventReader(datatype schemapb.DataType, buffer *bytes.Buffer, nullable bool) (*EventReader, error) {
 	reader := &EventReader{
 		eventHeader: eventHeader{
 			baseEventHeader{},
@@ -101,9 +103,9 @@ func newEventReader(datatype schemapb.DataType, buffer *bytes.Buffer) (*EventRea
 		return nil, err
 	}
 
-	next := int(reader.EventLength - reader.eventHeader.GetMemoryUsageInBytes() - reader.GetEventDataFixPartSize())
+	next := int(reader.EventLength - reader.GetMemoryUsageInBytes() - reader.GetEventDataFixPartSize())
 	payloadBuffer := buffer.Next(next)
-	payloadReader, err := NewPayloadReader(datatype, payloadBuffer)
+	payloadReader, err := NewPayloadReader(datatype, payloadBuffer, nullable)
 	if err != nil {
 		return nil, err
 	}

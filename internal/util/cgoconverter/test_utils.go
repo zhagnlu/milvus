@@ -5,6 +5,7 @@ package cgoconverter
 #include <string.h>
 */
 import "C"
+
 import "unsafe"
 
 func copyToCBytes(data []byte) unsafe.Pointer {

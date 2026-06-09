@@ -9,26 +9,6 @@
 # is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 # or implied. See the License for the specific language governing permissions and limitations under the License
 
-set(MILVUS_QUERY_SRCS
-        deprecated/BinaryQuery.cpp
-        generated/PlanNode.cpp
-        generated/Expr.cpp
-        visitors/ShowPlanNodeVisitor.cpp
-        visitors/ShowExprVisitor.cpp
-        visitors/ExecPlanNodeVisitor.cpp
-        visitors/ExecExprVisitor.cpp
-        visitors/VerifyPlanNodeVisitor.cpp
-        visitors/VerifyExprVisitor.cpp
-        visitors/ExtractInfoPlanNodeVisitor.cpp
-        visitors/ExtractInfoExprVisitor.cpp
-        Parser.cpp
-        Plan.cpp
-        SearchOnGrowing.cpp
-        SearchOnSealed.cpp
-        SearchOnIndex.cpp
-        SearchBruteForce.cpp
-        SubSearchResult.cpp
-        PlanProto.cpp
-        )
-add_library(milvus_query ${MILVUS_QUERY_SRCS})
-target_link_libraries(milvus_query milvus_index milvus_common)
+add_source_at_current_directory_recursively()
+add_library(milvus_query OBJECT ${SOURCE_FILES})
+target_link_libraries(milvus_query PUBLIC milvus_conan_deps)

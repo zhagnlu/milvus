@@ -1,70 +1,131 @@
 metrics:
   serviceMonitor:
     enabled: true
+
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 1
+      preference:
+        matchExpressions:
+        - key: "node-role.kubernetes.io/e2e"
+          operator: "Exists"
+
+tolerations:
+- key: "node-role.kubernetes.io/e2e"
+  operator: "Exists"
+  effect: "NoSchedule"  
+
+log:
+  level: debug
 proxy:
   resources:
     requests:
-      cpu: "0.1"
+      cpu: "0.3"
       memory: "256Mi"
-
+    limits:
+      cpu: "1"
 rootCoordinator:
+  enabled: false
   resources:
     requests:
-      cpu: "0.1"
+      cpu: "0.2"
       memory: "256Mi"
-
+    limits:
+      cpu: "1"
 queryCoordinator:
+  enabled: false
   resources:
     requests:
-      cpu: "0.4"
+      cpu: "0.2"
       memory: "100Mi"
-
+    limits:
+      cpu: "1"
 queryNode:
   resources:
     requests:
       cpu: "0.5"
       memory: "500Mi"
+    limits:
+      cpu: "2"
 indexCoordinator:
+  enabled: "false"
   resources:
     requests:
       cpu: "0.1"
       memory: "50Mi"
+    limits:
+      cpu: "1"
+dataCoordinator:
+  enabled: false
+  resources:
+    requests:
+      cpu: "0.1"
+      memory: "50Mi"
+    limits:
+      cpu: "1"
 indexNode:
+  enabled: "false"
   resources:
     requests:
       cpu: "0.5"
       memory: "500Mi"
-
-dataCoordinator:
-  resources:
-    requests:
-      cpu: "0.1"
-      memory: "50Mi"
-
+    limits:
+      cpu: "2"
 dataNode:
   resources:
     requests:
       cpu: "0.5"
       memory: "500Mi"
+    limits:
+      cpu: "2"
 
 pulsar:
+  components:
+    autorecovery: false
   proxy:
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
+            - key: "node-role.kubernetes.io/e2e"
+              operator: "Exists"
+
+    tolerations:
+    - key: "node-role.kubernetes.io/e2e"
+      operator: "Exists"
+      effect: "NoSchedule"
     configData:
       PULSAR_MEM: >
-        -Xms2048m -Xmx2048m
+        -Xms1024m -Xmx1024m
       PULSAR_GC: >
         -XX:MaxDirectMemorySize=2048m
       httpNumThreads: "50"
     resources:
       requests:
         cpu: "0.5"
-        memory: "2Gi"
+        memory: "1Gi"
   # Resources for the websocket proxy
     wsResources:
       requests:
-        memory: "512Mi"
-        cpu: "0.3"
+        memory: "100Mi"
+        cpu: "0.1"
   broker:
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
+            - key: "node-role.kubernetes.io/e2e"
+              operator: "Exists"
+
+    tolerations:
+    - key: "node-role.kubernetes.io/e2e"
+      operator: "Exists"
+      effect: "NoSchedule"
     resources:
       requests:
         cpu: "0.5"
@@ -93,6 +154,19 @@ pulsar:
       backlogQuotaDefaultRetentionPolicy: producer_exception
 
   bookkeeper:
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
+            - key: "node-role.kubernetes.io/e2e"
+              operator: "Exists"
+
+    tolerations:
+    - key: "node-role.kubernetes.io/e2e"
+      operator: "Exists"
+      effect: "NoSchedule"
     configData:
       PULSAR_MEM: >
         -Xms4096m
@@ -119,19 +193,21 @@ pulsar:
         cpu: "0.5"
         memory: "4Gi"
 
-  bastion:
-    resources:
-      requests:
-        cpu: "0.3"
-        memory: "50Mi"
-
-  autorecovery:
-    resources:
-      requests:
-        cpu: "0.5"
-        memory: "512Mi"
-
   zookeeper:
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 1
+          preference:
+            matchExpressions:
+            - key: "node-role.kubernetes.io/e2e"
+              operator: "Exists"
+
+    tolerations:
+    - key: "node-role.kubernetes.io/e2e"
+      operator: "Exists"
+      effect: "NoSchedule"
+    replicaCount: 1
     configData:
       PULSAR_MEM: >
         -Xms1024m
@@ -148,13 +224,67 @@ pulsar:
     resources:
       requests:
         cpu: "0.3"
-        memory: "1Gi"
-etcd:
+        memory: "512Mi"
+kafka:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: "node-role.kubernetes.io/e2e"
+            operator: "Exists"
+  tolerations:
+  - key: "node-role.kubernetes.io/e2e"
+    operator: "Exists"
+    effect: "NoSchedule"
+
   resources:
     requests:
-      cpu: "0.1"
+      cpu: "0.5"
+      memory: "1Gi"
+  zookeeper:
+    replicaCount: 1
+    resources:
+      requests:
+        cpu: "0.3"
+        memory: "512Mi"
+etcd:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: "node-role.kubernetes.io/e2e"
+            operator: "Exists"
+
+  tolerations:
+  - key: "node-role.kubernetes.io/e2e"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: "0.3"
       memory: "100Mi"
 minio:
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: "node-role.kubernetes.io/e2e"
+            operator: "Exists"
+
+  tolerations:
+  - key: "node-role.kubernetes.io/e2e"
+    operator: "Exists"
+    effect: "NoSchedule"
+
   resources:
     requests:
       cpu: "0.3"
@@ -162,5 +292,7 @@ minio:
 standalone:
   resources:
     requests:
-      cpu: "0.5"
+      cpu: "1"
       memory: "3.5Gi"
+    limits:
+      cpu: "4"

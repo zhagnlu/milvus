@@ -1,13 +1,17 @@
 package planparserv2
 
 import (
-	"github.com/milvus-io/milvus/internal/proto/planpb"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
 )
 
 type ExprWithType struct {
 	expr     *planpb.Expr
 	dataType schemapb.DataType
+	// ExprWithType can be a node only when nodeDependent is set to false.
+	// For example, a column expression or a value expression itself cannot be an expression node independently.
+	// Unless our execution backend can support them.
+	nodeDependent bool
 }
 
 func getError(obj interface{}) error {
@@ -34,4 +38,16 @@ func getGenericValue(obj interface{}) *planpb.GenericValue {
 		return nil
 	}
 	return expr.expr.GetValueExpr().GetValue()
+}
+
+func getValueExpr(obj interface{}) *planpb.ValueExpr {
+	expr := getExpr(obj)
+	if expr == nil {
+		return nil
+	}
+	return expr.expr.GetValueExpr()
+}
+
+func isTemplateExpr(expr *planpb.ValueExpr) bool {
+	return expr != nil && expr.GetTemplateVariableName() != ""
 }

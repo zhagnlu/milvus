@@ -22,12 +22,16 @@ if ! whoami &> /dev/null; then
 fi
 
 set +e
-if [ -f "/etc/profile.d/devtoolset-7.sh" ]; then
-  source "/etc/profile.d/devtoolset-7.sh"
+if [ -f "/etc/profile.d/devtoolset-11.sh" ]; then
+  source "/etc/profile.d/devtoolset-11.sh"
 fi
 
-if [ -f "/etc/profile.d/llvm-toolset-7.sh" ]; then
-  source "/etc/profile.d/llvm-toolset-7.sh"
+if [ -f "/opt/rh/gcc-toolset-11/enable" ]; then
+  source "/opt/rh/gcc-toolset-11/enable"
+fi
+
+if [ -f "/etc/profile.d/llvm-toolset-11.sh" ]; then
+  source "/etc/profile.d/llvm-toolset-11.sh"
 fi
 
 # Exit immediately for non zero status

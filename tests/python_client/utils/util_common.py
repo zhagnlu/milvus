@@ -1,5 +1,8 @@
+import glob
+import time
 from yaml import full_load
 import json
+import pandas as pd
 from utils.util_log import test_log as log
 
 def gen_experiment_config(yaml):
@@ -52,15 +55,69 @@ def update_key_name(node, modify_k, modify_k_new):
     return node
 
 
-def get_collections():
+def get_collections(file_name="all_collections.json"):
     try:
-        with open("/tmp/ci_logs/all_collections.json", "r") as f:
+        with open(f"/tmp/ci_logs/{file_name}", "r") as f:
             data = json.load(f)
             collections = data["all"]
     except Exception as e:
         log.error(f"get_all_collections error: {e}")
         return []
     return collections
+
+
+def get_deploy_test_collections():
+    try:
+        with open("/tmp/ci_logs/deploy_test_all_collections.json", "r") as f:
+            data = json.load(f)
+            collections = data["all"]
+    except Exception as e:
+        log.error(f"get_all_collections error: {e}")
+        return []
+    return collections
+
+
+def get_chaos_test_collections():
+    try:
+        with open("/tmp/ci_logs/chaos_test_all_collections.json", "r") as f:
+            data = json.load(f)
+            collections = data["all"]
+    except Exception as e:
+        log.error(f"get_all_collections error: {e}")
+        return []
+    return collections
+
+
+def wait_signal_to_apply_chaos():
+    all_db_file = glob.glob("/tmp/ci_logs/event_records*.jsonl")
+    log.info(f"all files {all_db_file}")
+    ready_apply_chaos = True
+    timeout = 15*60
+    t0 = time.time()
+    for f in all_db_file:
+        while True and (time.time() - t0 < timeout):
+            try:
+                records = []
+                with open(f, 'r') as file:
+                    for line in file:
+                        line = line.strip()
+                        if line:
+                            records.append(json.loads(line))
+                df = pd.DataFrame(records) if records else pd.DataFrame(columns=["event_name", "event_status", "event_ts"])
+                log.debug(f"read {f}:result\n {df}")
+                result = df[(df['event_name'] == 'init_chaos') & (df['event_status'] == 'ready')]
+                if len(result) > 0:
+                    log.info(f"{f}: {result}")
+                    ready_apply_chaos = True
+                    break
+                else:
+                    ready_apply_chaos = False
+            except Exception as e:
+                log.error(f"read jsonl error: {e}")
+                ready_apply_chaos = False
+            time.sleep(10)
+
+    return ready_apply_chaos
 
 
 if __name__ == "__main__":

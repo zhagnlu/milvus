@@ -14,70 +14,260 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "Parser.h"
 #include "Plan.h"
+
+#include <cstddef>
+#include <limits>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "PlanProto.h"
-#include "generated/ShowPlanNodeVisitor.h"
+#include "common/EasyAssert.h"
+#include "common/FieldMeta.h"
+#include "common/QueryInfo.h"
+#include "common/Types.h"
+#include "common/Utils.h"
+#include "knowhere/emb_list_utils.h"
+#include "common/protobuf_utils.h"
+#include "fmt/core.h"
+#include "google/protobuf/io/coded_stream.h"
+#include "google/protobuf/io/zero_copy_stream_impl_lite.h"
+#include "pb/common.pb.h"
+#include "pb/plan.pb.h"
+#include "query/PlanImpl.h"
+#include "query/PlanNode.h"
 
 namespace milvus::query {
 
 // deprecated
 std::unique_ptr<PlaceholderGroup>
-ParsePlaceholderGroup(const Plan* plan, const std::string& placeholder_group_blob) {
-    return ParsePlaceholderGroup(plan, reinterpret_cast<const uint8_t*>(placeholder_group_blob.c_str()),
-                                 placeholder_group_blob.size());
+ParsePlaceholderGroup(const Plan* plan,
+                      const std::string_view placeholder_group_blob) {
+    return ParsePlaceholderGroup(
+        plan,
+        reinterpret_cast<const uint8_t*>(placeholder_group_blob.data()),
+        placeholder_group_blob.size());
+}
+
+static bool
+is_emb_list_placeholder(milvus::proto::common::PlaceholderType type) {
+    using PHType = milvus::proto::common::PlaceholderType;
+    return type == PHType::EmbListFloatVector ||
+           type == PHType::EmbListFloat16Vector ||
+           type == PHType::EmbListBFloat16Vector ||
+           type == PHType::EmbListBinaryVector ||
+           type == PHType::EmbListInt8Vector;
+}
+
+bool
+check_data_type(
+    const FieldMeta& field_meta,
+    const milvus::proto::common::PlaceholderValue& placeholder_value,
+    bool element_level) {
+    if (field_meta.get_data_type() == DataType::VECTOR_ARRAY) {
+        if (field_meta.get_element_type() == DataType::VECTOR_FLOAT) {
+            if (element_level) {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::FloatVector;
+            } else {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::
+                           EmbListFloatVector;
+            }
+        } else if (field_meta.get_element_type() == DataType::VECTOR_FLOAT16) {
+            if (element_level) {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::Float16Vector;
+            } else {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::
+                           EmbListFloat16Vector;
+            }
+        } else if (field_meta.get_element_type() == DataType::VECTOR_BFLOAT16) {
+            if (element_level) {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::BFloat16Vector;
+            } else {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::
+                           EmbListBFloat16Vector;
+            }
+        } else if (field_meta.get_element_type() == DataType::VECTOR_BINARY) {
+            if (element_level) {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::BinaryVector;
+            } else {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::
+                           EmbListBinaryVector;
+            }
+        } else if (field_meta.get_element_type() == DataType::VECTOR_INT8) {
+            if (element_level) {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::Int8Vector;
+            } else {
+                return placeholder_value.type() ==
+                       milvus::proto::common::PlaceholderType::
+                           EmbListInt8Vector;
+            }
+        }
+        return false;
+    }
+    return static_cast<int>(field_meta.get_data_type()) ==
+           static_cast<int>(placeholder_value.type());
 }
 
 std::unique_ptr<PlaceholderGroup>
-ParsePlaceholderGroup(const Plan* plan, const uint8_t* blob, const int64_t blob_len) {
-    namespace ser = milvus::proto::common;
+ParsePlaceholderGroup(const Plan* plan,
+                      const uint8_t* blob,
+                      const int64_t blob_len) {
     auto result = std::make_unique<PlaceholderGroup>();
-    ser::PlaceholderGroup ph_group;
+    milvus::proto::common::PlaceholderGroup ph_group;
     auto ok = ph_group.ParseFromArray(blob, blob_len);
     Assert(ok);
-    for (auto& info : ph_group.placeholders()) {
+    for (auto& ph : ph_group.placeholders()) {
         Placeholder element;
-        element.tag_ = info.tag();
+        element.tag_ = ph.tag();
         Assert(plan->tag2field_.count(element.tag_));
         auto field_id = plan->tag2field_.at(element.tag_);
-        auto& field_meta = plan->schema_[field_id];
-        element.num_of_queries_ = info.values_size();
-        AssertInfo(element.num_of_queries_, "must have queries");
-        Assert(element.num_of_queries_ > 0);
-        element.line_sizeof_ = info.values().Get(0).size();
-        AssertInfo(field_meta.get_sizeof() == element.line_sizeof_, "vector dimension mismatch");
-        auto& target = element.blob_;
-        target.reserve(element.line_sizeof_ * element.num_of_queries_);
-        for (auto& line : info.values()) {
-            Assert(element.line_sizeof_ == line.size());
-            target.insert(target.end(), line.begin(), line.end());
+        auto& field_meta = plan->schema_->operator[](field_id);
+
+        // Determine element_level for VECTOR_ARRAY fields based on
+        // metric_type and placeholder type:
+        // non-embedding-list metric + plain vector type → element-level search
+        // embedding-list metric + emb-list placeholder → embedding-list search
+        // mismatch combinations → error
+        if (field_meta.get_data_type() == DataType::VECTOR_ARRAY) {
+            auto& metric = plan->plan_node_->search_info_.metric_type_;
+            bool emb_list_metric =
+                knowhere::get_el_metric_type(metric).has_value();
+            bool emb_list_ph = is_emb_list_placeholder(ph.type());
+            if (emb_list_metric != emb_list_ph) {
+                ThrowInfo(DataTypeInvalid,
+                          fmt::format(
+                              "search type mismatch for VECTOR_ARRAY field {}: "
+                              "metric_type {} {} embedding list search, "
+                              "but search data is {}",
+                              field_meta.get_name().get(),
+                              metric,
+                              emb_list_metric ? "requires" : "does not support",
+                              emb_list_ph ? "embedding list" : "plain vector"));
+            }
+            element.element_level_ = !emb_list_metric;
+        } else {
+            element.element_level_ = false;
+        }
+
+        AssertInfo(check_data_type(field_meta, ph, element.element_level_),
+                   "vector type must be the same, field {} - type {}, search "
+                   "ph type {}",
+                   field_meta.get_name().get(),
+                   field_meta.get_data_type(),
+                   static_cast<DataType>(ph.type()));
+        element.num_of_queries_ = ph.values_size();
+        AssertInfo(element.num_of_queries_ > 0, "must have queries");
+        if (ph.type() ==
+            milvus::proto::common::PlaceholderType::SparseFloatVector) {
+            element.sparse_matrix_ =
+                SparseBytesToRows(ph.values(), /*validate=*/true);
+        } else {
+            auto line_size = ph.values().Get(0).size();
+            auto& target = element.blob_;
+
+            if (field_meta.get_data_type() != DataType::VECTOR_ARRAY ||
+                element.element_level_) {
+                if (field_meta.get_sizeof() != line_size &&
+                    !element.element_level_) {
+                    ThrowInfo(DimNotMatch,
+                              fmt::format(
+                                  "vector dimension mismatch, expected vector "
+                                  "size(byte) {}, actual {}.",
+                                  field_meta.get_sizeof(),
+                                  line_size));
+                }
+                target.reserve(line_size * element.num_of_queries_);
+                for (auto& line : ph.values()) {
+                    AssertInfo(line_size == line.size(),
+                               "vector dimension mismatch, expected vector "
+                               "size(byte) {}, actual {}.",
+                               line_size,
+                               line.size());
+                    target.insert(target.end(), line.begin(), line.end());
+                }
+            } else {
+                target.reserve(line_size * element.num_of_queries_);
+                auto dim = field_meta.get_dim();
+
+                // If the vector is embedding list, line contains multiple vectors.
+                // And we should record the offsets so that we can identify each
+                // embedding list in a flattened vectors.
+                auto& offsets = element.offsets_;
+                offsets.reserve(element.num_of_queries_ + 1);
+                size_t offset = 0;
+                offsets.push_back(offset);
+
+                auto bytes_per_vec = milvus::vector_bytes_per_element(
+                    field_meta.get_element_type(), dim);
+                for (auto& line : ph.values()) {
+                    target.insert(target.end(), line.begin(), line.end());
+                    AssertInfo(
+                        line.size() % bytes_per_vec == 0,
+                        "line.size() % bytes_per_vec == 0 assert failed, "
+                        "line.size() = {}, dim = {}, bytes_per_vec = {}",
+                        line.size(),
+                        dim,
+                        bytes_per_vec);
+
+                    offset += line.size() / bytes_per_vec;
+                    offsets.push_back(offset);
+                }
+            }
         }
         result->emplace_back(std::move(element));
     }
     return result;
 }
 
-std::unique_ptr<Plan>
-CreatePlan(const Schema& schema, const std::string& dsl_str) {
-    Json dsl;
-    dsl = json::parse(dsl_str);
-    auto plan = Parser(schema).CreatePlanImpl(dsl);
-    return plan;
+void
+ParsePlanNodeProto(proto::plan::PlanNode& plan_node,
+                   const void* serialized_expr_plan,
+                   int64_t size) {
+    google::protobuf::io::ArrayInputStream array_stream(serialized_expr_plan,
+                                                        size);
+    google::protobuf::io::CodedInputStream input_stream(&array_stream);
+    input_stream.SetRecursionLimit(std::numeric_limits<int32_t>::max());
+
+    auto res = plan_node.ParsePartialFromCodedStream(&input_stream);
+    if (!res) {
+        ThrowInfo(UnexpectedError, "parse plan node proto failed");
+    }
 }
 
 std::unique_ptr<Plan>
-CreateSearchPlanByExpr(const Schema& schema, const void* serialized_expr_plan, const int64_t size) {
+CreateSearchPlanByExpr(SchemaPtr schema,
+                       const void* serialized_expr_plan,
+                       const int64_t size) {
     // Note: serialized_expr_plan is of binary format
     proto::plan::PlanNode plan_node;
-    plan_node.ParseFromArray(serialized_expr_plan, size);
-    return ProtoParser(schema).CreatePlan(plan_node);
+    ParsePlanNodeProto(plan_node, serialized_expr_plan, size);
+    return ProtoParser(std::move(schema)).CreatePlan(plan_node);
+}
+
+std::unique_ptr<Plan>
+CreateSearchPlanFromPlanNode(SchemaPtr schema,
+                             const proto::plan::PlanNode& plan_node) {
+    return ProtoParser(std::move(schema)).CreatePlan(plan_node);
 }
 
 std::unique_ptr<RetrievePlan>
-CreateRetrievePlanByExpr(const Schema& schema, const void* serialized_expr_plan, const int64_t size) {
+CreateRetrievePlanByExpr(SchemaPtr schema,
+                         const void* serialized_expr_plan,
+                         const int64_t size) {
     proto::plan::PlanNode plan_node;
-    plan_node.ParseFromArray(serialized_expr_plan, size);
-    return ProtoParser(schema).CreateRetrievePlan(plan_node);
+    ParsePlanNodeProto(plan_node, serialized_expr_plan, size);
+    return ProtoParser(std::move(schema)).CreateRetrievePlan(plan_node);
 }
 
 int64_t
@@ -104,19 +294,5 @@ GetNumOfQueries(const PlaceholderGroup* group) {
 //    }
 //    return plan;
 //}
-
-void
-Plan::check_identical(Plan& other) {
-    Assert(&schema_ == &other.schema_);
-    auto json = ShowPlanNodeVisitor().call_child(*this->plan_node_);
-    auto other_json = ShowPlanNodeVisitor().call_child(*other.plan_node_);
-    Assert(json.dump(2) == other_json.dump(2));
-    Assert(this->extra_info_opt_.has_value() == other.extra_info_opt_.has_value());
-    if (this->extra_info_opt_.has_value()) {
-        Assert(this->extra_info_opt_->involved_fields_ == other.extra_info_opt_->involved_fields_);
-    }
-    Assert(this->tag2field_ == other.tag2field_);
-    Assert(this->target_entries_ == other.target_entries_);
-}
 
 }  // namespace milvus::query

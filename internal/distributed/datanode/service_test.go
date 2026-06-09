@@ -18,336 +18,348 @@ package grpcdatanode
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
-	clientv3 "go.etcd.io/etcd/client/v3"
+	"github.com/stretchr/testify/mock"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/workerpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type MockDataNode struct {
-	nodeID typeutil.UniqueID
-
-	stateCode      internalpb.StateCode
-	states         *internalpb.ComponentStates
-	status         *commonpb.Status
-	err            error
-	initErr        error
-	startErr       error
-	stopErr        error
-	regErr         error
-	strResp        *milvuspb.StringResponse
-	configResp     *internalpb.ShowConfigurationsResponse
-	metricResp     *milvuspb.GetMetricsResponse
-	resendResp     *datapb.ResendSegmentStatsResponse
-	compactionResp *datapb.CompactionStateResponse
-}
-
-func (m *MockDataNode) Init() error {
-	return m.initErr
-}
-
-func (m *MockDataNode) Start() error {
-	return m.startErr
-}
-
-func (m *MockDataNode) Stop() error {
-	return m.stopErr
-}
-
-func (m *MockDataNode) Register() error {
-	return m.regErr
-}
-
-func (m *MockDataNode) SetNodeID(id typeutil.UniqueID) {
-	m.nodeID = id
-}
-
-func (m *MockDataNode) UpdateStateCode(code internalpb.StateCode) {
-	m.stateCode = code
-}
-
-func (m *MockDataNode) GetStateCode() internalpb.StateCode {
-	return m.stateCode
-}
-
-func (m *MockDataNode) SetRootCoord(rc types.RootCoord) error {
-	return m.err
-}
-
-func (m *MockDataNode) SetDataCoord(dc types.DataCoord) error {
-	return m.err
-}
-
-func (m *MockDataNode) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return m.states, m.err
-}
-
-func (m *MockDataNode) GetStatisticsChannel(ctx context.Context) (*milvuspb.StringResponse, error) {
-	return m.strResp, m.err
-}
-
-func (m *MockDataNode) WatchDmChannels(ctx context.Context, req *datapb.WatchDmChannelsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockDataNode) FlushSegments(ctx context.Context, req *datapb.FlushSegmentsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockDataNode) ShowConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest) (*internalpb.ShowConfigurationsResponse, error) {
-	return m.configResp, m.err
-}
-
-func (m *MockDataNode) GetMetrics(ctx context.Context, request *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
-	return m.metricResp, m.err
-}
-
-func (m *MockDataNode) Compaction(ctx context.Context, req *datapb.CompactionPlan) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockDataNode) GetCompactionState(ctx context.Context, req *datapb.CompactionStateRequest) (*datapb.CompactionStateResponse, error) {
-	return m.compactionResp, m.err
-}
-
-func (m *MockDataNode) SetEtcdClient(client *clientv3.Client) {
-}
-
-func (m *MockDataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockDataNode) ResendSegmentStats(ctx context.Context, req *datapb.ResendSegmentStatsRequest) (*datapb.ResendSegmentStatsResponse, error) {
-	return m.resendResp, m.err
-}
-
-func (m *MockDataNode) AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type mockDataCoord struct {
-	types.DataCoord
-}
-
-func (m *mockDataCoord) Init() error {
-	return nil
-}
-func (m *mockDataCoord) Start() error {
-	return nil
-}
-func (m *mockDataCoord) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return &internalpb.ComponentStates{
-		State: &internalpb.ComponentInfo{
-			StateCode: internalpb.StateCode_Healthy,
-		},
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-		SubcomponentStates: []*internalpb.ComponentInfo{
-			{
-				StateCode: internalpb.StateCode_Healthy,
-			},
-		},
-	}, nil
-}
-func (m *mockDataCoord) Stop() error {
-	return fmt.Errorf("stop error")
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type mockRootCoord struct {
-	types.RootCoord
-}
-
-func (m *mockRootCoord) Init() error {
-	return nil
-}
-func (m *mockRootCoord) Start() error {
-	return nil
-}
-func (m *mockRootCoord) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return &internalpb.ComponentStates{
-		State: &internalpb.ComponentInfo{
-			StateCode: internalpb.StateCode_Healthy,
-		},
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-		SubcomponentStates: []*internalpb.ComponentInfo{
-			{
-				StateCode: internalpb.StateCode_Healthy,
-			},
-		},
-	}, nil
-}
-func (m *mockRootCoord) Stop() error {
-	return fmt.Errorf("stop error")
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 func Test_NewServer(t *testing.T) {
+	paramtable.Init()
 	ctx := context.Background()
 	server, err := NewServer(ctx, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, server)
 
-	server.newRootCoordClient = func(string, *clientv3.Client) (types.RootCoord, error) {
-		return &mockRootCoord{}, nil
-	}
-
-	server.newDataCoordClient = func(string, *clientv3.Client) (types.DataCoord, error) {
-		return &mockDataCoord{}, nil
-	}
-
 	t.Run("Run", func(t *testing.T) {
-		server.datanode = &MockDataNode{}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().SetEtcdClient(mock.Anything).Return()
+		datanode.EXPECT().SetAddress(mock.Anything).Return()
+		datanode.EXPECT().UpdateStateCode(mock.Anything).Return()
+		datanode.EXPECT().Register().Return(nil)
+		datanode.EXPECT().Init().Return(nil)
+		datanode.EXPECT().Start().Return(nil)
+		datanode.EXPECT().GetStateCode().Return(commonpb.StateCode_Healthy)
+		server.datanode = datanode
+		err = server.Prepare()
+		assert.NoError(t, err)
 		err = server.Run()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	})
 
 	t.Run("GetComponentStates", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			states: &internalpb.ComponentStates{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().GetComponentStates(mock.Anything, mock.Anything).
+			Return(&milvuspb.ComponentStates{State: &milvuspb.ComponentInfo{StateCode: commonpb.StateCode_Healthy}}, nil)
+		server.datanode = datanode
 		states, err := server.GetComponentStates(ctx, nil)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, states)
 	})
 
 	t.Run("GetStatisticsChannel", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			strResp: &milvuspb.StringResponse{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().GetStatisticsChannel(mock.Anything, mock.Anything).
+			Return(&milvuspb.StringResponse{Status: merr.Success()}, nil)
+		server.datanode = datanode
 		states, err := server.GetStatisticsChannel(ctx, nil)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, states)
 	})
 
 	t.Run("WatchDmChannels", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			status: &commonpb.Status{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().WatchDmChannels(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		server.datanode = datanode
 		states, err := server.WatchDmChannels(ctx, nil)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, states)
 	})
 
 	t.Run("FlushSegments", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			status: &commonpb.Status{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().GetStateCode().Return(commonpb.StateCode_Healthy)
+		datanode.EXPECT().FlushSegments(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		server.datanode = datanode
 		states, err := server.FlushSegments(ctx, nil)
-		assert.NotNil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, states)
 	})
 
 	t.Run("ShowConfigurations", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			configResp: &internalpb.ShowConfigurationsResponse{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().ShowConfigurations(mock.Anything, mock.Anything).Return(&internalpb.ShowConfigurationsResponse{}, nil)
+		server.datanode = datanode
 		resp, err := server.ShowConfigurations(ctx, nil)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
 
 	t.Run("GetMetrics", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			metricResp: &milvuspb.GetMetricsResponse{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{}, nil)
+		server.datanode = datanode
 		resp, err := server.GetMetrics(ctx, nil)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
 
 	t.Run("Compaction", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			status: &commonpb.Status{},
-		}
-		resp, err := server.Compaction(ctx, nil)
-		assert.Nil(t, err)
-		assert.NotNil(t, resp)
-	})
-
-	t.Run("Import", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			status: &commonpb.Status{},
-		}
-		resp, err := server.Import(ctx, nil)
-		assert.Nil(t, err)
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().CompactionV2(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		server.datanode = datanode
+		resp, err := server.CompactionV2(ctx, nil)
+		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
 
 	t.Run("ResendSegmentStats", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			resendResp: &datapb.ResendSegmentStatsResponse{},
-		}
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().ResendSegmentStats(mock.Anything, mock.Anything).Return(&datapb.ResendSegmentStatsResponse{}, nil)
+		server.datanode = datanode
 		resp, err := server.ResendSegmentStats(ctx, nil)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
 
-	t.Run("add segment", func(t *testing.T) {
-		server.datanode = &MockDataNode{
-			status: &commonpb.Status{},
-		}
-		resp, err := server.AddSegment(ctx, nil)
-		assert.Nil(t, err)
+	t.Run("NotifyChannelOperation", func(t *testing.T) {
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().NotifyChannelOperation(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		server.datanode = datanode
+		resp, err := server.NotifyChannelOperation(ctx, nil)
+		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 	})
 
+	t.Run("CheckChannelOperationProgress", func(t *testing.T) {
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().CheckChannelOperationProgress(mock.Anything, mock.Anything).Return(&datapb.ChannelOperationProgressResponse{}, nil)
+		server.datanode = datanode
+		resp, err := server.CheckChannelOperationProgress(ctx, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+	})
+
+	t.Run("DropCompactionPlans", func(t *testing.T) {
+		datanode := mocks.NewMockDataNode(t)
+		datanode.EXPECT().DropCompactionPlan(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		server.datanode = datanode
+		resp, err := server.DropCompactionPlan(ctx, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, resp)
+	})
+
+	server.datanode.(*mocks.MockDataNode).EXPECT().Stop().Return(nil)
 	err = server.Stop()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func Test_Run(t *testing.T) {
+	paramtable.Init()
+
 	ctx := context.Background()
 	server, err := NewServer(ctx, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, server)
 
-	server.datanode = &MockDataNode{
-		regErr: errors.New("error"),
-	}
+	datanode := mocks.NewMockDataNode(t)
+	datanode.EXPECT().SetEtcdClient(mock.Anything).Return()
+	datanode.EXPECT().SetAddress(mock.Anything).Return()
+	datanode.EXPECT().UpdateStateCode(mock.Anything).Return()
+	datanode.EXPECT().Init().Return(errors.New("mock err"))
+	server.datanode = datanode
 
-	server.newRootCoordClient = func(string, *clientv3.Client) (types.RootCoord, error) {
-		return &mockRootCoord{}, nil
-	}
-
-	server.newDataCoordClient = func(string, *clientv3.Client) (types.DataCoord, error) {
-		return &mockDataCoord{}, nil
-	}
-
+	err = server.Prepare()
+	assert.NoError(t, err)
 	err = server.Run()
 	assert.Error(t, err)
 
-	server.datanode = &MockDataNode{
-		startErr: errors.New("error"),
-	}
+	datanode = mocks.NewMockDataNode(t)
+	datanode.EXPECT().SetEtcdClient(mock.Anything).Return()
+	datanode.EXPECT().SetAddress(mock.Anything).Return()
+	datanode.EXPECT().UpdateStateCode(mock.Anything).Return()
+	datanode.EXPECT().Register().Return(nil)
+	datanode.EXPECT().Init().Return(nil)
+	datanode.EXPECT().Start().Return(nil)
+	datanode.EXPECT().GetStateCode().Return(commonpb.StateCode_Healthy)
+	server.datanode = datanode
 
 	err = server.Run()
-	assert.Error(t, err)
+	assert.NoError(t, err)
+}
 
-	server.datanode = &MockDataNode{
-		initErr: errors.New("error"),
-	}
+func TestIndexService(t *testing.T) {
+	paramtable.Init()
+	ctx := context.Background()
+	server, err := NewServer(ctx, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, server)
 
+	dn := mocks.NewMockDataNode(t)
+	dn.EXPECT().SetEtcdClient(mock.Anything).Return()
+	dn.EXPECT().SetAddress(mock.Anything).Return()
+	dn.EXPECT().UpdateStateCode(mock.Anything).Return()
+	dn.EXPECT().Register().Return(nil)
+	dn.EXPECT().Init().Return(nil)
+	dn.EXPECT().Start().Return(nil)
+	dn.EXPECT().GetStateCode().Return(commonpb.StateCode_Healthy)
+	server.datanode = dn
+
+	err = server.Prepare()
+	assert.NoError(t, err)
 	err = server.Run()
-	assert.Error(t, err)
+	assert.NoError(t, err)
 
-	server.datanode = &MockDataNode{
-		stopErr: errors.New("error"),
-	}
+	t.Run("GetComponentStates", func(t *testing.T) {
+		dn.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Return(&milvuspb.ComponentStates{
+			State: &milvuspb.ComponentInfo{
+				StateCode: commonpb.StateCode_Healthy,
+			},
+		}, nil)
+		req := &milvuspb.GetComponentStatesRequest{}
+		states, err := server.GetComponentStates(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.StateCode_Healthy, states.State.StateCode)
+	})
 
+	t.Run("GetStatisticsChannel", func(t *testing.T) {
+		dn.EXPECT().GetStatisticsChannel(mock.Anything, mock.Anything).Return(&milvuspb.StringResponse{
+			Status: merr.Success(),
+		}, nil)
+		req := &internalpb.GetStatisticsChannelRequest{}
+		resp, err := server.GetStatisticsChannel(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("CreateJob", func(t *testing.T) {
+		dn.EXPECT().CreateJob(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		req := &workerpb.CreateJobRequest{
+			ClusterID: "",
+			BuildID:   0,
+			IndexID:   0,
+			DataPaths: []string{},
+		}
+		resp, err := server.CreateJob(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+	})
+
+	t.Run("QueryJob", func(t *testing.T) {
+		dn.EXPECT().QueryJobs(mock.Anything, mock.Anything).Return(&workerpb.QueryJobsResponse{
+			Status: merr.Success(),
+		}, nil)
+		req := &workerpb.QueryJobsRequest{}
+		resp, err := server.QueryJobs(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("DropJobs", func(t *testing.T) {
+		dn.EXPECT().DropJobs(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		req := &workerpb.DropJobsRequest{}
+		resp, err := server.DropJobs(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+	})
+
+	t.Run("ShowConfigurations", func(t *testing.T) {
+		dn.EXPECT().ShowConfigurations(mock.Anything, mock.Anything).Return(&internalpb.ShowConfigurationsResponse{
+			Status: merr.Success(),
+		}, nil)
+		req := &internalpb.ShowConfigurationsRequest{
+			Pattern: "",
+		}
+		resp, err := server.ShowConfigurations(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("GetMetrics", func(t *testing.T) {
+		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{
+			Status: merr.Success(),
+		}, nil)
+		req, err := metricsinfo.ConstructRequestByMetricType(metricsinfo.SystemInfoMetrics)
+		assert.NoError(t, err)
+		resp, err := server.GetMetrics(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("GetTaskSlots", func(t *testing.T) {
+		dn.EXPECT().GetJobStats(mock.Anything, mock.Anything).Return(&workerpb.GetJobStatsResponse{
+			Status: merr.Success(),
+		}, nil)
+		req := &workerpb.GetJobStatsRequest{}
+		resp, err := server.GetJobStats(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("CreateJobV2", func(t *testing.T) {
+		dn.EXPECT().CreateJobV2(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		req := &workerpb.CreateJobV2Request{}
+		resp, err := server.CreateJobV2(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetErrorCode())
+	})
+
+	t.Run("QueryJobsV2", func(t *testing.T) {
+		dn.EXPECT().QueryJobsV2(mock.Anything, mock.Anything).Return(&workerpb.QueryJobsV2Response{
+			Status: merr.Success(),
+		}, nil)
+		req := &workerpb.QueryJobsV2Request{}
+		resp, err := server.QueryJobsV2(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("DropJobsV2", func(t *testing.T) {
+		dn.EXPECT().DropJobsV2(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		req := &workerpb.DropJobsV2Request{}
+		resp, err := server.DropJobsV2(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetErrorCode())
+	})
+
+	t.Run("CreateTask", func(t *testing.T) {
+		dn.EXPECT().CreateTask(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		req := &workerpb.CreateTaskRequest{}
+		resp, err := server.CreateTask(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetErrorCode())
+	})
+
+	t.Run("QueryTask", func(t *testing.T) {
+		dn.EXPECT().QueryTask(mock.Anything, mock.Anything).Return(&workerpb.QueryTaskResponse{
+			Status: merr.Success(),
+		}, nil)
+		req := &workerpb.QueryTaskRequest{}
+		resp, err := server.QueryTask(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("DropTask", func(t *testing.T) {
+		dn.EXPECT().DropTask(mock.Anything, mock.Anything).Return(merr.Success(), nil)
+		req := &workerpb.DropTaskRequest{}
+		resp, err := server.DropTask(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetErrorCode())
+	})
+
+	server.datanode.(*mocks.MockDataNode).EXPECT().Stop().Return(nil)
 	err = server.Stop()
-	assert.Error(t, err)
+	assert.NoError(t, err)
 }

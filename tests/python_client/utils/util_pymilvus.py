@@ -8,8 +8,9 @@ import copy
 import numpy as np
 import requests
 from sklearn import preprocessing
-from pymilvus import Milvus, DataType
+from pymilvus import MilvusClient, DataType
 from utils.util_log import test_log as log
+from utils.util_k8s import init_k8s_client_config
 
 port = 19530
 epsilon = 0.000001
@@ -38,7 +39,6 @@ all_index_types = [
     "IVF_SQ8",
     "IVF_PQ",
     "HNSW",
-    "ANNOY",
     "BIN_FLAT",
     "BIN_IVF_FLAT"
 ]
@@ -49,7 +49,6 @@ default_index_params = [
     {"nlist": 128},
     {"nlist": 128, "m": 16, "nbits": 8},
     {"M": 48, "efConstruction": 500},
-    {"n_trees": 50},
     {"nlist": 128},
     {"nlist": 128}
 ]
@@ -58,25 +57,15 @@ default_index_params = [
 def create_target_index(index, field_name):
     index["field_name"] = field_name
 
+def gpu_support():
+    return ["GPU_IVF_FLAT", "GPU_IVF_PQ"]
 
 def binary_support():
     return ["BIN_FLAT", "BIN_IVF_FLAT"]
 
 
-def delete_support():
-    return ["FLAT", "IVF_FLAT", "IVF_SQ8", "IVF_PQ"]
-
-
-def ivf():
-    return ["FLAT", "IVF_FLAT", "IVF_SQ8", "IVF_PQ"]
-
-
-def skip_pq():
-    return ["IVF_PQ"]
-
-
 def binary_metrics():
-    return ["JACCARD", "HAMMING", "TANIMOTO", "SUBSTRUCTURE", "SUPERSTRUCTURE"]
+    return ["JACCARD", "HAMMING", "SUBSTRUCTURE", "SUPERSTRUCTURE"]
 
 
 def structure_metrics():
@@ -126,9 +115,9 @@ def get_milvus(host, port, uri=None, handler=None, **kwargs):
         handler = "GRPC"
     try_connect = kwargs.get("try_connect", True)
     if uri is not None:
-        milvus = Milvus(uri=uri, handler=handler, try_connect=try_connect)
+        milvus = MilvusClient(uri=uri, handler=handler, try_connect=try_connect)
     else:
-        milvus = Milvus(host=host, port=port, handler=handler, try_connect=try_connect)
+        milvus = MilvusClient(uri=f"http://{host}:{port}", handler=handler, try_connect=try_connect)
     return milvus
 
 
@@ -722,30 +711,6 @@ def gen_invalid_vectors():
     return invalid_vectors
 
 
-def gen_invaild_search_params():
-    invalid_search_key = 100
-    search_params = []
-    for index_type in all_index_types:
-        if index_type == "FLAT":
-            continue
-        search_params.append({"index_type": index_type, "search_params": {"invalid_key": invalid_search_key}})
-        if index_type in delete_support():
-            for nprobe in gen_invalid_params():
-                ivf_search_params = {"index_type": index_type, "search_params": {"nprobe": nprobe}}
-                search_params.append(ivf_search_params)
-        elif index_type in ["HNSW"]:
-            for ef in gen_invalid_params():
-                hnsw_search_param = {"index_type": index_type, "search_params": {"ef": ef}}
-                search_params.append(hnsw_search_param)
-        elif index_type == "ANNOY":
-            for search_k in gen_invalid_params():
-                if isinstance(search_k, int):
-                    continue
-                annoy_search_param = {"index_type": index_type, "search_params": {"search_k": search_k}}
-                search_params.append(annoy_search_param)
-    return search_params
-
-
 def gen_invalid_index():
     index_params = []
     for index_type in gen_invalid_strs():
@@ -796,15 +761,17 @@ def gen_index():
     return index_params
 
 
-def gen_simple_index():
-    index_params = []
-    for i in range(len(all_index_types)):
-        if all_index_types[i] in binary_support():
-            continue
-        dic = {"index_type": all_index_types[i], "metric_type": "L2"}
-        dic.update({"params": default_index_params[i]})
-        index_params.append(dic)
-    return index_params
+# def gen_simple_index():
+#     index_params = []
+#     for i in range(len(all_index_types)):
+#         if all_index_types[i] in binary_support():
+#             continue
+#         if all_index_types[i] in gpu_support():
+#             continue
+#         dic = {"index_type": all_index_types[i], "metric_type": "L2"}
+#         dic.update({"params": default_index_params[i]})
+#         index_params.append(dic)
+#     return index_params
 
 
 def gen_binary_index():
@@ -826,23 +793,6 @@ def gen_normal_expressions():
     return expressions
 
 
-def get_search_param(index_type, metric_type="L2"):
-    search_params = {"metric_type": metric_type}
-    if index_type in ivf() or index_type in binary_support():
-        nprobe64 = {"nprobe": 64}
-        search_params.update({"params": nprobe64})
-    elif index_type in ["HNSW"]:
-        ef64 = {"ef": 64}
-        search_params.update({"params": ef64})
-    elif index_type == "ANNOY":
-        search_k = {"search_k": 1000}
-        search_params.update({"params": search_k})
-    else:
-        log.error("Invalid index_type.")
-        raise Exception("Invalid index_type.")
-    return search_params
-
-
 def assert_equal_vector(v1, v2):
     if len(v1) != len(v2):
         assert False
@@ -857,14 +807,14 @@ def restart_server(helm_release_name):
     client.rest.logger.setLevel(log.WARNING)
 
     # service_name = "%s.%s.svc.cluster.local" % (helm_release_name, namespace)
-    config.load_kube_config()
+    init_k8s_client_config()
     v1 = client.CoreV1Api()
     pod_name = None
     # config_map_names = v1.list_namespaced_config_map(namespace, pretty='true')
     # body = {"replicas": 0}
     pods = v1.list_namespaced_pod(namespace)
     for i in pods.items:
-        if i.metadata.name.find(helm_release_name) != -1 and i.metadata.name.find("mysql") == -1:
+        if i.metadata.name.find(helm_release_name) != -1:
             pod_name = i.metadata.name
             break
             # v1.patch_namespaced_config_map(config_map_name, namespace, body, pretty='true')
@@ -887,7 +837,7 @@ def restart_server(helm_release_name):
             log.error(pod_name_tmp)
             if pod_name_tmp == pod_name:
                 continue
-            elif pod_name_tmp.find(helm_release_name) == -1 or pod_name_tmp.find("mysql") != -1:
+            elif pod_name_tmp.find(helm_release_name) == -1:
                 continue
             else:
                 status_res = v1.read_namespaced_pod_status(pod_name_tmp, namespace, pretty='true')

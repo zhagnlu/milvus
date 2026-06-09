@@ -1,21 +1,35 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package rootcoord
 
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/metastore/model"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
-	"github.com/milvus-io/milvus/internal/util/tsoutil"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // describeCollectionTask describe collection request task
 type describeCollectionTask struct {
-	baseTaskV2
-	Req *milvuspb.DescribeCollectionRequest
-	Rsp *milvuspb.DescribeCollectionResponse
+	baseTask
+	Req              *milvuspb.DescribeCollectionRequest
+	Rsp              *milvuspb.DescribeCollectionResponse
+	allowUnavailable bool
 }
 
 func (t *describeCollectionTask) Prepare(ctx context.Context) error {
@@ -27,47 +41,40 @@ func (t *describeCollectionTask) Prepare(ctx context.Context) error {
 
 // Execute task execution
 func (t *describeCollectionTask) Execute(ctx context.Context) (err error) {
-	var collInfo *model.Collection
-	t.Rsp.Status = succStatus()
-
-	if t.Req.GetTimeStamp() == 0 {
-		t.Req.TimeStamp = typeutil.MaxTimestamp
+	// if collecction name is not empty, check if the collection is visible to the current user
+	coll, err := t.core.describeCollection(ctx, t.Req, t.allowUnavailable)
+	if err != nil {
+		return err
 	}
 
 	if t.Req.GetCollectionName() != "" {
-		collInfo, err = t.core.meta.GetCollectionByName(ctx, t.Req.GetCollectionName(), t.Req.GetTimeStamp())
+		visibleCollections, err := t.core.getCurrentUserVisibleCollections(ctx, t.Req.GetDbName())
 		if err != nil {
-			t.Rsp.Status = failStatus(commonpb.ErrorCode_CollectionNotExists, err.Error())
+			t.Rsp.Status = merr.Status(err)
 			return err
 		}
-	} else {
-		collInfo, err = t.core.meta.GetCollectionByID(ctx, t.Req.GetCollectionID(), t.Req.GetTimeStamp())
-		if err != nil {
-			t.Rsp.Status = failStatus(commonpb.ErrorCode_CollectionNotExists, err.Error())
+		if !isVisibleCollectionForCurUser(coll.Name, visibleCollections) {
+			err = merr.WrapErrPrivilegeNotPermitted("not allowed to access collection, collection name: %s", t.Req.GetCollectionName())
+			t.Rsp.Status = merr.Status(err)
 			return err
 		}
 	}
 
-	t.Rsp.Schema = &schemapb.CollectionSchema{
-		Name:        collInfo.Name,
-		Description: collInfo.Description,
-		AutoID:      collInfo.AutoID,
-		Fields:      model.MarshalFieldModels(collInfo.Fields),
+	aliases := t.core.meta.ListAliasesByID(ctx, coll.CollectionID)
+	db, err := t.core.meta.GetDatabaseByID(ctx, coll.DBID, t.GetTs())
+	if err != nil {
+		return err
 	}
-	t.Rsp.CollectionID = collInfo.CollectionID
-	t.Rsp.VirtualChannelNames = collInfo.VirtualChannelNames
-	t.Rsp.PhysicalChannelNames = collInfo.PhysicalChannelNames
-	if collInfo.ShardsNum == 0 {
-		collInfo.ShardsNum = int32(len(collInfo.VirtualChannelNames))
-	}
-	t.Rsp.ShardsNum = collInfo.ShardsNum
-	t.Rsp.ConsistencyLevel = collInfo.ConsistencyLevel
-
-	t.Rsp.CreatedTimestamp = collInfo.CreateTime
-	createdPhysicalTime, _ := tsoutil.ParseHybridTs(collInfo.CreateTime)
-	t.Rsp.CreatedUtcTimestamp = uint64(createdPhysicalTime)
-	t.Rsp.Aliases = t.core.meta.ListAliasesByID(collInfo.CollectionID)
-	t.Rsp.StartPositions = collInfo.StartPositions
-	t.Rsp.CollectionName = t.Rsp.Schema.Name
+	t.Rsp = convertModelToDesc(coll, aliases, db.Name)
+	t.Rsp.RequestTime = t.ts
 	return nil
+}
+
+func (t *describeCollectionTask) GetLockerKey() LockerKey {
+	collection := t.core.getCollectionIDStr(t.ctx, t.Req.GetDbName(), t.Req.GetCollectionName(), t.Req.GetCollectionID())
+	return NewLockerKeyChain(
+		NewClusterLockerKey(false),
+		NewDatabaseLockerKey(t.Req.GetDbName(), false),
+		NewCollectionLockerKey(collection, false),
+	)
 }

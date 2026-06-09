@@ -19,75 +19,160 @@ package roles
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	rocksmqimpl "github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
-	"github.com/milvus-io/milvus/internal/util/dependency"
-
-	"go.uber.org/zap"
-
+	"github.com/cockroachdb/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/samber/lo"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/cmd/components"
-	"github.com/milvus-io/milvus/internal/datacoord"
-	"github.com/milvus-io/milvus/internal/datanode"
-	"github.com/milvus-io/milvus/internal/indexcoord"
-	"github.com/milvus-io/milvus/internal/indexnode"
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/metrics"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proxy"
-	"github.com/milvus-io/milvus/internal/querycoord"
-	"github.com/milvus-io/milvus/internal/querynode"
-	"github.com/milvus-io/milvus/internal/rootcoord"
-	"github.com/milvus-io/milvus/internal/util/etcd"
-	"github.com/milvus-io/milvus/internal/util/healthz"
-	"github.com/milvus-io/milvus/internal/util/metricsinfo"
-	"github.com/milvus-io/milvus/internal/util/paramtable"
-	"github.com/milvus-io/milvus/internal/util/trace"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/milvus-io/milvus/internal/distributed/streaming"
+	"github.com/milvus-io/milvus/internal/http"
+	"github.com/milvus-io/milvus/internal/http/healthz"
+	"github.com/milvus-io/milvus/internal/util/dependency"
+	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
+	"github.com/milvus-io/milvus/internal/util/initcore"
+	internalmetrics "github.com/milvus-io/milvus/internal/util/metrics"
+	"github.com/milvus-io/milvus/internal/util/pathutil"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
+	"github.com/milvus-io/milvus/pkg/v3/config"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	rocksmqimpl "github.com/milvus-io/milvus/pkg/v3/mq/mqimpl/rocksmq/server"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/tracer"
+	"github.com/milvus-io/milvus/pkg/v3/util/conc"
+	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/expr"
+	"github.com/milvus-io/milvus/pkg/v3/util/gc"
+	"github.com/milvus-io/milvus/pkg/v3/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	_ "github.com/milvus-io/milvus/pkg/v3/util/symbolizer" // support symbolizer and crash dump
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-var Params paramtable.ComponentParam
-
 // all milvus related metrics is in a separate registry
-var Registry *prometheus.Registry
+var Registry *internalmetrics.MilvusRegistry
 
 func init() {
-	Registry = prometheus.NewRegistry()
-	Registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-	Registry.MustRegister(prometheus.NewGoCollector())
-	metrics.RegisterEtcdMetrics(Registry)
+	Registry = internalmetrics.NewMilvusRegistry()
+	metrics.Register(Registry.GoRegistry)
+	metrics.RegisterMetaMetrics(Registry.GoRegistry)
+	metrics.RegisterMsgStreamMetrics(Registry.GoRegistry)
+	metrics.RegisterStorageMetrics(Registry.GoRegistry)
 }
 
-func stopRocksmq() {
-	rocksmqimpl.CloseRocksMQ()
+// stopRocksmqIfUsed closes the RocksMQ if it is used.
+func stopRocksmqIfUsed() {
+	if name := util.MustSelectWALName(); name == message.WALNameRocksmq {
+		rocksmqimpl.CloseRocksMQ()
+	}
+}
+
+type component interface {
+	healthz.Indicator
+	Prepare() error
+	Run() error
+	Stop() error
+}
+
+func cleanLocalDir(path string) {
+	_, statErr := os.Stat(path)
+	// path exist, but stat error
+	if statErr != nil && !os.IsNotExist(statErr) {
+		log.Warn("Check if path exists failed when clean local data cache", zap.Error(statErr))
+		panic(statErr)
+	}
+	// path exist, remove all
+	if statErr == nil {
+		err := os.RemoveAll(path)
+		if err != nil {
+			log.Warn("Clean local data cache failed", zap.Error(err))
+			panic(err)
+		}
+		log.Info("Clean local data cache", zap.String("path", path))
+	}
+}
+
+func runComponent[T component](ctx context.Context,
+	localMsg bool,
+	creator func(context.Context, dependency.Factory) (T, error),
+	metricRegister func(*prometheus.Registry),
+) *conc.Future[component] {
+	sign := make(chan struct{})
+	future := conc.Go(func() (component, error) {
+		// Wrap the creation and preparation phase to enable concurrent component startup
+		prepareFunc := func() (component, error) {
+			defer close(sign)
+			factory := dependency.NewFactory(localMsg)
+			var err error
+			role, err := creator(ctx, factory)
+			if err != nil {
+				return nil, errors.Wrap(err, "create component failed")
+			}
+			if err := role.Prepare(); err != nil {
+				return nil, errors.Wrap(err, "prepare component failed")
+			}
+			healthz.Register(role)
+			metricRegister(Registry.GoRegistry)
+			return role, nil
+		}
+
+		role, err := prepareFunc()
+		if err != nil {
+			return nil, err
+		}
+
+		// Run() executes after sign is closed, allowing components to start concurrently
+		if err := role.Run(); err != nil {
+			return nil, errors.Wrap(err, "run component failed")
+		}
+		return role, nil
+	})
+
+	<-sign
+	return future
 }
 
 // MilvusRoles decides which components are brought up with Milvus.
 type MilvusRoles struct {
-	HasMultipleRoles bool
-	EnableRootCoord  bool `env:"ENABLE_ROOT_COORD"`
-	EnableProxy      bool `env:"ENABLE_PROXY"`
-	EnableQueryCoord bool `env:"ENABLE_QUERY_COORD"`
-	EnableQueryNode  bool `env:"ENABLE_QUERY_NODE"`
-	EnableDataCoord  bool `env:"ENABLE_DATA_COORD"`
-	EnableDataNode   bool `env:"ENABLE_DATA_NODE"`
-	EnableIndexCoord bool `env:"ENABLE_INDEX_COORD"`
-	EnableIndexNode  bool `env:"ENABLE_INDEX_NODE"`
+	EnableProxy         bool `env:"ENABLE_PROXY"`
+	EnableMixCoord      bool `env:"ENABLE_ROOT_COORD"`
+	EnableQueryNode     bool `env:"ENABLE_QUERY_NODE"`
+	EnableDataNode      bool `env:"ENABLE_DATA_NODE"`
+	EnableStreamingNode bool `env:"ENABLE_STREAMING_NODE"`
+	EnableRootCoord     bool `env:"ENABLE_ROOT_COORD"`
+	EnableQueryCoord    bool `env:"ENABLE_QUERY_COORD"`
+	EnableDataCoord     bool `env:"ENABLE_DATA_COORD"`
+	EnableCDC           bool `env:"ENABLE_CDC"`
+	Local               bool
+	Alias               string
+	Embedded            bool
+
+	ServerType string
+
+	closed chan struct{}
+	once   sync.Once
 }
 
-// EnvValue not used now.
-func (mr *MilvusRoles) EnvValue(env string) bool {
-	env = strings.ToLower(env)
-	env = strings.Trim(env, " ")
-	return env == "1" || env == "true"
+// NewMilvusRoles creates a new MilvusRoles with private fields initialized.
+func NewMilvusRoles() *MilvusRoles {
+	mr := &MilvusRoles{
+		closed: make(chan struct{}),
+	}
+	return mr
 }
 
 func (mr *MilvusRoles) printLDPreLoad() {
@@ -98,434 +183,470 @@ func (mr *MilvusRoles) printLDPreLoad() {
 	}
 }
 
-func (mr *MilvusRoles) runRootCoord(ctx context.Context, localMsg bool) *components.RootCoord {
-	var rc *components.RootCoord
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		rootcoord.Params.InitOnce()
-		if localMsg {
-			rootcoord.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			rootcoord.Params.SetLogConfig(typeutil.RootCoordRole)
-		}
-		factory := dependency.NewFactory(localMsg)
-		var err error
-		rc, err = components.NewRootCoord(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: rc})
-		}
-		wg.Done()
-		_ = rc.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterRootCoord(Registry)
-	return rc
+func (mr *MilvusRoles) runProxy(ctx context.Context, localMsg bool) *conc.Future[component] {
+	return runComponent(ctx, localMsg, components.NewProxy, metrics.RegisterProxy)
 }
 
-func (mr *MilvusRoles) runProxy(ctx context.Context, localMsg bool, alias string) *components.Proxy {
-	var pn *components.Proxy
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		proxy.Params.ProxyCfg.InitAlias(alias)
-		proxy.Params.InitOnce()
-		if localMsg {
-			proxy.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			proxy.Params.SetLogConfig(typeutil.ProxyRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-		var err error
-		pn, err = components.NewProxy(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: pn})
-		}
-		wg.Done()
-		_ = pn.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterProxy(Registry)
-	return pn
+func (mr *MilvusRoles) runMixCoord(ctx context.Context, localMsg bool) *conc.Future[component] {
+	return runComponent(ctx, localMsg, components.NewMixCoord, metrics.RegisterMixCoord)
 }
 
-func (mr *MilvusRoles) runQueryCoord(ctx context.Context, localMsg bool) *components.QueryCoord {
-	var qs *components.QueryCoord
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		querycoord.Params.InitOnce()
-		if localMsg {
-			querycoord.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			querycoord.Params.SetLogConfig(typeutil.QueryCoordRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-		var err error
-		qs, err = components.NewQueryCoord(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: qs})
-		}
-		wg.Done()
-		_ = qs.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterQueryCoord(Registry)
-	return qs
+func (mr *MilvusRoles) runQueryNode(ctx context.Context, localMsg bool) *conc.Future[component] {
+	// clear local storage
+	queryDataLocalPath := pathutil.GetPath(pathutil.RootCachePath, 0)
+	if !paramtable.Get().CommonCfg.EnablePosixMode.GetAsBool() {
+		// under non-posix mode, we need to clean local storage when starting query node
+		// under posix mode, this clean task will be done by mixcoord
+		cleanLocalDir(queryDataLocalPath)
+	}
+	return runComponent(ctx, localMsg, components.NewQueryNode, metrics.RegisterQueryNode)
 }
 
-func (mr *MilvusRoles) runQueryNode(ctx context.Context, localMsg bool, alias string) *components.QueryNode {
-	var qn *components.QueryNode
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		querynode.Params.QueryNodeCfg.InitAlias(alias)
-		querynode.Params.InitOnce()
-		if localMsg {
-			querynode.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			querynode.Params.SetLogConfig(typeutil.QueryNodeRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-		var err error
-		qn, err = components.NewQueryNode(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: qn})
-		}
-		wg.Done()
-		_ = qn.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterQueryNode(Registry)
-	return qn
+func (mr *MilvusRoles) runStreamingNode(ctx context.Context, localMsg bool) *conc.Future[component] {
+	return runComponent(ctx, localMsg, components.NewStreamingNode, metrics.RegisterStreamingNode)
 }
 
-func (mr *MilvusRoles) runDataCoord(ctx context.Context, localMsg bool) *components.DataCoord {
-	var ds *components.DataCoord
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		datacoord.Params.InitOnce()
-		if localMsg {
-			datacoord.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			datacoord.Params.SetLogConfig(typeutil.DataCoordRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-
-		dctx := log.WithModule(ctx, "DataCoord")
-		var err error
-		ds, err = components.NewDataCoord(dctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: ds})
-		}
-		wg.Done()
-		_ = ds.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterDataCoord(Registry)
-	return ds
+func (mr *MilvusRoles) runDataNode(ctx context.Context, localMsg bool) *conc.Future[component] {
+	return runComponent(ctx, localMsg, components.NewDataNode, metrics.RegisterDataNode)
 }
 
-func (mr *MilvusRoles) runDataNode(ctx context.Context, localMsg bool, alias string) *components.DataNode {
-	var dn *components.DataNode
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		datanode.Params.DataNodeCfg.InitAlias(alias)
-		datanode.Params.InitOnce()
-		if localMsg {
-			datanode.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			datanode.Params.SetLogConfig(typeutil.DataNodeRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-		var err error
-		dn, err = components.NewDataNode(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: dn})
-		}
-		wg.Done()
-		_ = dn.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterDataNode(Registry)
-	return dn
+func (mr *MilvusRoles) runCDC(ctx context.Context, localMsg bool) *conc.Future[component] {
+	return runComponent(ctx, localMsg, components.NewCDC, metrics.RegisterCDC)
 }
 
-func (mr *MilvusRoles) runIndexCoord(ctx context.Context, localMsg bool) *components.IndexCoord {
-	var is *components.IndexCoord
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		indexcoord.Params.InitOnce()
-		if localMsg {
-			indexcoord.Params.SetLogConfig(typeutil.StandaloneRole)
+// waitForAllComponentsReady waits for all components to be ready.
+// It will return an error if any component is not ready before closing with a fast fail strategy.
+// It will return a map of components that are ready.
+func (mr *MilvusRoles) waitForAllComponentsReady(cancel context.CancelFunc, componentFutureMap map[string]*conc.Future[component]) (map[string]component, error) {
+	roles := make([]string, 0, len(componentFutureMap))
+	futures := make([]*conc.Future[component], 0, len(componentFutureMap))
+	for role, future := range componentFutureMap {
+		roles = append(roles, role)
+		futures = append(futures, future)
+	}
+	selectCases := make([]reflect.SelectCase, 1+len(componentFutureMap))
+	selectCases[0] = reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(mr.closed),
+	}
+	for i, future := range futures {
+		selectCases[i+1] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(future.Inner()),
+		}
+	}
+	componentMap := make(map[string]component, len(componentFutureMap))
+	readyCount := 0
+	for {
+		index, _, _ := reflect.Select(selectCases)
+		if index == 0 {
+			cancel()
+			log.Warn("components are not ready before closing, wait for the start of components to be canceled...")
+			return nil, context.Canceled
 		} else {
-			indexcoord.Params.SetLogConfig(typeutil.IndexCoordRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-
-		var err error
-		is, err = components.NewIndexCoord(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: is})
-		}
-		wg.Done()
-		_ = is.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterIndexCoord(Registry)
-	return is
-}
-
-func (mr *MilvusRoles) runIndexNode(ctx context.Context, localMsg bool, alias string) *components.IndexNode {
-	var in *components.IndexNode
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		indexnode.Params.IndexNodeCfg.InitAlias(alias)
-		indexnode.Params.InitOnce()
-		if localMsg {
-			indexnode.Params.SetLogConfig(typeutil.StandaloneRole)
-		} else {
-			indexnode.Params.SetLogConfig(typeutil.IndexNodeRole)
-		}
-
-		factory := dependency.NewFactory(localMsg)
-
-		var err error
-		in, err = components.NewIndexNode(ctx, factory)
-		if err != nil {
-			panic(err)
-		}
-		if !mr.HasMultipleRoles {
-			http.Handle(healthz.HealthzRouterPath, &componentsHealthzHandler{component: in})
-		}
-		wg.Done()
-		_ = in.Run()
-	}()
-	wg.Wait()
-
-	metrics.RegisterIndexNode(Registry)
-	return in
-}
-
-// Run Milvus components.
-func (mr *MilvusRoles) Run(local bool, alias string) {
-	log.Info("starting running Milvus components")
-	ctx, cancel := context.WithCancel(context.Background())
-	mr.printLDPreLoad()
-
-	// only standalone enable localMsg
-	if local {
-		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.StandaloneDeployMode); err != nil {
-			log.Error("Failed to set deploy mode: ", zap.Error(err))
-		}
-		Params.Init()
-
-		if Params.RocksmqEnable() {
-			path, err := Params.Load("rocksmq.path")
+			role := roles[index-1]
+			component, err := futures[index-1].Await()
+			readyCount++
 			if err != nil {
-				panic(err)
+				cancel()
+				log.Warn("component is not ready before closing", zap.String("role", role), zap.Error(err))
+				return nil, err
+			} else {
+				componentMap[role] = component
+				log.Info("component is ready", zap.String("role", role))
 			}
-
-			if err = rocksmqimpl.InitRocksMQ(path); err != nil {
-				panic(err)
-			}
-			defer stopRocksmq()
 		}
-
-		if Params.EtcdCfg.UseEmbedEtcd {
-			// Start etcd server.
-			etcd.InitEtcdServer(&Params.EtcdCfg)
-			defer etcd.StopEtcdServer()
+		selectCases[index] = reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(nil),
 		}
+		if readyCount == len(componentFutureMap) {
+			break
+		}
+	}
+	return componentMap, nil
+}
+
+func (mr *MilvusRoles) setupLogger() {
+	params := paramtable.Get()
+	logConfig := log.Config{
+		Level:     params.LogCfg.Level.GetValue(),
+		GrpcLevel: params.LogCfg.GrpcLogLevel.GetValue(),
+		Format:    params.LogCfg.Format.GetValue(),
+		Stdout:    params.LogCfg.Stdout.GetAsBool(),
+		File: log.FileLogConfig{
+			RootPath:   params.LogCfg.RootPath.GetValue(),
+			MaxSize:    params.LogCfg.MaxSize.GetAsInt(),
+			MaxDays:    params.LogCfg.MaxAge.GetAsInt(),
+			MaxBackups: params.LogCfg.MaxBackups.GetAsInt(),
+		},
+		AsyncWriteEnable:         params.LogCfg.AsyncWriteEnable.GetAsBool(),
+		AsyncWriteFlushInterval:  params.LogCfg.AsyncWriteFlushInterval.GetAsDurationByParse(),
+		AsyncWriteDroppedTimeout: params.LogCfg.AsyncWriteDroppedTimeout.GetAsDurationByParse(),
+		AsyncWriteStopTimeout:    params.LogCfg.AsyncWriteStopTimeout.GetAsDurationByParse(),
+		AsyncWritePendingLength:  params.LogCfg.AsyncWritePendingLength.GetAsInt(),
+		AsyncWriteBufferSize:     int(params.LogCfg.AsyncWriteBufferSize.GetAsSize()),
+		AsyncWriteMaxBytesPerLog: int(params.LogCfg.AsyncWriteMaxBytesPerLog.GetAsSize()),
+	}
+	id := paramtable.GetNodeID()
+	roleName := paramtable.GetRole()
+	rootPath := logConfig.File.RootPath
+	if rootPath != "" {
+		logConfig.File.Filename = fmt.Sprintf("%s-%d.log", roleName, id)
 	} else {
-		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.ClusterDeployMode); err != nil {
-			log.Error("Failed to set deploy mode: ", zap.Error(err))
-		}
+		logConfig.File.Filename = ""
 	}
 
-	if os.Getenv(metricsinfo.DeployModeEnvKey) == metricsinfo.StandaloneDeployMode {
-		closer := trace.InitTracing("standalone")
-		if closer != nil {
-			defer closer.Close()
+	logutil.SetupLogger(&logConfig)
+
+	params.Watch(params.LogCfg.Level.Key, config.NewHandler("log.level", func(event *config.Event) {
+		if !event.HasUpdated || event.EventType == config.DeleteType {
+			return
 		}
-	}
-
-	var rc *components.RootCoord
-	if mr.EnableRootCoord {
-		rc = mr.runRootCoord(ctx, local)
-		if rc != nil {
-			defer rc.Stop()
+		v := event.Value
+		// trace is not a valid log level for non-segcore part, so we convert it to debug
+		if strings.EqualFold(v, "trace") {
+			v = "debug"
 		}
-	}
-
-	var pn *components.Proxy
-	if mr.EnableProxy {
-		pctx := log.WithModule(ctx, "Proxy")
-		pn = mr.runProxy(pctx, local, alias)
-		if pn != nil {
-			defer pn.Stop()
+		logLevel, err := zapcore.ParseLevel(v)
+		if err != nil {
+			log.Warn("failed to parse log level", zap.Error(err))
+			return
 		}
-	}
+		log.SetLevel(logLevel)
+		log.Info("log level changed", zap.String("level", event.Value))
+	}))
+}
 
-	var qs *components.QueryCoord
-	if mr.EnableQueryCoord {
-		qs = mr.runQueryCoord(ctx, local)
-		if qs != nil {
-			defer qs.Stop()
-		}
-	}
+// Register serves prometheus http service
+func setupPrometheusHTTPServer(r *internalmetrics.MilvusRegistry) {
+	log.Info("setupPrometheusHTTPServer")
+	http.Register(&http.Handler{
+		Path:    http.MetricsPath,
+		Handler: promhttp.HandlerFor(r, promhttp.HandlerOpts{}),
+	})
+	http.Register(&http.Handler{
+		Path:    http.MetricsDefaultPath,
+		Handler: promhttp.Handler(),
+	})
+}
 
-	var qn *components.QueryNode
-	if mr.EnableQueryNode {
-		qn = mr.runQueryNode(ctx, local, alias)
-		if qn != nil {
-			defer qn.Stop()
-		}
-	}
+func (mr *MilvusRoles) handleSignals() func() {
+	sign := make(chan struct{})
+	done := make(chan struct{})
 
-	var ds *components.DataCoord
-	if mr.EnableDataCoord {
-		ds = mr.runDataCoord(ctx, local)
-		if ds != nil {
-			defer ds.Stop()
-		}
-	}
-
-	var dn *components.DataNode
-	if mr.EnableDataNode {
-		dn = mr.runDataNode(ctx, local, alias)
-		if dn != nil {
-			defer dn.Stop()
-		}
-	}
-
-	var is *components.IndexCoord
-	if mr.EnableIndexCoord {
-		is = mr.runIndexCoord(ctx, local)
-		if is != nil {
-			defer is.Stop()
-		}
-	}
-
-	var in *components.IndexNode
-	if mr.EnableIndexNode {
-		in = mr.runIndexNode(ctx, local, alias)
-		if in != nil {
-			defer in.Stop()
-		}
-	}
-
-	if mr.HasMultipleRoles {
-		multiRoleHealthzHandler := func(w http.ResponseWriter, r *http.Request) {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			req := &internalpb.GetComponentStatesRequest{}
-			validateResp := func(resp *internalpb.ComponentStates, err error) bool {
-				return err == nil && resp != nil && resp.GetState().GetStateCode() == internalpb.StateCode_Healthy
-			}
-			if mr.EnableRootCoord {
-				if rc == nil || !validateResp(rc.GetComponentStates(ctx, req)) {
-					rootCoordNotServingHandler(w, r)
-					return
-				}
-			}
-
-			if mr.EnableQueryCoord {
-				if qs == nil || !validateResp(qs.GetComponentStates(ctx, req)) {
-					queryCoordNotServingHandler(w, r)
-					return
-				}
-			}
-
-			if mr.EnableDataCoord {
-				if ds == nil || !validateResp(ds.GetComponentStates(ctx, req)) {
-					dataCoordNotServingHandler(w, r)
-					return
-				}
-			}
-			if mr.EnableIndexCoord {
-				if is == nil || !validateResp(is.GetComponentStates(ctx, req)) {
-					indexCoordNotServingHandler(w, r)
-					return
-				}
-			}
-			if mr.EnableProxy {
-				if pn == nil || !validateResp(pn.GetComponentStates(ctx, req)) {
-					proxyNotServingHandler(w, r)
-					return
-				}
-			}
-			// TODO(dragondriver): need to check node state?
-
-			w.WriteHeader(http.StatusOK)
-			w.Header().Set(healthz.ContentTypeHeader, healthz.ContentTypeText)
-			_, err := fmt.Fprint(w, "OK")
-			if err != nil {
-				log.Warn("Failed to send response",
-					zap.Error(err))
-			}
-
-			// TODO(dragondriver): handle component states
-		}
-		http.HandleFunc(healthz.HealthzRouterPath, multiRoleHealthzHandler)
-	}
-
-	metrics.ServeHTTP(Registry)
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc,
 		syscall.SIGHUP,
 		syscall.SIGINT,
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
-	sig := <-sc
-	log.Error("Get signal to exit\n", zap.String("signal", sig.String()))
 
-	// some deferred Stop has race with context cancel
-	cancel()
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-sign:
+				log.Info("All cleanup done, handleSignals goroutine quit")
+				return
+			case sig := <-sc:
+				log.Warn("Get signal to exit", zap.String("signal", sig.String()))
+				mr.once.Do(func() {
+					close(mr.closed)
+					// reset other signals, only handle SIGINT from now
+					signal.Reset(syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGTERM)
+				})
+			}
+		}
+	}()
+	return func() {
+		close(sign)
+		<-done
+	}
+}
+
+// Run Milvus components.
+func (mr *MilvusRoles) Run() {
+	// start signal handler, defer close func
+	closeFn := mr.handleSignals()
+	defer closeFn()
+
+	log.Info("starting running Milvus components")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mr.printLDPreLoad()
+
+	// start milvus thread watcher to update actual thread number metrics
+	thw := internalmetrics.NewThreadWatcher()
+	thw.Start()
+	defer thw.Stop()
+
+	// only standalone enable localMsg
+	if mr.Local {
+		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.StandaloneDeployMode); err != nil {
+			log.Error("Failed to set deploy mode: ", zap.Error(err))
+		}
+
+		if mr.Embedded {
+			// setup config for embedded milvus
+			paramtable.InitWithBaseTable(paramtable.NewBaseTable(paramtable.Files([]string{"embedded-milvus.yaml"})))
+		} else {
+			paramtable.Init()
+		}
+
+		params := paramtable.Get()
+		if params.EtcdCfg.UseEmbedEtcd.GetAsBool() {
+			// Start etcd server.
+			etcd.InitEtcdServer(
+				params.EtcdCfg.UseEmbedEtcd.GetAsBool(),
+				params.EtcdCfg.ConfigPath.GetValue(),
+				params.EtcdCfg.DataDir.GetValue(),
+				params.EtcdCfg.EtcdLogPath.GetValue(),
+				params.EtcdCfg.EtcdLogLevel.GetValue())
+			defer etcd.StopEtcdServer()
+		}
+		paramtable.SetRole(typeutil.StandaloneRole)
+		defer stopRocksmqIfUsed()
+	} else {
+		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.ClusterDeployMode); err != nil {
+			log.Error("Failed to set deploy mode: ", zap.Error(err))
+		}
+		paramtable.Init()
+		paramtable.SetRole(mr.ServerType)
+	}
+
+	// Persist immutable configurations at startup, such as mqType paramItem
+	if (mr.EnableRootCoord && mr.EnableDataCoord && mr.EnableQueryCoord) || mr.EnableMixCoord {
+		// Initialize the actual walName instead of default
+		util.InitAndSelectWALName()
+		// persist immutable configs if necessary
+		if err := paramtable.GetBaseTable().Manager().ProcessImmutableConfigs(); err != nil {
+			log.Error("failed to process immutable configs", zap.Error(err))
+			return
+		}
+	}
+
+	internalmetrics.InitHolmes()
+	defer internalmetrics.CloseHolmes()
+
+	// init tracer before run any component
+	tracer.Init()
+
+	enableComponents := []bool{
+		mr.EnableProxy,
+		mr.EnableQueryNode,
+		mr.EnableDataNode,
+		mr.EnableStreamingNode,
+		mr.EnableMixCoord,
+		mr.EnableRootCoord,
+		mr.EnableQueryCoord,
+		mr.EnableDataCoord,
+		mr.EnableCDC,
+	}
+	enableComponents = lo.Filter(enableComponents, func(v bool, _ int) bool {
+		return v
+	})
+	healthz.SetComponentNum(len(enableComponents))
+
+	expr.Init()
+	expr.Register("param", paramtable.Get())
+	mr.setupLogger()
+	defer log.Cleanup()
+
+	http.ServeHTTP()
+	setupPrometheusHTTPServer(Registry)
+
+	if paramtable.Get().CommonCfg.GCEnabled.GetAsBool() {
+		if paramtable.Get().CommonCfg.GCHelperEnabled.GetAsBool() {
+			action := func(GOGC uint32) {
+				debug.SetGCPercent(int(GOGC))
+			}
+			gc.NewTuner(paramtable.Get().CommonCfg.OverloadedMemoryThresholdPercentage.GetAsFloat(), uint32(paramtable.Get().CommonCfg.MinimumGOGCConfig.GetAsInt()), uint32(paramtable.Get().CommonCfg.MaximumGOGCConfig.GetAsInt()), action)
+		} else {
+			action := func(uint32) {}
+			gc.NewTuner(paramtable.Get().CommonCfg.OverloadedMemoryThresholdPercentage.GetAsFloat(), uint32(paramtable.Get().CommonCfg.MinimumGOGCConfig.GetAsInt()), uint32(paramtable.Get().CommonCfg.MaximumGOGCConfig.GetAsInt()), action)
+		}
+	}
+
+	// Initialize streaming service if enabled.
+	if mr.ServerType == typeutil.StandaloneRole || !mr.EnableDataNode {
+		// only datanode does not init streaming service
+		streaming.Init()
+		defer func() {
+			if err := streaming.Release(); err != nil {
+				log.Warn("release streaming service failed", zap.Error(err))
+			}
+		}()
+	}
+
+	local := mr.Local
+	componentFutureMap := make(map[string]*conc.Future[component])
+
+	if (mr.EnableRootCoord && mr.EnableDataCoord && mr.EnableQueryCoord) || mr.EnableMixCoord {
+		paramtable.SetLocalComponentEnabled(typeutil.MixCoordRole)
+		mixCoord := mr.runMixCoord(ctx, local)
+		componentFutureMap[typeutil.MixCoordRole] = mixCoord
+	}
+
+	if mr.EnableQueryNode {
+		paramtable.SetLocalComponentEnabled(typeutil.QueryNodeRole)
+		queryNode := mr.runQueryNode(ctx, local)
+		componentFutureMap[typeutil.QueryNodeRole] = queryNode
+	}
+
+	if mr.EnableDataNode {
+		paramtable.SetLocalComponentEnabled(typeutil.DataNodeRole)
+		dataNode := mr.runDataNode(ctx, local)
+		componentFutureMap[typeutil.DataNodeRole] = dataNode
+	}
+
+	if mr.EnableProxy {
+		paramtable.SetLocalComponentEnabled(typeutil.ProxyRole)
+		proxy := mr.runProxy(ctx, local)
+		componentFutureMap[typeutil.ProxyRole] = proxy
+	}
+
+	if mr.EnableStreamingNode {
+		// Before initializing the local streaming node, make sure the local registry is ready.
+		paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+		streamingNode := mr.runStreamingNode(ctx, local)
+		componentFutureMap[typeutil.StreamingNodeRole] = streamingNode
+	}
+
+	if mr.EnableCDC {
+		paramtable.SetLocalComponentEnabled(typeutil.CDCRole)
+		cdc := mr.runCDC(ctx, local)
+		componentFutureMap[typeutil.CDCRole] = cdc
+	}
+
+	componentMap, err := mr.waitForAllComponentsReady(cancel, componentFutureMap)
+	if err != nil {
+		log.Warn("Failed to wait for all components ready", zap.Error(err))
+		return
+	}
+	log.Info("All components are ready", zap.Strings("roles", lo.Keys(componentMap)))
+
+	http.RegisterStopComponent(func(role string) error {
+		if len(role) == 0 || componentMap[role] == nil {
+			return fmt.Errorf("stop component [%s] in [%s] is not supported", role, mr.ServerType)
+		}
+
+		log.Info("unregister component before stop", zap.String("role", role))
+		healthz.UnRegister(role)
+		return componentMap[role].Stop()
+	})
+
+	http.RegisterCheckComponentReady(func(role string) error {
+		if len(role) == 0 || componentMap[role] == nil {
+			return fmt.Errorf("check component state for [%s] in [%s] is not supported", role, mr.ServerType)
+		}
+
+		// for coord component, if it's in standby state, it will return StateCode_StandBy
+		code := componentMap[role].Health(context.TODO())
+		if code != commonpb.StateCode_Healthy {
+			return fmt.Errorf("component [%s] in [%s] is not healthy", role, mr.ServerType)
+		}
+
+		return nil
+	})
+
+	paramtable.Get().WatchKeyPrefix("trace", config.NewHandler("tracing handler", func(e *config.Event) {
+		params := paramtable.Get()
+
+		exp, err := tracer.CreateTracerExporter(params)
+		if err != nil {
+			log.Warn("Init tracer failed", zap.Error(err))
+			return
+		}
+
+		// close old provider
+		err = tracer.CloseTracerProvider(context.Background())
+		if err != nil {
+			log.Warn("Close old provider failed, stop reset", zap.Error(err))
+			return
+		}
+
+		tracer.SetTracerProvider(exp, params.TraceCfg.SampleFraction.GetAsFloat())
+		log.Info("Reset tracer finished", zap.String("Exporter", params.TraceCfg.Exporter.GetValue()), zap.Float64("SampleFraction", params.TraceCfg.SampleFraction.GetAsFloat()))
+
+		tracer.NotifyTracerProviderUpdated()
+
+		if paramtable.GetRole() == typeutil.QueryNodeRole || paramtable.GetRole() == typeutil.StandaloneRole {
+			initcore.ResetTraceConfig(params)
+			log.Info("Reset segcore tracer finished", zap.String("Exporter", params.TraceCfg.Exporter.GetValue()))
+		}
+	}))
+
+	paramtable.SetCreateTime(time.Now())
+	paramtable.SetUpdateTime(time.Now())
+
+	<-mr.closed
+
+	mixCoord := componentMap[typeutil.MixCoordRole]
+	streamingNode := componentMap[typeutil.StreamingNodeRole]
+	queryNode := componentMap[typeutil.QueryNodeRole]
+	dataNode := componentMap[typeutil.DataNodeRole]
+	cdc := componentMap[typeutil.CDCRole]
+	proxy := componentMap[typeutil.ProxyRole]
+
+	// stop coordinators first
+	coordinators := []component{mixCoord}
+	for idx, coord := range coordinators {
+		log.Warn("stop processing")
+		if coord != nil {
+			log.Info("stop coord", zap.Int("idx", idx), zap.Any("coord", coord))
+			coord.Stop()
+		}
+	}
+	log.Info("All coordinators have stopped")
+
+	// stop nodes
+	nodes := []component{streamingNode, queryNode, dataNode, cdc}
+	stopNodeWG := &sync.WaitGroup{}
+	for _, node := range nodes {
+		if node != nil {
+			stopNodeWG.Add(1)
+			go func() {
+				defer func() {
+					stopNodeWG.Done()
+					log.Info("stop node done", zap.Any("node", node))
+				}()
+				log.Info("stop node...", zap.Any("node", node))
+				node.Stop()
+			}()
+		}
+	}
+	stopNodeWG.Wait()
+	log.Info("All nodes have stopped")
+
+	if proxy != nil {
+		proxy.Stop()
+		log.Info("proxy stopped!")
+	}
+
+	// close reused etcd client
+	kvfactory.CloseEtcdClient()
+
+	log.Info("Milvus components graceful stop done")
+}
+
+func (mr *MilvusRoles) GetRoles() []string {
+	roles := make([]string, 0)
+	if mr.EnableMixCoord {
+		roles = append(roles, typeutil.MixCoordRole)
+	}
+	if mr.EnableProxy {
+		roles = append(roles, typeutil.ProxyRole)
+	}
+	if mr.EnableQueryNode {
+		roles = append(roles, typeutil.QueryNodeRole)
+	}
+	if mr.EnableDataNode {
+		roles = append(roles, typeutil.DataNodeRole)
+	}
+	if mr.EnableCDC {
+		roles = append(roles, typeutil.CDCRole)
+	}
+	return roles
 }

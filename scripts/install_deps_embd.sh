@@ -18,7 +18,7 @@
 
 function install_linux_deps() {
   if [[ -x "$(command -v apt)" ]]; then
-      # for Ubuntu 18.04
+      # for Ubuntu 20.04
       sudo apt install -y g++ gcc make ccache libssl-dev zlib1g-dev libboost-regex-dev \
           libboost-program-options-dev libboost-system-dev libboost-filesystem-dev \
           libboost-serialization-dev python3-dev libboost-python-dev libcurl4-openssl-dev gfortran libtbb-dev libzstd-dev
@@ -33,16 +33,16 @@ function install_linux_deps() {
       sudo yum install -y epel-release centos-release-scl-rh && \
       sudo yum install -y git make automake ccache openssl-devel zlib-devel libzstd-devel \
           libcurl-devel python3-devel \
-          devtoolset-7-gcc devtoolset-7-gcc-c++ devtoolset-7-gcc-gfortran \
-          llvm-toolset-7.0-clang llvm-toolset-7.0-clang-tools-extra
+          devtoolset-11-gcc devtoolset-11-gcc-c++ devtoolset-11-gcc-gfortran \
+          llvm-toolset-11.0-clang llvm-toolset-11.0-clang-tools-extra
 
-      echo "source scl_source enable devtoolset-7" | sudo tee -a /etc/profile.d/devtoolset-7.sh
-      echo "source scl_source enable llvm-toolset-7.0" | sudo tee -a /etc/profile.d/llvm-toolset-7.sh
-      echo "export CLANG_TOOLS_PATH=/opt/rh/llvm-toolset-7.0/root/usr/bin" | sudo tee -a /etc/profile.d/llvm-toolset-7.sh
-      source "/etc/profile.d/llvm-toolset-7.sh"
+      echo "source scl_source enable devtoolset-11" | sudo tee -a /etc/profile.d/devtoolset-11.sh
+      echo "source scl_source enable llvm-toolset-11.0" | sudo tee -a /etc/profile.d/llvm-toolset-11.sh
+      echo "export CLANG_TOOLS_PATH=/opt/rh/llvm-toolset-11.0/root/usr/bin" | sudo tee -a /etc/profile.d/llvm-toolset-11.sh
+      source "/etc/profile.d/llvm-toolset-11.sh"
 
       # install OpenBLAS, this could take a while.
-      source "/etc/profile.d/devtoolset-7.sh" && \
+      source "/etc/profile.d/devtoolset-11.sh" && \
           wget https://github.com/xianyi/OpenBLAS/archive/v0.3.9.tar.gz && \
           tar zxvf v0.3.9.tar.gz && cd OpenBLAS-0.3.9 && \
           make TARGET=CORE2 DYNAMIC_ARCH=1 DYNAMIC_OLDER=1 USE_THREAD=0 USE_OPENMP=0 FC=gfortran CC=gcc COMMON_OPT="-O3 -g -fPIC" FCOMMON_OPT="-O3 -g -fPIC -frecursive" NMAX="NUM_THREADS=128" LIBPREFIX="libopenblas" INTERFACE64=0 NO_STATIC=1 && \

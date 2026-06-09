@@ -3,11 +3,13 @@ package milvus
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"syscall"
 
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 const (
@@ -32,7 +34,7 @@ func (c *stop) execute(args []string, flags *flag.FlagSet) {
 		fmt.Fprintln(os.Stderr, c.getHelp())
 	}
 	c.serverType = args[2]
-	if _, ok := typeutil.ServerTypeMap()[c.serverType]; !ok {
+	if !typeutil.ServerTypeSet().Contain(c.serverType) {
 		fmt.Fprintf(os.Stderr, "Unknown server type = %s\n", c.serverType)
 		os.Exit(-1)
 	}
@@ -47,7 +49,10 @@ func (c *stop) execute(args []string, flags *flag.FlagSet) {
 
 func (c *stop) formatFlags(args []string, flags *flag.FlagSet) {
 	flags.StringVar(&(c.svrAlias), "alias", "", "set alias")
-	initMaxprocs(c.serverType, flags)
+	if c.serverType == typeutil.EmbeddedRole {
+		flags.SetOutput(io.Discard)
+	}
+	hardware.InitMaxprocs(c.serverType, flags)
 	if err := flags.Parse(args[3:]); err != nil {
 		os.Exit(-1)
 	}
@@ -56,7 +61,7 @@ func (c *stop) formatFlags(args []string, flags *flag.FlagSet) {
 func (c *stop) stopPid(filename string, runtimeDir string) error {
 	var pid int
 
-	fd, err := os.OpenFile(path.Join(runtimeDir, filename), os.O_RDONLY, 0664)
+	fd, err := os.OpenFile(path.Join(runtimeDir, filename), os.O_RDONLY, 0o664)
 	if err != nil {
 		return err
 	}

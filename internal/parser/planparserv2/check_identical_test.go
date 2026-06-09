@@ -3,28 +3,38 @@ package planparserv2
 import (
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/proto/planpb"
-
-	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 func TestCheckIdentical(t *testing.T) {
-	schema := newTestSchema()
+	schema := newTestSchema(true)
 	helper, err := typeutil.CreateSchemaHelper(schema)
 	assert.NoError(t, err)
 
-	exprStr1 := `not (((Int64Field > 0) and (FloatField <= 20.0)) or ((Int32Field in [1, 2, 3]) and (VarCharField < "str")))`
-	exprStr2 := `Int32Field in [1, 2, 3]`
+	exprStr1Arr := []string{
+		`not (((Int64Field > 0) and (FloatField <= 20.0)) or ((Int32Field in [1, 2, 3]) and (VarCharField < "str")))`,
+		`f1()`,
+	}
+	exprStr2Arr := []string{
+		`Int32Field in [1, 2, 3]`,
+		`f2(Int32Field, Int64Field)`,
+	}
+	for i := range exprStr1Arr {
+		exprStr1 := exprStr1Arr[i]
+		exprStr2 := exprStr2Arr[i]
 
-	expr1, err := ParseExpr(helper, exprStr1)
-	assert.NoError(t, err)
-	expr2, err := ParseExpr(helper, exprStr2)
-	assert.NoError(t, err)
+		expr1, err := ParseExpr(helper, exprStr1, nil)
+		assert.NoError(t, err)
+		expr2, err := ParseExpr(helper, exprStr2, nil)
+		assert.NoError(t, err)
 
-	assert.True(t, CheckPredicatesIdentical(expr1, expr1))
-	assert.True(t, CheckPredicatesIdentical(expr2, expr2))
-	assert.False(t, CheckPredicatesIdentical(expr1, expr2))
+		assert.True(t, CheckPredicatesIdentical(expr1, expr1))
+		assert.True(t, CheckPredicatesIdentical(expr2, expr2))
+		assert.False(t, CheckPredicatesIdentical(expr1, expr2))
+	}
 }
 
 func TestCheckQueryInfoIdentical(t *testing.T) {
@@ -94,65 +104,73 @@ func TestCheckVectorANNSIdentical(t *testing.T) {
 	}{
 		{
 			args: args{
-				node1: &planpb.VectorANNS{IsBinary: true},
-				node2: &planpb.VectorANNS{IsBinary: false},
+				node1: &planpb.VectorANNS{VectorType: planpb.VectorType_BinaryVector},
+				node2: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				node1: &planpb.VectorANNS{IsBinary: false, FieldId: 100},
-				node2: &planpb.VectorANNS{IsBinary: false, FieldId: 101},
+				node1: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector, FieldId: 100},
+				node2: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector, FieldId: 101},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				node1: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0"},
-				node2: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$1"},
+				node1: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0"},
+				node2: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$1"},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				node1: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 100}},
-				node2: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 10}},
+				node1: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 100}},
+				node2: &planpb.VectorANNS{VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 10}},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				node1: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
+				node1: &planpb.VectorANNS{
+					VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
 					Predicates: &planpb.Expr{
 						Expr: &planpb.Expr_ColumnExpr{
 							ColumnExpr: &planpb.ColumnExpr{
 								Info: &planpb.ColumnInfo{},
 							},
 						},
-					}},
-				node2: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
+					},
+				},
+				node2: &planpb.VectorANNS{
+					VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
 					Predicates: &planpb.Expr{
 						Expr: &planpb.Expr_ValueExpr{
 							ValueExpr: &planpb.ValueExpr{Value: NewInt(100)},
 						},
-					}},
+					},
+				},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				node1: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
+				node1: &planpb.VectorANNS{
+					VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
 					Predicates: &planpb.Expr{
 						Expr: &planpb.Expr_ValueExpr{
 							ValueExpr: &planpb.ValueExpr{Value: NewInt(100)},
 						},
-					}},
-				node2: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
+					},
+				},
+				node2: &planpb.VectorANNS{
+					VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
 					Predicates: &planpb.Expr{
 						Expr: &planpb.Expr_ValueExpr{
 							ValueExpr: &planpb.ValueExpr{Value: NewInt(100)},
 						},
-					}},
+					},
+				},
 			},
 			want: true,
 		},
@@ -194,7 +212,7 @@ func TestCheckPlanNodeIdentical(t *testing.T) {
 				node1: &planpb.PlanNode{
 					Node: &planpb.PlanNode_VectorAnns{
 						VectorAnns: &planpb.VectorANNS{
-							IsBinary: true,
+							VectorType: planpb.VectorType_BinaryVector,
 						},
 					},
 					OutputFieldIds: []int64{100},
@@ -202,7 +220,7 @@ func TestCheckPlanNodeIdentical(t *testing.T) {
 				node2: &planpb.PlanNode{
 					Node: &planpb.PlanNode_VectorAnns{
 						VectorAnns: &planpb.VectorANNS{
-							IsBinary: false,
+							VectorType: planpb.VectorType_FloatVector,
 						},
 					},
 					OutputFieldIds: []int64{100},
@@ -214,23 +232,27 @@ func TestCheckPlanNodeIdentical(t *testing.T) {
 			args: args{
 				node1: &planpb.PlanNode{
 					Node: &planpb.PlanNode_VectorAnns{
-						VectorAnns: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
+						VectorAnns: &planpb.VectorANNS{
+							VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
 							Predicates: &planpb.Expr{
 								Expr: &planpb.Expr_ValueExpr{
 									ValueExpr: &planpb.ValueExpr{Value: NewInt(100)},
 								},
-							}},
+							},
+						},
 					},
 					OutputFieldIds: []int64{100},
 				},
 				node2: &planpb.PlanNode{
 					Node: &planpb.PlanNode_VectorAnns{
-						VectorAnns: &planpb.VectorANNS{IsBinary: false, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
+						VectorAnns: &planpb.VectorANNS{
+							VectorType: planpb.VectorType_FloatVector, FieldId: 100, PlaceholderTag: "$0", QueryInfo: &planpb.QueryInfo{Topk: 1, MetricType: "L2", SearchParams: `{"nprobe": 10}`, RoundDecimal: 6},
 							Predicates: &planpb.Expr{
 								Expr: &planpb.Expr_ValueExpr{
 									ValueExpr: &planpb.ValueExpr{Value: NewInt(100)},
 								},
-							}},
+							},
+						},
 					},
 					OutputFieldIds: []int64{100},
 				},

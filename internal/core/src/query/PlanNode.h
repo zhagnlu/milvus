@@ -11,18 +11,26 @@
 
 #pragma once
 
-#include <any>
+#include <stdint.h>
 #include <memory>
 #include <optional>
-#include <vector>
 #include <string>
+#include <vector>
 
-#include "Expr.h"
-#include "knowhere/common/Config.h"
+#include "common/FieldMeta.h"
+#include "common/QueryInfo.h"
+#include "common/Types.h"
 
+namespace milvus::plan {
+class PlanNode;
+};
 namespace milvus::query {
 
 class PlanNodeVisitor;
+
+struct PlanOptions {
+    bool expr_use_json_stats = true;
+};
 
 // Base of all Nodes
 struct PlanNode {
@@ -30,34 +38,20 @@ struct PlanNode {
     virtual ~PlanNode() = default;
     virtual void
     accept(PlanNodeVisitor&) = 0;
+
+    PlanOptions plan_options_;
 };
 
 using PlanNodePtr = std::unique_ptr<PlanNode>;
 
-struct SearchInfo {
-    int64_t topk_;
-    int64_t round_decimal_;
-    FieldId field_id_;
-    knowhere::MetricType metric_type_;
-    knowhere::Config search_params_;
-};
-
 struct VectorPlanNode : PlanNode {
-    std::optional<ExprPtr> predicate_;
+ public:
+    void
+    accept(PlanNodeVisitor&) override;
+
     SearchInfo search_info_;
     std::string placeholder_tag_;
-};
-
-struct FloatVectorANNS : VectorPlanNode {
- public:
-    void
-    accept(PlanNodeVisitor&) override;
-};
-
-struct BinaryVectorANNS : VectorPlanNode {
- public:
-    void
-    accept(PlanNodeVisitor&) override;
+    std::shared_ptr<milvus::plan::PlanNode> plannodes_;
 };
 
 struct RetrievePlanNode : PlanNode {
@@ -65,7 +59,17 @@ struct RetrievePlanNode : PlanNode {
     void
     accept(PlanNodeVisitor&) override;
 
-    ExprPtr predicate_;
+    std::shared_ptr<milvus::plan::PlanNode> plannodes_;
+
+    int64_t limit_;
+    bool has_order_by_ = false;
+    // Non-sort output fields deferred for late materialization (two-project mode).
+    // Empty means single-project mode (all columns materialized in the first project).
+    std::vector<FieldId> deferred_field_ids_;
+    // Field IDs for pipeline columns in the same order as the ProjectNode output.
+    // Used by FillOrderByResult to set field_id on DataArrays produced by the pipeline.
+    std::vector<FieldId> pipeline_field_ids_;
+    std::optional<QueryIteratorCursor> query_iterator_cursor_;
 };
 
 }  // namespace milvus::query

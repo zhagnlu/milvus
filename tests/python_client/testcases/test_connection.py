@@ -4,6 +4,7 @@ from pymilvus import DefaultConfig
 from base.client_base import TestcaseBase
 import common.common_type as ct
 import common.common_func as cf
+from common.common_type import CaseLabel, CheckTasks
 from common.code_mapping import ConnectionErrorMessage as cem
 
 # CONNECT_TIMEOUT = 12
@@ -38,17 +39,26 @@ class TestConnectionParams(TestcaseBase):
                                                                              ('_kwargs', None)]})
 
     @pytest.mark.tags(ct.CaseLabel.L2)
-    @pytest.mark.parametrize("data", ct.get_dict_invalid_host_port)
-    def test_connection_add_connection_kwargs_invalid_host_port(self, data):
+    def test_connection_add_connection_kwargs_invalid_host_port(self):
         """
         target: test **kwargs of add_connection
         method: passing invalid value for host and port
         expected: report error
         """
-
         # check param of **kwargs
+        for data in [{"port": "port"}, {"port": ["192.168.1.1"]}]:
+            self.connection_wrap.add_connection(_kwargs=data, check_task=ct.CheckTasks.err_res,
+                                                check_items={ct.err_code: 999,
+                                                             ct.err_msg: "Type of 'port' must be str or int"})
+        for data in [{"host": -1}]:
+            self.connection_wrap.add_connection(_kwargs=data, check_task=ct.CheckTasks.err_res,
+                                                check_items={ct.err_code: 999,
+                                                             ct.err_msg: "Type of 'host' must be str"})
+
+        data = {"port": "-1", "host": "hostlocal"}
         self.connection_wrap.add_connection(_kwargs=data, check_task=ct.CheckTasks.err_res,
-                                            check_items={ct.err_code: -1, ct.err_msg: cem.NoHostPort})
+                                            check_items={ct.err_code: 999,
+                                                         ct.err_msg: "port number -1 out of range, valid range [0, 65535)"})
 
         # get addr of default alias
         self.connection_wrap.get_connection_addr(alias=DefaultConfig.DEFAULT_USING, check_task=ct.CheckTasks.ccr,
@@ -73,7 +83,7 @@ class TestConnectionParams(TestcaseBase):
         # No check for **kwargs
         self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, host=1,
                                      check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: -1, ct.err_msg: cem.NoHostPort})
+                                     check_items={ct.err_code: 999, ct.err_msg: "Type of 'host' must be str"})
 
     @pytest.mark.tags(ct.CaseLabel.L2)
     @pytest.mark.parametrize("alias", ct.get_not_string)
@@ -369,7 +379,8 @@ class TestConnectionOperation(TestcaseBase):
         # get the connection address after it disconnected
         self.connection_wrap.get_connection_addr(alias="test_alias_name", check_task=ct.CheckTasks.ccr,
                                                  check_items={ct.dict_content: {"address": f"{host}:{port}",
-                                                                                "user": ""}})
+                                                                                "user": "",
+                                                                                "db_name": "default"}})
 
         # re-add connection by the same alias with different connection params
         self.connection_wrap.add_connection(test_alias_name={"host": "localhost", "port": "1"})
@@ -434,25 +445,29 @@ class TestConnectionOperation(TestcaseBase):
         target: connect with non existing params
         method: 1. add connection with non existing params
                 2. try to connect
+                3. connect failure will remove connection alias in list connections
         expected: raise an exception
         """
 
         # add invalid default connection
         self.connection_wrap.add_connection(default={'host': "host", 'port': port})
 
-        # using default alias to create connection, the connection does not exist
-        err_msg = cem.FailConnect % ("host", str(port))
-        self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: 2, ct.err_msg: err_msg})
-
         # list all connections and check the response
         self.connection_wrap.list_connections(check_task=ct.CheckTasks.ccr,
                                               check_items={ct.list_content: [(DefaultConfig.DEFAULT_USING, None)]})
 
+        # using default alias to create connection, the connection does not exist
+        err_msg = cem.FailConnect % ("host", str(port))
+        self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, check_task=ct.CheckTasks.err_res,
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "illegal connection params or server unavailable"})
+
+        # list all connections and check the response
+        self.connection_wrap.list_connections(check_task=ct.CheckTasks.ccr, check_items={ct.list_content: []})
+
         # get all addr of alias and check the response
         self.connection_wrap.get_connection_addr(alias=DefaultConfig.DEFAULT_USING, check_task=ct.CheckTasks.ccr,
-                                                 check_items={ct.dict_content: {"address": f"host:{port}",
-                                                                                "user": ""}})
+                                                 check_items={ct.dict_content: {}})
 
     @pytest.mark.tags(ct.CaseLabel.L0)
     def test_connection_connect_default_alias_effective(self, host, port):
@@ -478,7 +493,8 @@ class TestConnectionOperation(TestcaseBase):
         # get all addr of alias and check the response
         self.connection_wrap.get_connection_addr(alias=DefaultConfig.DEFAULT_USING, check_task=ct.CheckTasks.ccr,
                                                  check_items={ct.dict_content: {"address": f"{host}:{port}",
-                                                                                "user": ""}})
+                                                                                "user": "",
+                                                                                "db_name": "default"}})
 
     @pytest.mark.tags(ct.CaseLabel.L1)
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
@@ -540,9 +556,11 @@ class TestConnectionOperation(TestcaseBase):
         # get all addr of alias and check the response
         self.connection_wrap.get_connection_addr(alias=connect_name, check_task=ct.CheckTasks.ccr,
                                                  check_items={ct.dict_content: {"address": f"{host}:{port}",
-                                                                                "user": ""}})
-
-    @pytest.mark.tags(ct.CaseLabel.L1)
+                                                                                "user": "",
+                                                                                "db_name": "default"}})
+     
+    @pytest.mark.skip("not support now")
+    @pytest.mark.tags(ct.CaseLabel.L2)
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING, "test_alias_nme"])
     def test_connection_connect_wrong_params(self, host, port, connect_name):
         """
@@ -631,7 +649,8 @@ class TestConnectionOperation(TestcaseBase):
         # get all addr of alias and check the response
         self.connection_wrap.get_connection_addr(alias=DefaultConfig.DEFAULT_USING, check_task=ct.CheckTasks.ccr,
                                                  check_items={ct.dict_content: {"address": f"{host}:{port}",
-                                                                                "user": ""}})
+                                                                                "user": "",
+                                                                                "db_name": "default"}})
 
     @pytest.mark.tags(ct.CaseLabel.L1)
     def test_connection_disconnect_after_connect(self, host, port):
@@ -659,7 +678,8 @@ class TestConnectionOperation(TestcaseBase):
         # get all addr of alias and check the response
         self.connection_wrap.get_connection_addr(alias=test_alias_name, check_task=ct.CheckTasks.ccr,
                                                  check_items={ct.dict_content: {"address": f"{host}:{port}",
-                                                                                "user": ""}})
+                                                                                "user": "",
+                                                                                "db_name": "default"}})
 
         # disconnect alias is exist
         self.connection_wrap.disconnect(alias=test_alias_name)
@@ -672,7 +692,8 @@ class TestConnectionOperation(TestcaseBase):
         # get all addr of alias and check the response
         self.connection_wrap.get_connection_addr(alias=test_alias_name, check_task=ct.CheckTasks.ccr,
                                                  check_items={ct.dict_content: {"address": f"{host}:{port}",
-                                                                                "user": ""}})
+                                                                                "user": "",
+                                                                                "db_name": "default"}})
 
     @pytest.mark.tags(ct.CaseLabel.L1)
     def test_connection_remove_connection_not_exist(self):
@@ -789,7 +810,7 @@ class TestConnectionOperation(TestcaseBase):
 
         # drop collection failed
         self.collection_wrap.drop(check_task=ct.CheckTasks.err_res,
-                                  check_items={ct.err_code: 0, ct.err_msg: "should create connect first"})
+                                  check_items={ct.err_code: 1, ct.err_msg: "should create connection first"})
 
         # successfully created default connection
         self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, host=host, port=port,
@@ -822,7 +843,7 @@ class TestConnect(TestcaseBase):
         self.connection_wrap.disconnect(alias=connect_name)
 
     @pytest.mark.tags(ct.CaseLabel.L2)
-    @pytest.mark.parametrize("protocol", ["http", "https", "ftp", "tcp"])
+    @pytest.mark.parametrize("protocol", ["http", "tcp"])
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
     def test_parameters_with_uri_connection(self, host, port, connect_name, protocol):
         """
@@ -835,6 +856,22 @@ class TestConnect(TestcaseBase):
         self.connection_wrap.connect(alias=connect_name, uri=uri, check_task=ct.CheckTasks.ccr)
 
     @pytest.mark.tags(ct.CaseLabel.L2)
+    @pytest.mark.parametrize("protocol", ["ftp"])
+    @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
+    def test_parameters_with_invalid_uri_connection(self, host, port, connect_name, protocol):
+        """
+        target: test the uri parameter to get a normal connection
+        method: get a connection with the uri parameter
+        expected: connected is True
+        """
+
+        uri = "{}://{}:{}".format(protocol, host, port)
+        self.connection_wrap.connect(alias=connect_name, uri=uri, check_task=ct.CheckTasks.err_res,
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "needs start with [unix, http, https, tcp] "
+                                                              "or a local file endswith [.db]"})
+
+    @pytest.mark.tags(ct.CaseLabel.L2)
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
     def test_parameters_with_address_connection(self, host, port, connect_name):
         """
@@ -845,7 +882,7 @@ class TestConnect(TestcaseBase):
         address = "{}:{}".format(host, port)
         self.connection_wrap.connect(alias=connect_name, address=address, check_task=ct.CheckTasks.ccr)
 
-    @pytest.mark.tags(ct.CaseLabel.L3)
+    @pytest.mark.tags(ct.CaseLabel.RBAC)
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
     def test_connect_with_default_user_password(self, host, port, connect_name):
         """
@@ -855,8 +892,8 @@ class TestConnect(TestcaseBase):
         """
         self.connection_wrap.connect(alias=connect_name, host=host, port=port, user=ct.default_user,
                                      password=ct.default_password, check_task=ct.CheckTasks.ccr)
-        res = self.utility_wrap.list_collections()[0]
-        assert len(res) == 0
+        res = self.connection_wrap.list_connections()[0]
+        assert len(res) == 1
 
 
 class TestConnectIPInvalid(TestcaseBase):
@@ -871,9 +908,10 @@ class TestConnectIPInvalid(TestcaseBase):
         method: set host in get_not_string
         expected: connected is False
         """
-        err_msg = cem.FailConnect % (host, port)
-        self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, host=host, port=port, check_task=ct.CheckTasks.ccr,
-                                     check_items={ct.err_code: -1, ct.err_msg: err_msg})
+        err_msg = "Type of 'host' must be str."
+        self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, host=host, port=port,
+                                     check_task=ct.CheckTasks.check_value_equal,
+                                     check_items={ct.err_code: 999, ct.err_msg: err_msg})
 
 
 class TestConnectPortInvalid(TestcaseBase):
@@ -889,9 +927,10 @@ class TestConnectPortInvalid(TestcaseBase):
         method: set port in get_not_string
         expected: connected is False
         """
-        err_msg = cem.FailConnect % (host, str(port))
-        self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, host=host, port=port, check_task=ct.CheckTasks.ccr,
-                                     check_items={ct.err_code: -1, ct.err_msg: err_msg})
+        err_msg = "Type of 'host' must be str."
+        self.connection_wrap.connect(alias=DefaultConfig.DEFAULT_USING, host=host, port=port,
+                                     check_task=ct.CheckTasks.check_value_equal,
+                                     check_items={ct.err_code: 999, ct.err_msg: err_msg})
 
 
 class TestConnectUriInvalid(TestcaseBase):
@@ -910,7 +949,8 @@ class TestConnectUriInvalid(TestcaseBase):
 
         uri = "{}://{}:{}".format(protocol, host, port)
         self.connection_wrap.connect(alias=connect_name, uri=uri, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: -1})
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "needs start with [unix, http, https, tcp] or a local file endswith [.db]"})
 
     @pytest.mark.tags(ct.CaseLabel.L2)
     @pytest.mark.parametrize("host", ["256.256.256.256", "10.1.0"])
@@ -925,10 +965,11 @@ class TestConnectUriInvalid(TestcaseBase):
 
         uri = "{}://{}:{}".format(protocol, host, port)
         self.connection_wrap.connect(alias=connect_name, uri=uri, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: 2})
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "illegal connection params or server unavailable"})
 
     @pytest.mark.tags(ct.CaseLabel.L2)
-    @pytest.mark.parametrize("port", ["8080", "443", "0", "65536"])
+    @pytest.mark.parametrize("port", ["8080", "443", "0", "65534"])
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
     @pytest.mark.parametrize("protocol", ["http", "https"])
     def test_parameters_with_invalid_port(self, host, port, connect_name, protocol):
@@ -940,11 +981,12 @@ class TestConnectUriInvalid(TestcaseBase):
 
         uri = "{}://{}:{}".format(protocol, host, port)
         self.connection_wrap.connect(alias=connect_name, uri=uri, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: 2})
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "illegal connection params or server unavailable"})
 
     @pytest.mark.tags(ct.CaseLabel.L2)
     @pytest.mark.parametrize("host", ["www.google.com"])
-    @pytest.mark.parametrize("port", ["65535", "19530"])
+    @pytest.mark.parametrize("port", ["65534", "19530"])
     @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
     @pytest.mark.parametrize("protocol", ["http", "https"])
     def test_parameters_with_invalid_url(self, host, port, connect_name, protocol):
@@ -956,7 +998,8 @@ class TestConnectUriInvalid(TestcaseBase):
 
         uri = "{}://{}:{}".format(protocol, host, port)
         self.connection_wrap.connect(alias=connect_name, uri=uri, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: 2})
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "illegal connection params or server unavailable"})
 
 
 class TestConnectAddressInvalid(TestcaseBase):
@@ -974,7 +1017,8 @@ class TestConnectAddressInvalid(TestcaseBase):
         """
         address = "{}:{}".format(host, port)
         self.connection_wrap.connect(alias=connect_name, address=address, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: 2})
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "illegal connection params or server unavailable"})
 
     @pytest.mark.tags(ct.CaseLabel.L2)
     @pytest.mark.parametrize("port", ["100", "65536"])
@@ -987,57 +1031,7 @@ class TestConnectAddressInvalid(TestcaseBase):
         """
         address = "{}:{}".format(host, port)
         self.connection_wrap.connect(alias=connect_name, address=address, check_task=ct.CheckTasks.err_res,
-                                     check_items={ct.err_code: 2})
+                                     check_items={ct.err_code: 999,
+                                                  ct.err_msg: "illegal connection params or server unavailable"})
 
 
-class TestConnectUserPasswordInvalid(TestcaseBase):
-    """
-    Test connect server with user and password , the result should be failed
-    """
-
-    @pytest.mark.tags(ct.CaseLabel.L3)
-    @pytest.mark.parametrize("port", ["19530"])
-    def test_connect_without_user_password_after_authorization_enabled(self, host, port):
-        """
-        target: test connect without user password after authorization enabled
-        method: connect without parameters of user and password
-        excepted: connected is false
-        """
-        self.connection_wrap.connect(host=host, port=port, check_task=ct.CheckTasks.ccr)
-        self.utility_wrap.list_collections(check_task=ct.CheckTasks.err_res,
-                                           check_items={ct.err_code: 1})
-
-    @pytest.mark.tags(ct.CaseLabel.L3)
-    @pytest.mark.parametrize("user", ["alice3333"])
-    def test_connect_with_invalid_user_connection(self, host, port, user):
-        """
-        target: test the nonexistent to connect
-        method: connect with the nonexistent user
-        excepted: connected is false
-        """
-        self.connection_wrap.connect(host=host, port=port, user=user, password="abc123",
-                                     check_task=ct.CheckTasks.ccr)
-        self.utility_wrap.list_collections(check_task=ct.CheckTasks.err_res,
-                                           check_items={ct.err_code: 1})
-
-    @pytest.mark.tags(ct.CaseLabel.L3)
-    @pytest.mark.parametrize("user", ["anny015"])
-    @pytest.mark.parametrize("connect_name", [DefaultConfig.DEFAULT_USING])
-    def test_connect_with_password_invalid(self, host, port, user, connect_name):
-        """
-        target: test the wrong password when connecting
-        method: connect with the wrong password
-        excepted: connected is false
-        """
-        # 1.default user login
-        self.connection_wrap.connect(host=host, port=port, user=ct.default_user,
-                                     password=ct.default_password, check_task=ct.CheckTasks.ccr)
-
-        # 2.create a credential
-        self.utility_wrap.create_user(user=user, password="qwaszx0")
-
-        # 3.connect with the created user and wrong password
-        self.connection_wrap.disconnect(alias=connect_name)
-        self.connection_wrap.connect(host=host, port=port, user=user, password=ct.default_password)
-        self.utility_wrap.list_collections(check_task=ct.CheckTasks.err_res,
-                                           check_items={ct.err_code: 1})

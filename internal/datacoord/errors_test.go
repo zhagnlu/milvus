@@ -19,9 +19,10 @@ package datacoord
 import (
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 func TestMsgDataCoordIsUnhealthy(t *testing.T) {

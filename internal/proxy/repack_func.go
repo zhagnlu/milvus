@@ -19,7 +19,7 @@ package proxy
 import (
 	"fmt"
 
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 )
 
 // insertRepackFunc deprecated, use defaultInsertRepackFunc instead.
@@ -27,7 +27,6 @@ func insertRepackFunc(
 	tsMsgs []msgstream.TsMsg,
 	hashKeys [][]int32,
 ) (map[int32]*msgstream.MsgPack, error) {
-
 	if len(hashKeys) < len(tsMsgs) {
 		return nil, fmt.Errorf(
 			"the length of hash keys (%d) is less than the length of messages (%d)",
@@ -59,7 +58,6 @@ func defaultInsertRepackFunc(
 	tsMsgs []msgstream.TsMsg,
 	hashKeys [][]int32,
 ) (map[int32]*msgstream.MsgPack, error) {
-
 	if len(hashKeys) < len(tsMsgs) {
 		return nil, fmt.Errorf(
 			"the length of hash keys (%d) is less than the length of messages (%d)",

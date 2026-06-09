@@ -16,19 +16,32 @@
 
 #pragma once
 
-#include <vector>
+#include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
+#include "common/ArrowDataWrapper.h"
+#include "common/EasyAssert.h"
+#include "common/FieldData.h"
+#include "common/FieldDataInterface.h"
+#include "storage/PayloadReader.h"
 #include "storage/Types.h"
-#include "storage/FieldData.h"
-#include "storage/PayloadStream.h"
 
 namespace milvus::storage {
 
 class DataCodec {
  public:
-    explicit DataCodec(std::shared_ptr<FieldData> data, CodecType type) : field_data_(data), codec_type_(type) {
+    explicit DataCodec(std::shared_ptr<PayloadReader>& reader, CodecType type)
+        : codec_type_(type), payload_reader_(std::move(reader)) {
+    }
+
+    explicit DataCodec(const uint8_t* payload_data,
+                       int64_t length,
+                       CodecType type)
+        : codec_type_(type) {
+        payload_reader_ = std::make_shared<PayloadReader>(
+            payload_data, length, DataType::NONE, false, false);
     }
 
     virtual ~DataCodec() = default;
@@ -42,7 +55,8 @@ class DataCodec {
 
     void
     SetTimestamps(Timestamp start_timestamp, Timestamp end_timestamp) {
-        assert(start_timestamp <= end_timestamp);
+        // if milvus version <= 2.2.5
+        // assert(start_timestamp <= end_timestamp) condition may not be satisfied
         time_range_ = std::make_pair(start_timestamp, end_timestamp);
     }
 
@@ -58,34 +72,78 @@ class DataCodec {
 
     DataType
     GetDataType() {
-        return field_data_->get_data_type();
+        AssertInfo(payload_reader_ != nullptr,
+                   "payload_reader in the data_codec is invalid, wrong state");
+        return payload_reader_->get_payload_datatype();
     }
 
-    std::unique_ptr<Payload>
-    GetPayload() const {
-        return field_data_->get_payload();
+    FieldDataPtr
+    GetFieldData() const {
+        AssertInfo(payload_reader_ != nullptr,
+                   "payload_reader in the data_codec is invalid, wrong state");
+        AssertInfo(payload_reader_->has_field_data(),
+                   "payload_reader in the data_codec has no field data, "
+                   "wrongly calling the method");
+        return payload_reader_->get_field_data();
+    }
+
+    virtual std::shared_ptr<ArrowDataWrapper>
+    GetReader() {
+        auto ret = std::make_shared<ArrowDataWrapper>();
+        ret->reader = payload_reader_->get_reader();
+        ret->arrow_reader = payload_reader_->get_file_reader();
+        ret->file_data = data_;
+        return ret;
+    }
+
+    void
+    SetData(std::shared_ptr<uint8_t[]> data) {
+        data_ = std::move(data);
+    }
+
+    bool
+    HasBinaryPayload() const {
+        AssertInfo(payload_reader_ != nullptr,
+                   "payload_reader in the data_codec is invalid, wrong state");
+        return payload_reader_->has_binary_payload();
+    }
+
+    const uint8_t*
+    PayloadData() const {
+        if (HasBinaryPayload()) {
+            return payload_reader_->get_payload_data();
+        }
+        if (payload_reader_->has_field_data()) {
+            return reinterpret_cast<const uint8_t*>(
+                const_cast<void*>(payload_reader_->get_field_data()->Data()));
+        }
+        return nullptr;
+    }
+
+    int64_t
+    PayloadSize() const {
+        if (HasBinaryPayload()) {
+            return payload_reader_->get_payload_size();
+        }
+        if (payload_reader_->has_field_data()) {
+            return payload_reader_->get_field_data_size();
+        }
+        return 0;
     }
 
  protected:
     CodecType codec_type_;
     std::pair<Timestamp, Timestamp> time_range_;
-    std::shared_ptr<FieldData> field_data_;
+
+    std::shared_ptr<PayloadReader> payload_reader_;
+    std::shared_ptr<uint8_t[]> data_;
+    //the shared ptr to keep the original input data alive for zero-copy target
 };
 
 // Deserialize the data stream of the file obtained from remote or local
 std::unique_ptr<DataCodec>
-DeserializeFileData(const uint8_t* input, int64_t length);
-
-std::unique_ptr<DataCodec>
-DeserializeLocalInsertFileData(const uint8_t* input_data, int64_t length, DataType data_type);
-
-std::unique_ptr<DataCodec>
-DeserializeLocalIndexFileData(const uint8_t* input_data, int64_t length);
-
-std::unique_ptr<DataCodec>
-DeserializeRemoteFileData(PayloadInputStream* input_stream);
-
-std::unique_ptr<DataCodec>
-DeserializeLocalFileData(PayloadInputStream* input_stream);
+DeserializeFileData(const std::shared_ptr<uint8_t[]> input,
+                    int64_t length,
+                    bool is_field_data = true);
 
 }  // namespace milvus::storage

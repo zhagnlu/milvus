@@ -17,11 +17,15 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "common/vector_index_c.h"
+#include "common/resource_c.h"
+#include "common/binary_set_c.h"
 #include "common/type_c.h"
 #include "segcore/collection_c.h"
 
 typedef void* CLoadIndexInfo;
+
+bool
+IsLoadWithDisk(const char* index_type, int index_engine_version);
 
 CStatus
 NewLoadIndexInfo(CLoadIndexInfo* c_load_index_info);
@@ -29,15 +33,35 @@ NewLoadIndexInfo(CLoadIndexInfo* c_load_index_info);
 void
 DeleteLoadIndexInfo(CLoadIndexInfo c_load_index_info);
 
-CStatus
-AppendIndexParam(CLoadIndexInfo c_load_index_info, const char* index_key, const char* index_value);
+LoadResourceRequest
+EstimateLoadIndexResource(CLoadIndexInfo c_load_index_info);
 
-CStatus
-AppendFieldInfo(CLoadIndexInfo c_load_index_info, int64_t field_id, enum CDataType field_type);
+bool
+TryReserveLoadingResourceWithTimeout(CResourceUsage size,
+                                     int64_t millisecond_timeout);
+
+void
+ReleaseLoadingResource(CResourceUsage size);
+
+void
+ChargeLoadedResource(CResourceUsage size);
+
+void
+RefundLoadedResource(CResourceUsage size);
 
 CStatus
 AppendIndex(CLoadIndexInfo c_load_index_info, CBinarySet c_binary_set);
 
+CStatus
+AppendIndexV2(CTraceContext c_trace, CLoadIndexInfo c_load_index_info);
+
+CStatus
+CleanLoadedIndex(CLoadIndexInfo c_load_index_info);
+
+CStatus
+FinishLoadIndexInfo(CLoadIndexInfo c_load_index_info,
+                    const uint8_t* serialized_load_index_info,
+                    const uint64_t len);
 #ifdef __cplusplus
 }
 #endif

@@ -1,25 +1,28 @@
 package indexcgowrapper
 
 /*
-#cgo pkg-config: milvus_common
+#cgo pkg-config: milvus_core
 
 #include <stdlib.h>	// free
-#include "indexbuilder/index_c.h"
+#include "common/binary_set_c.h"
+#include "storage/storage_c.h"
 */
 import "C"
+
 import (
-	"errors"
 	"fmt"
 	"unsafe"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
+	"github.com/cockroachdb/errors"
+
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 func GetBinarySetKeys(cBinarySet C.CBinarySet) ([]string, error) {
 	size := int(C.GetBinarySetSize(cBinarySet))
 	if size == 0 {
-		return nil, fmt.Errorf("BinarySet size is zero!")
+		return nil, errors.New("BinarySet size is zero")
 	}
 	datas := make([]unsafe.Pointer, size)
 
@@ -38,7 +41,7 @@ func GetBinarySetValue(cBinarySet C.CBinarySet, key string) ([]byte, error) {
 	ret := C.GetBinarySetValueSize(cBinarySet, cIndexKey)
 	size := int(ret)
 	if size == 0 {
-		return nil, fmt.Errorf("GetBinarySetValueSize size is zero!")
+		return nil, errors.New("GetBinarySetValueSize size is zero")
 	}
 	value := make([]byte, size)
 	status := C.CopyBinarySetValue(unsafe.Pointer(&value[0]), cIndexKey, cBinarySet)
@@ -50,21 +53,44 @@ func GetBinarySetValue(cBinarySet C.CBinarySet, key string) ([]byte, error) {
 	return value, nil
 }
 
+func GetBinarySetSize(cBinarySet C.CBinarySet, key string) (int64, error) {
+	cIndexKey := C.CString(key)
+	defer C.free(unsafe.Pointer(cIndexKey))
+	ret := C.GetBinarySetValueSize(cBinarySet, cIndexKey)
+	return int64(ret), nil
+}
+
 // HandleCStatus deal with the error returned from CGO
 func HandleCStatus(status *C.CStatus, extraInfo string) error {
 	if status.error_code == 0 {
 		return nil
 	}
-	errorCode := status.error_code
-	errorName, ok := commonpb.ErrorCode_name[int32(errorCode)]
-	if !ok {
-		errorName = "UnknownError"
-	}
+	errorCode := int(status.error_code)
 	errorMsg := C.GoString(status.error_msg)
 	defer C.free(unsafe.Pointer(status.error_msg))
 
-	finalMsg := fmt.Sprintf("[%s] %s", errorName, errorMsg)
-	logMsg := fmt.Sprintf("%s, C Runtime Exception: %s\n", extraInfo, finalMsg)
+	logMsg := fmt.Sprintf("%s, C Runtime Exception: %s\n", extraInfo, errorMsg)
 	log.Warn(logMsg)
-	return errors.New(finalMsg)
+	if errorCode == 2003 {
+		return merr.WrapErrSegcoreUnsupported(int32(errorCode), logMsg)
+	}
+	if errorCode == 2033 {
+		return merr.ErrSegcorePretendFinished
+	}
+	return merr.WrapErrSegcore(int32(errorCode), logMsg)
+}
+
+func GetLocalUsedSize(path string) (int64, error) {
+	var availableSize int64
+	cSize := (*C.int64_t)(&availableSize)
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+
+	status := C.GetLocalUsedSize(cPath, cSize)
+	err := HandleCStatus(&status, "get local used size failed")
+	if err != nil {
+		return 0, err
+	}
+
+	return availableSize, nil
 }

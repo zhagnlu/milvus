@@ -1,3 +1,19 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mocks
 
 import (
@@ -5,18 +21,20 @@ import (
 	"net"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	querypb "github.com/milvus-io/milvus/internal/proto/querypb"
-	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
-	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/stretchr/testify/mock"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+
+	commonpb "github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
+	"github.com/milvus-io/milvus/internal/util/sessionutil"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 type MockQueryNode struct {
@@ -36,15 +54,16 @@ type MockQueryNode struct {
 	segmentVersion map[int64]int64
 }
 
-func NewMockQueryNode(t *testing.T, etcdCli *clientv3.Client) *MockQueryNode {
+func NewMockQueryNode(t *testing.T, etcdCli *clientv3.Client, nodeID int64) *MockQueryNode {
 	ctx, cancel := context.WithCancel(context.Background())
 	node := &MockQueryNode{
 		MockQueryNodeServer: NewMockQueryNodeServer(t),
 		ctx:                 ctx,
 		cancel:              cancel,
-		session:             sessionutil.NewSession(ctx, Params.EtcdCfg.MetaRootPath, etcdCli),
+		session:             sessionutil.NewSessionWithEtcd(ctx, Params.EtcdCfg.MetaRootPath.GetValue(), etcdCli),
 		channels:            make(map[int64][]string),
 		segments:            make(map[int64]map[string][]int64),
+		ID:                  nodeID,
 	}
 
 	return node
@@ -63,17 +82,7 @@ func (node *MockQueryNode) Start() error {
 		err = node.server.Serve(lis)
 	}()
 
-	// Regiser
-	node.session.Init(typeutil.QueryNodeRole, node.addr, false, true)
-	node.ID = node.session.ServerID
-	node.session.Register()
-	log.Debug("mock QueryNode started",
-		zap.Int64("nodeID", node.ID),
-		zap.String("nodeAddr", node.addr))
-
-	successStatus := &commonpb.Status{
-		ErrorCode: commonpb.ErrorCode_Success,
-	}
+	successStatus := merr.Success()
 	node.EXPECT().GetDataDistribution(mock.Anything, mock.Anything).Return(&querypb.GetDataDistributionResponse{
 		Status:   successStatus,
 		NodeID:   node.ID,
@@ -102,14 +111,44 @@ func (node *MockQueryNode) Start() error {
 			segment.GetSegmentID())
 		node.segmentVersion[segment.GetSegmentID()] = req.GetVersion()
 	}).Return(successStatus, nil).Maybe()
+	node.EXPECT().GetComponentStates(mock.Anything, mock.AnythingOfType("*milvuspb.GetComponentStatesRequest")).
+		Call.Return(func(context.Context, *milvuspb.GetComponentStatesRequest) *milvuspb.ComponentStates {
+		select {
+		case <-node.ctx.Done():
+			return nil
+		default:
+			return &milvuspb.ComponentStates{
+				Status: successStatus,
+			}
+		}
+	}, func(context.Context, *milvuspb.GetComponentStatesRequest) error {
+		select {
+		case <-node.ctx.Done():
+			return grpc.ErrServerStopped
+		default:
+			return nil
+		}
+	}).Maybe()
+
+	// Register
+	node.session.Init(typeutil.QueryNodeRole, node.addr, false)
+	node.session.ServerID = node.ID
+	node.session.Register()
+	log.Ctx(context.TODO()).Debug("mock QueryNode started",
+		zap.Int64("nodeID", node.ID),
+		zap.String("nodeAddr", node.addr))
 
 	return err
+}
+
+func (node *MockQueryNode) Stopping() {
+	node.session.GoingStop()
 }
 
 func (node *MockQueryNode) Stop() {
 	node.cancel()
 	node.server.GracefulStop()
-	node.session.Revoke(time.Second)
+	node.session.Stop()
 }
 
 func (node *MockQueryNode) getAllChannels() []*querypb.ChannelVersionInfo {
@@ -147,4 +186,11 @@ func (node *MockQueryNode) getAllSegments() []*querypb.SegmentVersionInfo {
 		}
 	}
 	return ret
+}
+
+func (node *MockQueryNode) DropIndex(ctx context.Context, req *querypb.DropIndexRequest) (*commonpb.Status, error) {
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+		Reason:    "success",
+	}, nil
 }

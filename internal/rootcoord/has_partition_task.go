@@ -1,17 +1,33 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package rootcoord
 
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/util/typeutil"
-
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // hasPartitionTask has partition request task
 type hasPartitionTask struct {
-	baseTaskV2
+	baseTask
 	Req *milvuspb.HasPartitionRequest
 	Rsp *milvuspb.BoolResponse
 }
@@ -25,12 +41,12 @@ func (t *hasPartitionTask) Prepare(ctx context.Context) error {
 
 // Execute task execution
 func (t *hasPartitionTask) Execute(ctx context.Context) error {
-	t.Rsp.Status = succStatus()
+	t.Rsp.Status = merr.Success()
 	t.Rsp.Value = false
 	// TODO: why HasPartitionRequest doesn't contain Timestamp but other requests do.
-	coll, err := t.core.meta.GetCollectionByName(ctx, t.Req.CollectionName, typeutil.MaxTimestamp)
+	coll, err := t.core.meta.GetCollectionByName(ctx, t.Req.GetDbName(), t.Req.CollectionName, typeutil.MaxTimestamp, false)
 	if err != nil {
-		t.Rsp.Status = failStatus(commonpb.ErrorCode_CollectionNotExists, err.Error())
+		t.Rsp.Status = merr.Status(err)
 		return err
 	}
 	for _, part := range coll.Partitions {
@@ -40,4 +56,13 @@ func (t *hasPartitionTask) Execute(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (t *hasPartitionTask) GetLockerKey() LockerKey {
+	collection := t.core.getCollectionIDStr(t.ctx, t.Req.GetDbName(), t.Req.GetCollectionName(), 0)
+	return NewLockerKeyChain(
+		NewClusterLockerKey(false),
+		NewDatabaseLockerKey(t.Req.GetDbName(), false),
+		NewCollectionLockerKey(collection, false),
+	)
 }

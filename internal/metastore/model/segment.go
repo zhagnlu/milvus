@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 )
 
 type Segment struct {
@@ -15,7 +15,7 @@ type Segment struct {
 	CompactionFrom      []int64
 	CreatedByCompaction bool
 	SegmentState        commonpb.SegmentState
-	//IndexInfos          []*SegmentIndex
-	ReplicaIds []int64
-	NodeIds    []int64
+	// IndexInfos          []*SegmentIndex
+	ReplicaIDs []int64
+	NodeIDs    []int64
 }

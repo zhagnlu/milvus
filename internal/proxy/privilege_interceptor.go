@@ -4,65 +4,36 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
+	"sync"
 
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-
-	"github.com/milvus-io/milvus/internal/util"
-
-	"github.com/casbin/casbin/v2"
-	"github.com/casbin/casbin/v2/model"
-	jsonadapter "github.com/casbin/json-adapter/v2"
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/util/funcutil"
-	"go.uber.org/zap"
-	"google.golang.org/grpc"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/proxy/privilege"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util"
+	"github.com/milvus-io/milvus/pkg/v3/util/contextutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type PrivilegeFunc func(ctx context.Context, req interface{}) (context.Context, error)
 
-const (
-	// sub -> role name, like admin, public
-	// obj -> contact object with object name, like Global-*, Collection-col1
-	// act -> privilege, like CreateCollection, DescribeCollection
-	ModelStr = `
-[request_definition]
-r = sub, obj, act
-
-[policy_definition]
-p = sub, obj, act
-
-[policy_effect]
-e = some(where (p.eft == allow))
-
-[matchers]
-m = r.sub == p.sub && globMatch(r.obj, p.obj) && globMatch(r.act, p.act) || r.sub == "admin" || (r.sub == p.sub && p.act == "PrivilegeAll")
-`
-	ModelKey = "casbin"
+var (
+	initOnce                sync.Once
+	initPrivilegeGroupsOnce sync.Once
 )
 
-var modelStore = make(map[string]model.Model, 1)
-
-func initPolicyModel() (model.Model, error) {
-	if policyModel, ok := modelStore[ModelStr]; ok {
-		return policyModel, nil
-	}
-	policyModel, err := model.NewModelFromString(ModelStr)
-	if err != nil {
-		log.Error("NewModelFromString fail", zap.String("model", ModelStr), zap.Error(err))
-		return nil, err
-	}
-	modelStore[ModelKey] = policyModel
-	return modelStore[ModelKey], nil
-}
+var roPrivileges, rwPrivileges, adminPrivileges map[string]struct{}
 
 // UnaryServerInterceptor returns a new unary server interceptors that performs per-request privilege access.
 func UnaryServerInterceptor(privilegeFunc PrivilegeFunc) grpc.UnaryServerInterceptor {
-	initPolicyModel()
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	privilege.InitPrivilegeGroups()
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		newCtx, err := privilegeFunc(ctx, req)
 		if err != nil {
 			return nil, err
@@ -72,67 +43,98 @@ func UnaryServerInterceptor(privilegeFunc PrivilegeFunc) grpc.UnaryServerInterce
 }
 
 func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context, error) {
-	if !Params.CommonCfg.AuthorizationEnabled {
+	if !Params.CommonCfg.AuthorizationEnabled.GetAsBool() {
 		return ctx, nil
 	}
-	log.Debug("PrivilegeInterceptor", zap.String("type", reflect.TypeOf(req).String()))
+	log := log.Ctx(ctx)
+	log.RatedDebug(60, "PrivilegeInterceptor", zap.String("type", reflect.TypeOf(req).String()))
 	privilegeExt, err := funcutil.GetPrivilegeExtObj(req)
 	if err != nil {
-		log.Debug("GetPrivilegeExtObj err", zap.Error(err))
+		log.RatedInfo(60, "GetPrivilegeExtObj err", zap.Error(err))
 		return ctx, nil
 	}
-	username, err := GetCurUserFromContext(ctx)
+	username, password, err := contextutil.GetAuthInfoFromContext(ctx)
 	if err != nil {
-		log.Error("GetCurUserFromContext fail", zap.Error(err))
+		log.Warn("GetCurUserFromContext fail", zap.Error(err))
 		return ctx, err
 	}
-	if username == util.UserRoot {
+	if !Params.CommonCfg.RootShouldBindRole.GetAsBool() && username == util.UserRoot {
 		return ctx, nil
 	}
 	roleNames, err := GetRole(username)
 	if err != nil {
-		log.Error("GetRole fail", zap.String("username", username), zap.Error(err))
+		log.Warn("GetRole fail", zap.String("username", username), zap.Error(err))
 		return ctx, err
 	}
 	roleNames = append(roleNames, util.RolePublic)
 	objectType := privilegeExt.ObjectType.String()
 	objectNameIndex := privilegeExt.ObjectNameIndex
 	objectName := funcutil.GetObjectName(req, objectNameIndex)
+	dbName := GetCurDBNameFromContextOrDefault(ctx)
+
+	// Resolve alias to actual collection name for RBAC checks
+	if Params.ProxyCfg.ResolveAliasForPrivilege.GetAsBool() && objectType == commonpb.ObjectType_Collection.String() && objectNameIndex != 0 {
+		if objectName != util.AnyWord && objectName != "" {
+			if actualCollectionName, resolveErr := resolveCollectionAlias(ctx, dbName, objectName); resolveErr != nil {
+				log.RatedWarn(60, "failed to resolve collection alias for RBAC, using original name",
+					zap.String("objectName", objectName), zap.String("dbName", dbName), zap.Error(resolveErr))
+			} else {
+				objectName = actualCollectionName
+			}
+		}
+	}
+
 	if isCurUserObject(objectType, username, objectName) {
 		return ctx, nil
 	}
+
+	if isSelectMyRoleGrants(req, roleNames) {
+		return ctx, nil
+	}
+
 	objectNameIndexs := privilegeExt.ObjectNameIndexs
 	objectNames := funcutil.GetObjectNames(req, objectNameIndexs)
+
+	// Resolve aliases for operations that refer to multiple resources
+	if Params.ProxyCfg.ResolveAliasForPrivilege.GetAsBool() && objectType == commonpb.ObjectType_Collection.String() && objectNameIndexs != 0 && len(objectNames) > 0 {
+		resolvedNames := make([]string, 0, len(objectNames))
+		for _, name := range objectNames {
+			if name == util.AnyWord || name == "" {
+				resolvedNames = append(resolvedNames, name)
+				continue
+			}
+			if actualName, resolveErr := resolveCollectionAlias(ctx, dbName, name); resolveErr != nil {
+				log.RatedWarn(60, "failed to resolve collection alias for RBAC, using original name",
+					zap.String("objectName", name), zap.String("dbName", dbName), zap.Error(resolveErr))
+				resolvedNames = append(resolvedNames, name)
+			} else {
+				resolvedNames = append(resolvedNames, actualName)
+			}
+		}
+		objectNames = resolvedNames
+	}
+
 	objectPrivilege := privilegeExt.ObjectPrivilege.String()
-	policyInfo := strings.Join(globalMetaCache.GetPrivilegeInfo(ctx), ",")
 
-	log.Debug("current request info", zap.String("username", username), zap.Strings("role_names", roleNames),
+	log = log.With(zap.String("username", username), zap.Strings("role_names", roleNames),
 		zap.String("object_type", objectType), zap.String("object_privilege", objectPrivilege),
+		zap.String("db_name", dbName),
 		zap.Int32("object_index", objectNameIndex), zap.String("object_name", objectName),
-		zap.Int32("object_indexs", objectNameIndexs), zap.Strings("object_names", objectNames),
-		zap.String("policy_info", policyInfo))
+		zap.Int32("object_indexs", objectNameIndexs), zap.Strings("object_names", objectNames))
 
-	policy := fmt.Sprintf("[%s]", policyInfo)
-	b := []byte(policy)
-	a := jsonadapter.NewAdapter(&b)
-	policyModel, err := initPolicyModel()
-	if err != nil {
-		errStr := "fail to get policy model"
-		log.Error(errStr, zap.Error(err))
-		return ctx, err
-	}
-	e, err := casbin.NewEnforcer(policyModel, a)
-	if err != nil {
-		log.Error("NewEnforcer fail", zap.String("policy", policy), zap.Error(err))
-		return ctx, err
-	}
+	e := privilege.GetEnforcer()
 	for _, roleName := range roleNames {
-		permitFunc := func(resName string) (bool, error) {
-			object := funcutil.PolicyForResource(objectType, resName)
+		permitFunc := func(objectName string) (bool, error) {
+			object := funcutil.PolicyForResource(dbName, objectType, objectName)
+			isPermit, cached, version := privilege.GetResultCache(roleName, object, objectPrivilege)
+			if cached {
+				return isPermit, nil
+			}
 			isPermit, err := e.Enforce(roleName, object, objectPrivilege)
 			if err != nil {
 				return false, err
 			}
+			privilege.SetResultCache(roleName, object, objectPrivilege, isPermit, version)
 			return isPermit, nil
 		}
 
@@ -140,6 +142,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			// handle the api which refers one resource
 			permitObject, err := permitFunc(objectName)
 			if err != nil {
+				log.Warn("fail to execute permit func", zap.String("name", objectName), zap.Error(err))
 				return ctx, err
 			}
 			if permitObject {
@@ -153,6 +156,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			for _, name := range objectNames {
 				p, err := permitFunc(name)
 				if err != nil {
+					log.Warn("fail to execute permit func", zap.String("name", name), zap.Error(err))
 					return ctx, err
 				}
 				if !p {
@@ -166,8 +170,14 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 		}
 	}
 
-	log.Debug("permission deny", zap.String("policy", policy), zap.Strings("roles", roleNames))
-	return ctx, status.Error(codes.PermissionDenied, fmt.Sprintf("%s: permission deny", objectPrivilege))
+	log.Info("permission deny", zap.Strings("roles", roleNames))
+
+	if password == util.PasswordHolder {
+		username = "apikey user"
+	}
+
+	return ctx, status.Error(codes.PermissionDenied,
+		fmt.Sprintf("%s: permission deny to %s in the `%s` database", objectPrivilege, username, dbName))
 }
 
 // isCurUserObject Determine whether it is an Object of type User that operates on its own user information,
@@ -178,4 +188,23 @@ func isCurUserObject(objectType string, curUser string, object string) bool {
 		return false
 	}
 	return curUser == object
+}
+
+func isSelectMyRoleGrants(req interface{}, roleNames []string) bool {
+	selectGrantReq, ok := req.(*milvuspb.SelectGrantRequest)
+	if !ok {
+		return false
+	}
+	filterGrantEntity := selectGrantReq.GetEntity()
+	roleName := filterGrantEntity.GetRole().GetName()
+	return funcutil.SliceContain(roleNames, roleName)
+}
+
+// resolveCollectionAlias resolves an alias to its actual collection name
+func resolveCollectionAlias(ctx context.Context, dbName, nameOrAlias string) (string, error) {
+	cache := globalMetaCache
+	if cache == nil {
+		return nameOrAlias, merr.WrapErrServiceInternal("meta cache not initialized")
+	}
+	return cache.ResolveCollectionAlias(ctx, dbName, nameOrAlias)
 }

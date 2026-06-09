@@ -10,34 +10,91 @@
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
 #include "SearchOnIndex.h"
-#include "knowhere/index/vector_index/adapter/VectorAdapter.h"
+
+#include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "CachedSearchIterator.h"
+#include "Utils.h"
+#include "common/Consts.h"
+#include "common/OffsetMapping.h"
+#include "common/QueryInfo.h"
+#include "common/QueryResult.h"
+#include "common/Types.h"
+#include "exec/operator/Utils.h"
+#include "index/VectorIndex.h"
+#include "knowhere/dataset.h"
+#include "query/helper.h"
 
 namespace milvus::query {
-SubSearchResult
+void
 SearchOnIndex(const dataset::SearchDataset& search_dataset,
-              const knowhere::VecIndex& indexing,
-              const knowhere::Config& search_conf,
-              const BitsetView& bitset) {
+              const index::VectorIndex& indexing,
+              const SearchInfo& search_conf,
+              const BitsetView& bitset,
+              milvus::OpContext* op_context,
+              SearchResult& search_result,
+              bool is_sparse) {
     auto num_queries = search_dataset.num_queries;
-    auto topK = search_dataset.topk;
     auto dim = search_dataset.dim;
     auto metric_type = search_dataset.metric_type;
-    auto round_decimal = search_dataset.round_decimal;
-    auto dataset = knowhere::GenDataset(num_queries, dim, search_dataset.query_data);
+    auto dataset =
+        knowhere::GenDataSet(num_queries, dim, search_dataset.query_data);
+    dataset->SetIsSparse(is_sparse);
 
-    // NOTE: VecIndex Query API forget to add const qualifier
-    // NOTE: use const_cast as a workaround
-    auto& indexing_nonconst = const_cast<knowhere::VecIndex&>(indexing);
-    auto ans = indexing_nonconst.Query(dataset, search_conf, bitset);
+    const auto& offset_mapping = indexing.GetOffsetMapping();
+    TargetBitmap transformed_bitset;
+    BitsetView search_bitset = bitset;
+    const auto has_offset_mapping = offset_mapping.IsEnabled();
+    if (has_offset_mapping) {
+        if (offset_mapping.GetValidCount() == 0) {
+            // All vectors are null, return empty result
+            FillEmptySearchResult(
+                search_result, num_queries, search_conf.topk_);
+            return;
+        }
+        if (!bitset.empty()) {
+            auto status =
+                offset_mapping.TransformBitset(bitset, transformed_bitset);
+            if (status == OffsetMapping::BitsetTransformStatus::AllFiltered) {
+                FillEmptySearchResult(
+                    search_result, num_queries, search_conf.topk_);
+                return;
+            }
+            search_bitset =
+                status == OffsetMapping::BitsetTransformStatus::NoFilter
+                    ? BitsetView{}
+                    : search_result.PinBitset(std::move(transformed_bitset));
+        }
+    }
 
-    auto dis = knowhere::GetDatasetDistance(ans);
-    auto uids = knowhere::GetDatasetIDs(ans);
+    if (milvus::exec::PrepareVectorIteratorsFromIndex(search_conf,
+                                                      num_queries,
+                                                      dataset,
+                                                      search_result,
+                                                      search_bitset,
+                                                      indexing)) {
+        return;
+    }
 
-    SubSearchResult sub_qr(num_queries, topK, metric_type, round_decimal);
-    std::copy_n(dis, num_queries * topK, sub_qr.get_distances());
-    std::copy_n(uids, num_queries * topK, sub_qr.get_seg_offsets());
-    sub_qr.round_values();
-    return sub_qr;
+    if (search_conf.iterator_v2_info_.has_value()) {
+        auto iter =
+            CachedSearchIterator(indexing, dataset, search_conf, search_bitset);
+        iter.NextBatch(search_conf, search_result);
+        if (has_offset_mapping) {
+            offset_mapping.TransformOffsets(search_result.seg_offsets_);
+        }
+        return;
+    }
+
+    indexing.Query(
+        dataset, search_conf, search_bitset, op_context, search_result);
+    if (has_offset_mapping) {
+        offset_mapping.TransformOffsets(search_result.seg_offsets_);
+    }
 }
 
 }  // namespace milvus::query

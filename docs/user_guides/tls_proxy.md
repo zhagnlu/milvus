@@ -78,7 +78,7 @@ certs		= $dir/certs		# Where the issued certs are kept
 crl_dir		= $dir/crl		# Where the issued crl are kept
 database	= $dir/index.txt	# database index file.
 #unique_subject	= no			# Set to 'no' to allow creation of
-					# several ctificates with same subject.
+					# several certificates with same subject.
 new_certs_dir	= $dir/newcerts		# default place for new certs.
 
 certificate	= $dir/cacert.pem 	# The CA certificate
@@ -89,7 +89,7 @@ crl		= $dir/crl.pem 		# The current CRL
 private_key	= $dir/private/cakey.pem# The private key
 RANDFILE	= $dir/private/.rand	# private random number file
 
-x509_extensions	= usr_cert		# The extentions to add to the cert
+x509_extensions	= usr_cert		# The extensions to add to the cert
 
 # Comment out the following two lines for the "traditional"
 # (and highly broken) format.
@@ -141,7 +141,7 @@ default_bits		= 2048
 default_keyfile 	= privkey.pem
 distinguished_name	= req_distinguished_name
 attributes		= req_attributes
-x509_extensions	= v3_ca	# The extentions to add to the self signed cert
+x509_extensions	= v3_ca	# The extensions to add to the self signed cert
 
 # Passwords for private keys if not present they will be prompted for
 # input_password = secret
@@ -254,13 +254,6 @@ authorityKeyIdentifier=keyid,issuer
 
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-
-subjectAltName = @alt_names
-
-[ alt_names ]
-DNS.1 = localhost
-DNS.2 = *.ronething.cn
-DNS.3 = *.ronething.com
 
 [ v3_ca ]
 
@@ -426,7 +419,7 @@ openssl x509 -req -days 3650 -in client.csr -out client.pem -CA ca.pem -CAkey ca
 
 The ```openssl.cnf``` file is a default OpenSSL configuration file. See [manual page](https://www.openssl.org/docs/manmaster/man5/config.html) for more information. The ```gen.sh``` file generates relevant certificate files. You can modify the gen.sh file for different purposes such as changing the validity period of the certificate file, the length of the certificate key or the certificate file names.
 
-These variables in the ```gen.sh``` file are crucial to the process of creating a certificate signing request file. The first five variables are the basic signing information, including country, state, location, organization, organization unit. Caution is needed when configuring CommonName as it will be verified during client-server communication.
+These variables in the ```gen.sh``` file are crucial to the process of creating a certificate signing request file. The first five variables are the basic signing information, including country, state, location, organization, organization unit. It is necessary to configure the `CommonName` in the ```gen.sh``` file. The `CommonName` refers to the server name that the client should specify while connecting.
 
 ### 3. Run gen.sh to generate certificate.
 
@@ -477,9 +470,7 @@ openssl x509 -req -days 3650 -in server.csr -out server.pem -CA ca.pem -CAkey ca
 
 ## Modify Milvus Server config
 
-Modify tlsEnabled to true and the file path in config/milvus.yaml.
-
-The ```server.pem```, ```server.key```, and ```ca.pem``` files for the server need to be configured.
+Configure the file paths of `server.pem`, `server.key`, and `ca.pem` for the server in `config/milvus.yaml`.
 
 ```yaml
 tls:
@@ -489,13 +480,15 @@ tls:
 
 common:
   security:
-    tlsMode: 2
+    # tlsMode 0 indicates no authentication
+    # tlsMode 1 indicates one-way authentication
+    # tlsMode 2 indicates two-way authentication
+    tlsMode: 2 
 ```
 ### One-way authentication
-Server need server.pem and server.key. Client-side need server.pem.
+Server-side needs server.pem and server.key files, client-side needs server.pem file.
 ### Two-way authentication
-Server-side need server.pem, server.key and ca.pem. Client-side need client.pem, client.key, ca.pem.
-
+Server-side needs server.pem, server.key and ca.pem files, client-side needs client.pem, client.key and ca.pem files.
 
 
 

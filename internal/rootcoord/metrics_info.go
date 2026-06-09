@@ -19,90 +19,57 @@ package rootcoord
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/util/metricsinfo"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-//getComponentConfigurations returns the configurations of rootcoord matching req.Pattern
-func getComponentConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest) *internalpb.ShowConfigurationsResponse {
-	prefix := "rootcoord."
-	matchedConfig := Params.RootCoordCfg.Base.GetByPattern(prefix + req.Pattern)
-	configList := make([]*commonpb.KeyValuePair, 0, len(matchedConfig))
-	for key, value := range matchedConfig {
-		configList = append(configList,
-			&commonpb.KeyValuePair{
-				Key:   key,
-				Value: value,
-			})
+func (c *Core) getSystemInfoMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (string, error) {
+	used, total, err := hardware.GetDiskUsage(paramtable.Get().LocalStorageCfg.Path.GetValue())
+	if err != nil {
+		log.Ctx(ctx).Warn("get disk usage failed", zap.Error(err))
 	}
 
-	return &internalpb.ShowConfigurationsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		Configuations: configList,
+	ioWait, err := hardware.GetIOWait()
+	if err != nil {
+		log.Ctx(ctx).Warn("get iowait failed", zap.Error(err))
 	}
-}
 
-func (c *Core) getSystemInfoMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
 	rootCoordTopology := metricsinfo.RootCoordTopology{
 		Self: metricsinfo.RootCoordInfos{
 			BaseComponentInfos: metricsinfo.BaseComponentInfos{
-				Name: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, c.session.ServerID),
+				Name: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, c.session.GetServerID()),
 				HardwareInfos: metricsinfo.HardwareMetrics{
-					IP:           c.session.Address,
-					CPUCoreCount: metricsinfo.GetCPUCoreCount(false),
-					CPUCoreUsage: metricsinfo.GetCPUUsage(),
-					Memory:       metricsinfo.GetMemoryCount(),
-					MemoryUsage:  metricsinfo.GetUsedMemoryCount(),
-					Disk:         metricsinfo.GetDiskCount(),
-					DiskUsage:    metricsinfo.GetDiskUsage(),
+					IP:               c.session.GetAddress(),
+					CPUCoreCount:     hardware.GetCPUNum(),
+					CPUCoreUsage:     hardware.GetCPUUsage(),
+					Memory:           hardware.GetMemoryCount(),
+					MemoryUsage:      hardware.GetUsedMemoryCount(),
+					Disk:             total,
+					DiskUsage:        used,
+					IOWaitPercentage: ioWait,
 				},
 				SystemInfo:  metricsinfo.DeployMetrics{},
-				CreatedTime: Params.RootCoordCfg.CreatedTime.String(),
-				UpdatedTime: Params.RootCoordCfg.UpdatedTime.String(),
+				CreatedTime: paramtable.GetCreateTime().String(),
+				UpdatedTime: paramtable.GetUpdateTime().String(),
 				Type:        typeutil.RootCoordRole,
-				ID:          c.session.ServerID,
+				ID:          c.session.GetServerID(),
 			},
 			SystemConfigurations: metricsinfo.RootCoordConfiguration{
-				MinSegmentSizeToEnableIndex: Params.RootCoordCfg.MinSegmentSizeToEnableIndex,
+				MinSegmentSizeToEnableIndex: Params.RootCoordCfg.MinSegmentSizeToEnableIndex.GetAsInt64(),
 			},
 		},
 		Connections: metricsinfo.ConnTopology{
-			Name: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, c.session.ServerID),
+			Name: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, c.session.GetServerID()),
 			// TODO(dragondriver): fill ConnectedComponents if necessary
 			ConnectedComponents: []metricsinfo.ConnectionInfo{},
 		},
 	}
 	metricsinfo.FillDeployMetricsWithEnv(&rootCoordTopology.Self.SystemInfo)
-
-	resp, err := metricsinfo.MarshalTopology(rootCoordTopology)
-	if err != nil {
-		log.Warn("Failed to marshal system info metrics of root coordinator",
-			zap.Error(err))
-
-		return &milvuspb.GetMetricsResponse{
-			Status: &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_UnexpectedError,
-				Reason:    err.Error(),
-			},
-			Response:      "",
-			ComponentName: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, c.session.ServerID),
-		}, nil
-	}
-
-	return &milvuspb.GetMetricsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		Response:      resp,
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, c.session.ServerID),
-	}, nil
+	return metricsinfo.MarshalTopology(rootCoordTopology)
 }

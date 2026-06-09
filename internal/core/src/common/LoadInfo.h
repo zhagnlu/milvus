@@ -18,26 +18,31 @@
 
 #include <map>
 #include <string>
+#include <vector>
+
 #include "Types.h"
-
-#include "common/CDataType.h"
-#include "knowhere/index/Index.h"
-
-struct LoadIndexInfo {
-    int64_t field_id;
-    CDataType field_type;
-    std::map<std::string, std::string> index_params;
-    knowhere::IndexPtr index;
-};
 
 // NOTE: field_id can be system field
 // NOTE: Refer to common/SystemProperty.cpp for details
-// TODO: use arrow to pass field data instead of proto
-struct LoadFieldDataInfo {
+struct FieldBinlogInfo {
     int64_t field_id;
-    //    const void* blob = nullptr;
-    const milvus::DataArray* field_data;
     int64_t row_count = -1;
+    std::vector<int64_t> entries_nums;
+    // estimated memory size for each binlog file, in bytes, used by caching layer
+    std::vector<int64_t> memory_sizes;
+    bool enable_mmap{false};
+    // "disable", "sync", or "async"; empty means use global config
+    std::string warmup_policy;
+    std::vector<std::string> insert_files;
+    std::vector<int64_t> child_field_ids;
+};
+
+struct LoadFieldDataInfo {
+    std::map<int64_t, FieldBinlogInfo> field_infos;
+    int64_t storage_version = 0;
+    milvus::proto::common::LoadPriority load_priority =
+        milvus::proto::common::LoadPriority::HIGH;
+    std::vector<int64_t> child_field_ids;
 };
 
 struct LoadDeletedRecordInfo {

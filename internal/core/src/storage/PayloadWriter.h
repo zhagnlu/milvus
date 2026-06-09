@@ -16,17 +16,27 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
+#include "arrow/array/builder_base.h"
+#include "arrow/type.h"
 #include "storage/PayloadStream.h"
-#include <parquet/arrow/writer.h>
+#include "storage/Types.h"
 
 namespace milvus::storage {
 class PayloadWriter {
  public:
-    explicit PayloadWriter(const DataType column_type);
-    explicit PayloadWriter(const DataType column_type, int dim);
+    explicit PayloadWriter(const DataType column_type, int dim, bool nullable);
+    explicit PayloadWriter(const DataType column_type, bool nullable);
+    // Constructor for VectorArray with element_type
+    explicit PayloadWriter(const DataType column_type,
+                           int dim,
+                           DataType element_type,
+                           bool nullable = false);
     ~PayloadWriter() = default;
 
     void
@@ -34,6 +44,9 @@ class PayloadWriter {
 
     void
     add_one_string_payload(const char* str, int str_size);
+
+    void
+    add_one_binary_payload(const uint8_t* data, int length);
 
     void
     finish();
@@ -55,6 +68,8 @@ class PayloadWriter {
 
  private:
     DataType column_type_;
+    bool nullable_;
+    DataType element_type_ = DataType::NONE;  // For VectorArray
     std::shared_ptr<arrow::ArrayBuilder> builder_;
     std::shared_ptr<arrow::Schema> schema_;
     std::shared_ptr<PayloadOutputStream> output_;

@@ -9,29 +9,31 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
+#pragma once
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include <stdbool.h>
 #include <stdint.h>
+#include <stdbool.h>
 
-#include "common/type_c.h"
+#include "common/common_type_c.h"
 #include "segcore/collection_c.h"
 
 typedef void* CSearchPlan;
 typedef void* CPlaceholderGroup;
 typedef void* CRetrievePlan;
 
-CStatus
-CreateSearchPlan(CCollection col, const char* dsl, CSearchPlan* res_plan);
-
 // Note: serialized_expr_plan is of binary format
 CStatus
-CreateSearchPlanByExpr(CCollection col, const void* serialized_expr_plan, const int64_t size, CSearchPlan* res_plan);
+CreateSearchPlanByExpr(CCollection c_col,
+                       const void* serialized_expr_plan,
+                       const int64_t size,
+                       CSearchPlan* res_plan);
 
 CStatus
-ParsePlaceholderGroup(CSearchPlan plan,
+ParsePlaceholderGroup(CSearchPlan c_plan,
                       const void* placeholder_group_blob,
                       const int64_t blob_size,
                       CPlaceholderGroup* res_placeholder_group);
@@ -49,6 +51,9 @@ const char*
 GetMetricType(CSearchPlan plan);
 
 void
+SetMetricType(CSearchPlan plan, const char* metric_type);
+
+void
 DeleteSearchPlan(CSearchPlan plan);
 
 void
@@ -62,6 +67,9 @@ CreateRetrievePlanByExpr(CCollection c_col,
 
 void
 DeleteRetrievePlan(CRetrievePlan plan);
+
+bool
+ShouldIgnoreNonPk(CRetrievePlan plan);
 
 #ifdef __cplusplus
 }

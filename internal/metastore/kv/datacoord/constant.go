@@ -17,15 +17,30 @@
 package datacoord
 
 const (
-	MetaPrefix                = "datacoord-meta"
-	SegmentPrefix             = MetaPrefix + "/s"
-	SegmentBinlogPathPrefix   = MetaPrefix + "/binlog"
-	SegmentDeltalogPathPrefix = MetaPrefix + "/deltalog"
-	SegmentStatslogPathPrefix = MetaPrefix + "/statslog"
-	ChannelRemovePrefix       = MetaPrefix + "/channel-removal"
+	MetaPrefix                          = "datacoord-meta"
+	SegmentPrefix                       = MetaPrefix + "/s"
+	SegmentBinlogPathPrefix             = MetaPrefix + "/binlog"
+	SegmentDeltalogPathPrefix           = MetaPrefix + "/deltalog"
+	SegmentStatslogPathPrefix           = MetaPrefix + "/statslog"
+	SegmentBM25logPathPrefix            = MetaPrefix + "/bm25log"
+	ChannelRemovePrefix                 = MetaPrefix + "/channel-removal"
+	ChannelCheckpointPrefix             = MetaPrefix + "/channel-cp"
+	ImportJobPrefix                     = MetaPrefix + "/import-job"
+	ImportTaskPrefix                    = MetaPrefix + "/import-task"
+	PreImportTaskPrefix                 = MetaPrefix + "/preimport-task"
+	CopySegmentJobPrefix                = MetaPrefix + "/copy-segment-job"
+	CopySegmentTaskPrefix               = MetaPrefix + "/copy-segment-task"
+	CompactionTaskPrefix                = MetaPrefix + "/compaction-task"
+	AnalyzeTaskPrefix                   = MetaPrefix + "/analyze-task"
+	PartitionStatsInfoPrefix            = MetaPrefix + "/partition-stats"
+	PartitionStatsCurrentVersionPrefix  = MetaPrefix + "/current-partition-stats-version"
+	StatsTaskPrefix                     = MetaPrefix + "/stats-task"
+	ExternalCollectionRefreshJobPrefix  = MetaPrefix + "/external-collection-refresh-job"
+	ExternalCollectionRefreshTaskPrefix = MetaPrefix + "/external-collection-refresh-task"
+	FileResourceMetaPrefix              = MetaPrefix + "/file_resource_info"
+	FileResourceVersionKey              = MetaPrefix + "/file_resource_version"
+	SnapshotPrefix                      = MetaPrefix + "/snapshot"
 
-	RemoveFlagTomestone = "removed"
-
-	maxOperationsPerTxn = 64
-	maxBytesPerTxn      = 1024 * 1024
+	NonRemoveFlagTomestone = "non-removed"
+	RemoveFlagTomestone    = "removed"
 )

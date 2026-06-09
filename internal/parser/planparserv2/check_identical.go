@@ -3,8 +3,8 @@ package planparserv2
 import (
 	"reflect"
 
-	"github.com/milvus-io/milvus/internal/proto/planpb"
-	"github.com/milvus-io/milvus/internal/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 )
 
 // CheckPredicatesIdentical check if two exprs are identical.
@@ -37,7 +37,7 @@ func CheckQueryInfoIdentical(info1, info2 *planpb.QueryInfo) bool {
 }
 
 func CheckVectorANNSIdentical(node1, node2 *planpb.VectorANNS) bool {
-	if node1.GetIsBinary() != node2.GetIsBinary() {
+	if node1.GetVectorType() != node2.GetVectorType() {
 		return false
 	}
 	if node1.GetFieldId() != node2.GetFieldId() {

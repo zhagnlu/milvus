@@ -3,8 +3,9 @@
 # Exit immediately for non zero status
 set -e
 
-ns_name=$1
-instance_name=$2
+
+instance_name=$1
+ns_name=${2:-"chaos-testing"}
 log_dir=${3:-"k8s_logs"}
 
 #show proxy pod log
@@ -32,9 +33,10 @@ echo "check session done"
 array_1=($(kubectl get pod -n ${ns_name} -l "app.kubernetes.io/instance=${instance_name}"| awk 'NR == 1 {next} {print $1}'))
 array_2=($(kubectl get pod -n ${ns_name} -l "app.kubernetes.io/instance=${instance_name}-etcd"| awk 'NR == 1 {next} {print $1}'))
 array_3=($(kubectl get pod -n ${ns_name} -l "release=${instance_name}-minio"| awk 'NR == 1 {next} {print $1}'))
-array_4=($(kubectl get pod -n ${ns_name} -l "release=${instance_name}-pulsar"| awk 'NR == 1 {next} {print $1}'))
+array_4=($(kubectl get pod -n ${ns_name} -l "app.kubernetes.io/instance=${instance_name}-pulsar"| awk 'NR == 1 {next} {print $1}'))
+array_5=($(kubectl get pod -n ${ns_name} -l "app.kubernetes.io/instance=${instance_name}-kafka"| awk 'NR == 1 {next} {print $1}'))
 
-array=(${array_1[@]} ${array_2[@]} ${array_3[@]} ${array_4[@]})
+array=(${array_1[@]} ${array_2[@]} ${array_3[@]} ${array_4[@]} ${array_5[@]})
 
 echo ${array[@]}
 if [ ! -d $log_dir/pod_log ] || [ ! -d $log_dir/pod_describe ];
@@ -47,8 +49,8 @@ echo "export logs start"
 for pod in ${array[*]}
 do
 echo "export logs for pod $pod "
-kubectl logs $pod -n ${ns_name} > ./$log_dir/pod_log/$pod.log 2>&1
+kubectl logs $pod -n ${ns_name} > ./$log_dir/pod_log/$pod.log 2>&1 || echo "export log for pod $pod failed"
 kubectl logs $pod --previous -n ${ns_name} > ./$log_dir/pod_log_previous/$pod.log 2>&1 || echo "pod $pod has no previous log"
-kubectl describe pod $pod -n ${ns_name} > ./$log_dir/pod_describe/$pod.log
+kubectl describe pod $pod -n ${ns_name} > ./$log_dir/pod_describe/$pod.log || echo "export describe for pod $pod failed"
 done
 echo "export logs done"

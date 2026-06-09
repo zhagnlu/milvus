@@ -17,21 +17,20 @@
 package storage
 
 import (
-	"errors"
-	"fmt"
+	"context"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 	"golang.org/x/exp/mmap"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/util/errorutil"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // LocalChunkManager is responsible for read and write local file.
@@ -42,13 +41,13 @@ type LocalChunkManager struct {
 var _ ChunkManager = (*LocalChunkManager)(nil)
 
 // NewLocalChunkManager create a new local manager object.
-func NewLocalChunkManager(opts ...Option) *LocalChunkManager {
-	c := newDefaultConfig()
+func NewLocalChunkManager(opts ...objectstorage.Option) *LocalChunkManager {
+	c := objectstorage.NewDefaultConfig()
 	for _, opt := range opts {
 		opt(c)
 	}
 	return &LocalChunkManager{
-		localPath: c.rootPath,
+		localPath: c.RootPath,
 	}
 }
 
@@ -58,244 +57,280 @@ func (lcm *LocalChunkManager) RootPath() string {
 }
 
 // Path returns the path of local data if exists.
-func (lcm *LocalChunkManager) Path(filePath string) (string, error) {
-	exist, err := lcm.Exist(filePath)
+func (lcm *LocalChunkManager) Path(ctx context.Context, filePath string) (string, error) {
+	exist, err := lcm.Exist(ctx, filePath)
 	if err != nil {
 		return "", err
 	}
 
 	if !exist {
-		return "", fmt.Errorf("local file cannot be found with filePath: %s", filePath)
+		return "", merr.WrapErrIoKeyNotFound(filePath)
 	}
-	absPath := path.Join(lcm.localPath, filePath)
-	return absPath, nil
+
+	return filePath, nil
 }
 
-func (lcm *LocalChunkManager) Reader(filePath string) (FileReader, error) {
-	exist, err := lcm.Exist(filePath)
+func (lcm *LocalChunkManager) Reader(ctx context.Context, filePath string) (FileReader, error) {
+	file, err := Open(filePath)
 	if err != nil {
 		return nil, err
 	}
-	if !exist {
-		return nil, errors.New("local file cannot be found with filePath:" + filePath)
+	return &LocalReader{
+		File: file,
+	}, nil
+}
+
+func (lcm *LocalChunkManager) ReaderAtOffset(ctx context.Context, filePath string, offset int64) (FileReader, error) {
+	if offset < 0 {
+		return nil, io.EOF
 	}
-	absPath := path.Join(lcm.localPath, filePath)
-	return os.Open(absPath)
+	reader, err := lcm.Reader(ctx, filePath)
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		if _, err = reader.Seek(offset, io.SeekStart); err != nil {
+			_ = reader.Close()
+			return nil, err
+		}
+	}
+	return reader, nil
 }
 
 // Write writes the data to local storage.
-func (lcm *LocalChunkManager) Write(filePath string, content []byte) error {
-	absPath := path.Join(lcm.localPath, filePath)
-	dir := path.Dir(absPath)
-	exist, err := lcm.Exist(dir)
+func (lcm *LocalChunkManager) Write(ctx context.Context, filePath string, content []byte) error {
+	dir := path.Dir(filePath)
+	exist, err := lcm.Exist(ctx, dir)
 	if err != nil {
 		return err
 	}
 	if !exist {
 		err := os.MkdirAll(dir, os.ModePerm)
 		if err != nil {
-			return err
+			return merr.WrapErrIoFailed(filePath, err)
 		}
 	}
-	return ioutil.WriteFile(absPath, content, os.ModePerm)
+	return WriteFile(filePath, content, os.ModePerm)
 }
 
 // MultiWrite writes the data to local storage.
-func (lcm *LocalChunkManager) MultiWrite(contents map[string][]byte) error {
-	var el errorutil.ErrorList
+func (lcm *LocalChunkManager) MultiWrite(ctx context.Context, contents map[string][]byte) error {
+	var el error
 	for filePath, content := range contents {
-		err := lcm.Write(filePath, content)
+		err := lcm.Write(ctx, filePath, content)
 		if err != nil {
-			el = append(el, err)
+			el = merr.Combine(el, errors.Wrapf(err, "write %s failed", filePath))
 		}
-	}
-	if len(el) == 0 {
-		return nil
 	}
 	return el
 }
 
 // Exist checks whether chunk is saved to local storage.
-func (lcm *LocalChunkManager) Exist(filePath string) (bool, error) {
-	absPath := path.Join(lcm.localPath, filePath)
-	_, err := os.Stat(absPath)
+func (lcm *LocalChunkManager) Exist(ctx context.Context, filePath string) (bool, error) {
+	_, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, err
+		return false, merr.WrapErrIoFailed(filePath, err)
 	}
 	return true, nil
 }
 
 // Read reads the local storage data if exists.
-func (lcm *LocalChunkManager) Read(filePath string) ([]byte, error) {
-	exist, err := lcm.Exist(filePath)
-	if err != nil {
-		return nil, err
-	}
-	if !exist {
-		return nil, fmt.Errorf("file not exist: %s", filePath)
-	}
-	absPath := path.Join(lcm.localPath, filePath)
-	file, err := os.Open(path.Clean(absPath))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	content, err := ioutil.ReadAll(file)
-	if err != nil {
-		return nil, err
-	}
-	return content, nil
+func (lcm *LocalChunkManager) Read(ctx context.Context, filePath string) ([]byte, error) {
+	return ReadFile(filePath)
 }
 
 // MultiRead reads the local storage data if exists.
-func (lcm *LocalChunkManager) MultiRead(filePaths []string) ([][]byte, error) {
+func (lcm *LocalChunkManager) MultiRead(ctx context.Context, filePaths []string) ([][]byte, error) {
 	results := make([][]byte, len(filePaths))
-	var el errorutil.ErrorList
+	var el error
 	for i, filePath := range filePaths {
-		content, err := lcm.Read(filePath)
+		content, err := lcm.Read(ctx, filePath)
 		if err != nil {
-			el = append(el, err)
+			el = merr.Combine(el, errors.Wrapf(err, "failed to read %s", filePath))
 		}
 		results[i] = content
-	}
-	if len(el) == 0 {
-		return results, nil
 	}
 	return results, el
 }
 
-func (lcm *LocalChunkManager) ListWithPrefix(prefix string, recursive bool) ([]string, []time.Time, error) {
-	var filePaths []string
-	var modTimes []time.Time
+func (lcm *LocalChunkManager) WalkWithPrefix(ctx context.Context, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) (err error) {
+	logger := log.With(zap.String("prefix", prefix), zap.Bool("recursive", recursive))
+	logger.Info("start walk through objects")
+	defer func() {
+		if err != nil {
+			logger.Warn("failed to walk through objects", zap.Error(err))
+			return
+		}
+		logger.Info("finish walk through objects")
+	}()
+
 	if recursive {
-		absPrefix := path.Join(lcm.localPath, prefix)
-		dir := filepath.Dir(absPrefix)
-		err := filepath.Walk(dir, func(filePath string, f os.FileInfo, err error) error {
-			if strings.HasPrefix(filePath, absPrefix) && !f.IsDir() {
-				filePaths = append(filePaths, strings.TrimPrefix(filePath, lcm.localPath))
+		dir := filepath.Dir(prefix)
+		return filepath.Walk(dir, func(filePath string, f os.FileInfo, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				return err
+			}
+
+			if strings.HasPrefix(filePath, prefix) && !f.IsDir() {
+				if !walkFunc(&ChunkObjectInfo{FilePath: filePath, ModifyTime: f.ModTime()}) {
+					return nil
+				}
 			}
 			return nil
 		})
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, filePath := range filePaths {
-			modTime, err2 := lcm.getModTime(filePath)
-			if err2 != nil {
-				return filePaths, nil, err2
-			}
-			modTimes = append(modTimes, modTime)
-		}
-		return filePaths, modTimes, nil
 	}
-	absPrefix := path.Join(lcm.localPath, prefix+"*")
-	absPaths, err := filepath.Glob(absPrefix)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, absPath := range absPaths {
-		filePaths = append(filePaths, strings.TrimPrefix(absPath, lcm.localPath))
-	}
-	for _, filePath := range filePaths {
-		modTime, err2 := lcm.getModTime(filePath)
-		if err2 != nil {
-			return filePaths, nil, err2
-		}
-		modTimes = append(modTimes, modTime)
-	}
-	return filePaths, modTimes, nil
-}
 
-func (lcm *LocalChunkManager) ReadWithPrefix(prefix string) ([]string, [][]byte, error) {
-	filePaths, _, err := lcm.ListWithPrefix(prefix, true)
+	globPaths, err := filepath.Glob(prefix + "*")
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	result, err := lcm.MultiRead(filePaths)
-	return filePaths, result, err
+	for _, filePath := range globPaths {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		f, err := os.Stat(filePath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return merr.WrapErrIoKeyNotFound(filePath)
+			}
+			return merr.WrapErrIoFailed(filePath, err)
+		}
+		if !walkFunc(&ChunkObjectInfo{FilePath: filePath, ModifyTime: f.ModTime()}) {
+			return nil
+		}
+	}
+	return nil
 }
 
 // ReadAt reads specific position data of local storage if exists.
-func (lcm *LocalChunkManager) ReadAt(filePath string, off int64, length int64) ([]byte, error) {
+func (lcm *LocalChunkManager) ReadAt(ctx context.Context, filePath string, off int64, length int64) ([]byte, error) {
 	if off < 0 || length < 0 {
 		return nil, io.EOF
 	}
-	absPath := path.Join(lcm.localPath, filePath)
-	file, err := os.Open(path.Clean(absPath))
+
+	file, err := Open(path.Clean(filePath))
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
+
 	res := make([]byte, length)
-	if _, err := file.ReadAt(res, off); err != nil {
-		return nil, err
+	_, err = file.ReadAt(res, off)
+	if err != nil {
+		return nil, merr.WrapErrIoFailed(filePath, err)
 	}
 	return res, nil
 }
 
-func (lcm *LocalChunkManager) Mmap(filePath string) (*mmap.ReaderAt, error) {
-	absPath := path.Join(lcm.localPath, filePath)
-	return mmap.Open(path.Clean(absPath))
+func (lcm *LocalChunkManager) Mmap(ctx context.Context, filePath string) (*mmap.ReaderAt, error) {
+	reader, err := mmap.Open(path.Clean(filePath))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, merr.WrapErrIoKeyNotFound(filePath, err.Error())
+	}
+
+	return reader, merr.WrapErrIoFailed(filePath, err)
 }
 
-func (lcm *LocalChunkManager) Size(filePath string) (int64, error) {
-	absPath := path.Join(lcm.localPath, filePath)
-	fi, err := os.Stat(absPath)
+func (lcm *LocalChunkManager) Size(ctx context.Context, filePath string) (int64, error) {
+	fi, err := os.Stat(filePath)
 	if err != nil {
-		return 0, err
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, merr.WrapErrIoKeyNotFound(filePath, err.Error())
+		}
+		return 0, merr.WrapErrIoFailed(filePath, err)
 	}
 	// get the size
 	size := fi.Size()
 	return size, nil
 }
 
-func (lcm *LocalChunkManager) Remove(filePath string) error {
-	exist, err := lcm.Exist(filePath)
+func (lcm *LocalChunkManager) Remove(ctx context.Context, filePath string) error {
+	err := os.RemoveAll(filePath)
+	return merr.WrapErrIoFailed(filePath, err)
+}
+
+func (lcm *LocalChunkManager) MultiRemove(ctx context.Context, filePaths []string) error {
+	errors := make([]error, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		err := lcm.Remove(ctx, filePath)
+		errors = append(errors, err)
+	}
+	return merr.Combine(errors...)
+}
+
+func (lcm *LocalChunkManager) RemoveWithPrefix(ctx context.Context, prefix string) error {
+	// If the prefix is empty string, the ListWithPrefix() will return all files under current process work folder,
+	// MultiRemove() will delete all these files. This is a danger behavior, empty prefix is not allowed.
+	if len(prefix) == 0 {
+		errMsg := "empty prefix is not allowed for ChunkManager remove operation"
+		log.Warn(errMsg)
+		return merr.WrapErrParameterInvalidMsg(errMsg)
+	}
+	var removeErr error
+	if err := lcm.WalkWithPrefix(ctx, prefix, true, func(chunkInfo *ChunkObjectInfo) bool {
+		err := lcm.MultiRemove(ctx, []string{chunkInfo.FilePath})
+		if err != nil {
+			removeErr = err
+		}
+		return true
+	}); err != nil {
+		return err
+	}
+	return removeErr
+}
+
+func (lcm *LocalChunkManager) Copy(ctx context.Context, srcFilePath string, dstFilePath string) error {
+	// Read source file
+	srcFile, err := Open(srcFilePath)
+	if err != nil {
+		return merr.WrapErrIoFailed(srcFilePath, err)
+	}
+	defer srcFile.Close()
+
+	// Create destination directory if not exists
+	dstDir := path.Dir(dstFilePath)
+	exist, err := lcm.Exist(ctx, dstDir)
 	if err != nil {
 		return err
 	}
-	if exist {
-		absPath := path.Join(lcm.localPath, filePath)
-		err := os.RemoveAll(absPath)
+	if !exist {
+		err := os.MkdirAll(dstDir, os.ModePerm)
 		if err != nil {
-			return err
+			return merr.WrapErrIoFailed(dstFilePath, err)
 		}
 	}
+
+	// Create destination file
+	dstFile, err := os.Create(dstFilePath)
+	if err != nil {
+		return merr.WrapErrIoFailed(dstFilePath, err)
+	}
+	defer dstFile.Close()
+
+	// Copy content
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return merr.WrapErrIoFailed(dstFilePath, err)
+	}
+
 	return nil
 }
 
-func (lcm *LocalChunkManager) MultiRemove(filePaths []string) error {
-	var el errorutil.ErrorList
-	for _, filePath := range filePaths {
-		err := lcm.Remove(filePath)
-		if err != nil {
-			el = append(el, err)
-		}
-	}
-	if len(el) == 0 {
-		return nil
-	}
-	return el
+type LocalReader struct {
+	*os.File
 }
 
-func (lcm *LocalChunkManager) RemoveWithPrefix(prefix string) error {
-	filePaths, _, err := lcm.ListWithPrefix(prefix, true)
+func (lr *LocalReader) Size() (int64, error) {
+	stat, err := lr.Stat()
 	if err != nil {
-		return err
+		return -1, nil
 	}
-	return lcm.MultiRemove(filePaths)
-}
-
-func (lcm *LocalChunkManager) getModTime(filepath string) (time.Time, error) {
-	absPath := path.Join(lcm.localPath, filepath)
-	fi, err := os.Stat(absPath)
-	if err != nil {
-		log.Error("stat fileinfo error", zap.String("relative filepath", filepath))
-		return time.Time{}, err
-	}
-
-	return fi.ModTime(), nil
+	return stat.Size(), nil
 }

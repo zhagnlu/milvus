@@ -9,12 +9,14 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
+#pragma once
+
 #include <limits>
+#include <utility>
 
 #include "common/Consts.h"
 #include "common/Types.h"
 #include "common/QueryResult.h"
-#include "segcore/Reduce.h"
 
 using milvus::SearchResult;
 
@@ -26,9 +28,13 @@ struct SearchResultPair {
     int64_t offset_;
     int64_t offset_rb_;  // right bound
 
-    SearchResultPair(
-        milvus::PkType primary_key, float distance, SearchResult* result, int64_t index, int64_t lb, int64_t rb)
-        : primary_key_(primary_key),
+    SearchResultPair(milvus::PkType primary_key,
+                     float distance,
+                     SearchResult* result,
+                     int64_t index,
+                     int64_t lb,
+                     int64_t rb)
+        : primary_key_(std::move(primary_key)),
           distance_(distance),
           search_result_(result),
           segment_index_(index),
@@ -38,26 +44,28 @@ struct SearchResultPair {
 
     bool
     operator>(const SearchResultPair& other) const {
-        if (this->primary_key_ == INVALID_PK) {
-            return false;
-        } else {
-            if (other.primary_key_ == INVALID_PK) {
-                return true;
-            } else {
-                return (distance_ > other.distance_);
-            }
+        if (std::fabs(distance_ - other.distance_) < EPSILON) {
+            return primary_key_ < other.primary_key_;
         }
+        return distance_ > other.distance_;
     }
 
     void
-    reset() {
+    advance() {
         offset_++;
         if (offset_ < offset_rb_) {
             primary_key_ = search_result_->primary_keys_.at(offset_);
             distance_ = search_result_->distances_.at(offset_);
         } else {
             primary_key_ = INVALID_PK;
-            distance_ = std::numeric_limits<float>::max();
+            distance_ = std::numeric_limits<float>::min();
         }
+    }
+};
+
+struct SearchResultPairComparator {
+    bool
+    operator()(const SearchResultPair* lhs, const SearchResultPair* rhs) const {
+        return *rhs > *lhs;
     }
 };

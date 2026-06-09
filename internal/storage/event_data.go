@@ -18,18 +18,29 @@ package storage
 
 import (
 	"encoding/binary"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strconv"
 
-	"github.com/milvus-io/milvus/internal/common"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/cockroachdb/errors"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/json"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-const originalSizeKey = "original_size"
+const (
+	version         = "version"
+	originalSizeKey = "original_size"
+	nullableKey     = "nullable"
+	edekKey         = "edek"
+	ezIDKey         = "encryption_zone"
+
+	// mark useMultiFieldFormat if there are multi fields in a log file
+	MultiField = "MULTI_FIELD"
+)
 
 type descriptorEventData struct {
 	DescriptorEventDataFixPart
@@ -61,10 +72,47 @@ func (data *descriptorEventData) GetEventDataFixPartSize() int32 {
 	return int32(binary.Size(data.DescriptorEventDataFixPart))
 }
 
+func (data *descriptorEventData) GetNullable() (bool, error) {
+	nullableStore, ok := data.Extras[nullableKey]
+	// previous descriptorEventData not store nullable
+	if !ok {
+		return false, nil
+	}
+	nullable, ok := nullableStore.(bool)
+	// will not happen, has checked bool format when FinishExtra
+	if !ok {
+		return false, merr.WrapErrParameterInvalidMsg(fmt.Sprintf("value of %v must in bool format", nullableKey))
+	}
+	return nullable, nil
+}
+
+func (data *descriptorEventData) GetEdek() (string, bool) {
+	edek, ok := data.Extras[edekKey]
+	// previous descriptorEventData not store edek
+	if !ok {
+		return "", false
+	}
+
+	// won't be not ok, already checked format when write with FinishExtra
+	edekStr, _ := edek.(string)
+	return edekStr, true
+}
+
+func (data *descriptorEventData) GetEzID() (int64, bool) {
+	ezidInterface, ok := data.Extras[ezIDKey]
+	// previous descriptorEventData not store edek
+	if !ok {
+		return 0, false
+	}
+
+	// won't be not ok, already checked format when write with FinishExtra
+	ezid, _ := ezidInterface.(int64)
+	return ezid, true
+}
+
 // GetMemoryUsageInBytes returns the memory size of DescriptorEventDataFixPart.
 func (data *descriptorEventData) GetMemoryUsageInBytes() int32 {
 	return data.GetEventDataFixPartSize() + int32(binary.Size(data.PostHeaderLengths)) + int32(binary.Size(data.ExtraLength)) + data.ExtraLength
-
 }
 
 // AddExtra add extra params to description event.
@@ -91,6 +139,29 @@ func (data *descriptorEventData) FinishExtra() error {
 	_, err = strconv.Atoi(sizeStr)
 	if err != nil {
 		return fmt.Errorf("value of %v must be able to be converted into int format", originalSizeKey)
+	}
+
+	nullableStore, existed := data.Extras[nullableKey]
+	if existed {
+		_, ok := nullableStore.(bool)
+		if !ok {
+			return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("value of %v must in bool format", nullableKey))
+		}
+	}
+
+	edekStored, exist := data.Extras[edekKey]
+	if exist {
+		_, ok := edekStored.(string)
+		if !ok {
+			return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("value of %v must in string format", edekKey))
+		}
+	}
+	ezIDStored, exist := data.Extras[ezIDKey]
+	if exist {
+		_, ok := ezIDStored.(int64)
+		if !ok {
+			return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("value of %v must in int64 format", ezIDKey))
+		}
 	}
 
 	data.ExtraBytes, err = json.Marshal(data.Extras)
@@ -367,36 +438,42 @@ func newInsertEventData() *insertEventData {
 		EndTimestamp:   0,
 	}
 }
+
 func newDeleteEventData() *deleteEventData {
 	return &deleteEventData{
 		StartTimestamp: 0,
 		EndTimestamp:   0,
 	}
 }
+
 func newCreateCollectionEventData() *createCollectionEventData {
 	return &createCollectionEventData{
 		StartTimestamp: 0,
 		EndTimestamp:   0,
 	}
 }
+
 func newDropCollectionEventData() *dropCollectionEventData {
 	return &dropCollectionEventData{
 		StartTimestamp: 0,
 		EndTimestamp:   0,
 	}
 }
+
 func newCreatePartitionEventData() *createPartitionEventData {
 	return &createPartitionEventData{
 		StartTimestamp: 0,
 		EndTimestamp:   0,
 	}
 }
+
 func newDropPartitionEventData() *dropPartitionEventData {
 	return &dropPartitionEventData{
 		StartTimestamp: 0,
 		EndTimestamp:   0,
 	}
 }
+
 func newIndexFileEventData() *indexFileEventData {
 	return &indexFileEventData{
 		StartTimestamp: 0,

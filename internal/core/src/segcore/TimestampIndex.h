@@ -16,7 +16,6 @@
 #include <utility>
 
 #include "common/Schema.h"
-
 namespace milvus::segcore {
 
 class TimestampIndex {
@@ -26,7 +25,6 @@ class TimestampIndex {
 
     void
     build_with(const Timestamp* timestamps, int64_t size);
-    // output bitset
 
     // Return range [beg, end) that is undecided
     // [0, beg) shall be all OK
@@ -34,11 +32,17 @@ class TimestampIndex {
     std::pair<int64_t, int64_t>
     get_active_range(Timestamp query_timestamp) const;
 
-    static BitsetType
-    GenerateBitset(Timestamp query_timestamp,
-                   std::pair<int64_t, int64_t> active_range,
-                   const Timestamp* timestamps,
-                   int64_t size);
+    size_t
+    memory_size() const {
+        return sizeof(*this) + lengths_.size() * sizeof(int64_t) +
+               start_locs_.size() * sizeof(int64_t) +
+               timestamp_barriers_.size() * sizeof(Timestamp);
+    }
+
+    Timestamp
+    get_max_timestamp() const {
+        return max_timestamp_;
+    }
 
  private:
     // numSlice
@@ -53,6 +57,7 @@ class TimestampIndex {
 };
 
 std::vector<int64_t>
-GenerateFakeSlices(const Timestamp* timestamps, int64_t size, int min_slice_length = 1);
-
+GenerateFakeSlices(const Timestamp* timestamps,
+                   int64_t size,
+                   int min_slice_length = 1);
 }  // namespace milvus::segcore

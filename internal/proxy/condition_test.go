@@ -18,15 +18,15 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
-
-	"github.com/milvus-io/milvus/internal/log"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/pkg/v3/log"
 )
 
 func TestTaskCondition_Ctx(t *testing.T) {

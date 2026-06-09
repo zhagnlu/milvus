@@ -9,7 +9,7 @@ type Component interface {
 	Init() error
 	Start() error
 	Stop() error
-	GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error)
+	GetComponentStates(ctx context.Context) (*milvuspb.ComponentStates, error)
 	GetStatisticsChannel(ctx context.Context) (*milvuspb.StringResponse, error)
 	Register() error
 }
@@ -87,7 +87,7 @@ The ID is stored in a key-value pair on etcd. The key is metaRootPath + "/sessio
 
 ###### Interface
 
-````go
+```go
 const (
 	DefaultServiceRoot = "session/"
 	DefaultIDKey       = "id"
@@ -107,7 +107,7 @@ type Session struct {
 }
 
 // NewSession is a helper to build Session object.
-// ServerID, ServerName, Address, Exclusive will be assigned after registeration.
+// ServerID, ServerName, Address, Exclusive will be assigned after registration.
 // metaRoot is a path in etcd to save session information.
 // etcdEndpoints is to init etcdCli when NewSession
 func NewSession(ctx context.Context, metaRoot string, etcdEndpoints []string) *Session {}
@@ -130,11 +130,11 @@ func (s *Session) GetSessions(prefix string) (map[string]*Session, int64, error)
 // If a server up, an event will be added to channel with eventType SessionAddType.
 // If a server down, an event will be added to channel with eventType SessionDelType.
 func (s *Session) WatchServices(prefix string, revision int64) (eventChannel <-chan *SessionEvent) {}
-
+```
 
 #### A.3 Global Parameter Table
 
-``` go
+```go
 type BaseTable struct {
 	params *memkv.MemoryKV
 }
@@ -154,7 +154,7 @@ func (gp *BaseTable) WriteNodeIDList() []UniqueID
 func (gp *BaseTable) DataNodeIDList() []UniqueID
 func (gp *BaseTable) ProxyIDList() []UniqueID
 func (gp *BaseTable) QueryNodeIDList() []UniqueID
-````
+```
 
 - _LoadYaml(filePath string)_ turns a YAML file into multiple key-value pairs. For example, given the following YAML
 
@@ -426,21 +426,28 @@ type MetaKv interface {
 	TxnKV
 	GetPath(key string) string
 	LoadWithPrefix(key string) ([]string, []string, error)
-	LoadWithPrefix2(key string) ([]string, []string, []int64, error)
-	LoadWithRevision(key string) ([]string, []string, int64, error)
-	Watch(key string) clientv3.WatchChan
-	WatchWithPrefix(key string) clientv3.WatchChan
-	WatchWithRevision(key string, revision int64) clientv3.WatchChan
-	SaveWithLease(key, value string, id clientv3.LeaseID) error
-	Grant(ttl int64) (id clientv3.LeaseID, err error)
-	KeepAlive(id clientv3.LeaseID) (<-chan *clientv3.LeaseKeepAliveResponse, error)
-	CompareValueAndSwap(key, value, target string, opts ...clientv3.OpOption) error
-	CompareVersionAndSwap(key string, version int64, target string, opts ...clientv3.OpOption) error
+	CompareVersionAndSwap(key string, version int64, target string) error
+    WalkWithPrefix(prefix string, paginationSize int, fn func([]byte, []byte) error) error
 }
 
 ```
 
-###### A.7.4 MetaKv
+###### A.7.4 WatchKV
+
+```go
+// WatchKV is watchable MetaKv.
+//
+//go:generate mockery --name=WatchKv --with-expecter
+type WatchKV interface {
+	MetaKv
+	Watch(key string) clientv3.WatchChan
+	WatchWithPrefix(key string) clientv3.WatchChan
+	WatchWithRevision(key string, revision int64) clientv3.WatchChan
+}
+
+```
+
+###### A.7.5 SnapShotKv
 
 ```go
 // SnapShotKV is TxnKV for snapshot data. It must save timestamp.
@@ -452,36 +459,36 @@ type SnapShotKV interface {
 	MultiSaveAndRemoveWithPrefix(saves map[string]string, removals []string, ts typeutil.Timestamp, additions ...func(ts typeutil.Timestamp) (string, string, error)) error
 ```
 
-###### A.7.5 Etcd KV
+###### A.7.6 Etcd KV
 
 ```go
-type EtcdKV struct {
+type etcdKV struct {
 	client   *clientv3.Client
 	rootPath string
 }
 
-func (kv *EtcdKV) Close()
-func (kv *EtcdKV) GetPath(key string) string
-func (kv *EtcdKV) LoadWithPrefix(key string) ([]string, []string, error)
-func (kv *EtcdKV) Load(key string) (string, error)
-func (kv *EtcdKV) GetCount(key string) (int64, error)
-func (kv *EtcdKV) MultiLoad(keys []string) ([]string, error)
-func (kv *EtcdKV) Save(key, value string) error
-func (kv *EtcdKV) MultiSave(kvs map[string]string) error
-func (kv *EtcdKV) RemoveWithPrefix(prefix string) error
-func (kv *EtcdKV) Remove(key string) error
-func (kv *EtcdKV) MultiRemove(keys []string) error
-func (kv *EtcdKV) MultiSaveAndRemove(saves map[string]string, removals []string) error
-func (kv *EtcdKV) Watch(key string) clientv3.WatchChan
-func (kv *EtcdKV) WatchWithPrefix(key string) clientv3.WatchChan
-func (kv *EtcdKV) WatchWithRevision(key string, revision int64) clientv3.WatchChan
+func (kv *etcdKV) Close()
+func (kv *etcdKV) GetPath(key string) string
+func (kv *etcdKV) LoadWithPrefix(key string) ([]string, []string, error)
+func (kv *etcdKV) Load(key string) (string, error)
+func (kv *etcdKV) GetCount(key string) (int64, error)
+func (kv *etcdKV) MultiLoad(keys []string) ([]string, error)
+func (kv *etcdKV) Save(key, value string) error
+func (kv *etcdKV) MultiSave(kvs map[string]string) error
+func (kv *etcdKV) RemoveWithPrefix(prefix string) error
+func (kv *etcdKV) Remove(key string) error
+func (kv *etcdKV) MultiRemove(keys []string) error
+func (kv *etcdKV) MultiSaveAndRemove(saves map[string]string, removals []string) error
+func (kv *etcdKV) Watch(key string) clientv3.WatchChan
+func (kv *etcdKV) WatchWithPrefix(key string) clientv3.WatchChan
+func (kv *etcdKV) WatchWithRevision(key string, revision int64) clientv3.WatchChan
 
-func NewEtcdKV(etcdAddr string, rootPath string) *EtcdKV
+func NewEtcdKV(etcdAddr string, rootPath string) *etcdKV
 ```
 
-EtcdKV implements all _TxnKV_ interfaces.
+etcdKV implements all _TxnKV_ interfaces.
 
-###### A.7.6 Memory KV
+###### A.7.7 Memory KV
 
 ```go
 type MemoryKV struct {
@@ -506,7 +513,7 @@ func (kv *MemoryKV) MultiSaveAndRemoveWithPrefix(saves map[string]string, remova
 
 MemoryKV implements all _TxnKV_ interfaces.
 
-###### A.7.7 MinIO KV
+###### A.7.8 MinIO KV
 
 ```go
 type MinIOKV struct {
@@ -528,7 +535,7 @@ func (kv *MinIOKV) Close()
 
 MinIOKV implements all _KV_ interfaces.
 
-###### A.7.8 RocksdbKV KV
+###### A.7.9 RocksdbKV KV
 
 ```go
 type RocksdbKV struct {

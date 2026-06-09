@@ -16,116 +16,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cstddef>
+#include <map>
 #include <optional>
-#include <stdexcept>
 #include <string>
+#include <utility>
 
+#include "common/Consts.h"
+#include "common/EasyAssert.h"
 #include "common/Types.h"
-#include "exceptions/EasyAssert.h"
-#include "utils/Status.h"
+#include "knowhere/comp/index_param.h"
+#include "pb/schema.pb.h"
 
 namespace milvus {
+using TypeParams = std::map<std::string, std::string>;
+using TokenizerParams = std::string;
 
-inline int
-datatype_sizeof(DataType data_type, int dim = 1) {
-    switch (data_type) {
-        case DataType::BOOL:
-            return sizeof(bool);
-        case DataType::INT8:
-            return sizeof(int8_t);
-        case DataType::INT16:
-            return sizeof(int16_t);
-        case DataType::INT32:
-            return sizeof(int32_t);
-        case DataType::INT64:
-            return sizeof(int64_t);
-        case DataType::FLOAT:
-            return sizeof(float);
-        case DataType::DOUBLE:
-            return sizeof(double);
-        case DataType::VECTOR_FLOAT:
-            return sizeof(float) * dim;
-        case DataType::VECTOR_BINARY: {
-            Assert(dim % 8 == 0);
-            return dim / 8;
-        }
-        default: {
-            throw std::invalid_argument("unsupported data type");
-        }
-    }
-}
-
-// TODO: use magic_enum when available
-inline std::string
-datatype_name(DataType data_type) {
-    switch (data_type) {
-        case DataType::BOOL:
-            return "bool";
-        case DataType::INT8:
-            return "int8_t";
-        case DataType::INT16:
-            return "int16_t";
-        case DataType::INT32:
-            return "int32_t";
-        case DataType::INT64:
-            return "int64_t";
-        case DataType::FLOAT:
-            return "float";
-        case DataType::DOUBLE:
-            return "double";
-        case DataType::VARCHAR:
-            return "varChar";
-        case DataType::VECTOR_FLOAT:
-            return "vector_float";
-        case DataType::VECTOR_BINARY: {
-            return "vector_binary";
-        }
-        default: {
-            auto err_msg = "Unsupported DataType(" + std::to_string((int)data_type) + ")";
-            PanicInfo(err_msg);
-        }
-    }
-}
-
-inline bool
-datatype_is_vector(DataType datatype) {
-    return datatype == DataType::VECTOR_BINARY || datatype == DataType::VECTOR_FLOAT;
-}
-
-inline bool
-datatype_is_string(DataType datatype) {
-    switch (datatype) {
-        case DataType::VARCHAR:
-        case DataType::STRING:
-            return true;
-        default:
-            return false;
-    }
-}
-
-inline bool
-datatype_is_integer(DataType datatype) {
-    switch (datatype) {
-        case DataType::INT8:
-        case DataType::INT16:
-        case DataType::INT32:
-        case DataType::INT64:
-            return true;
-        default:
-            return false;
-    }
-}
-
-inline bool
-datatype_is_floating(DataType datatype) {
-    switch (datatype) {
-        case DataType::FLOAT:
-        case DataType::DOUBLE:
-            return true;
-        default:
-            return false;
-    }
-}
+TokenizerParams
+ParseTokenizerParams(const TypeParams& params);
 
 class FieldMeta {
  public:
@@ -137,50 +46,177 @@ class FieldMeta {
     FieldMeta&
     operator=(FieldMeta&&) = default;
 
-    FieldMeta(const FieldName& name, FieldId id, DataType type) : name_(name), id_(id), type_(type) {
-        Assert(!is_vector());
+    FieldMeta(FieldName name,
+              FieldId id,
+              DataType type,
+              bool nullable,
+              std::optional<DefaultValueType> default_value,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          type_(type),
+          nullable_(nullable),
+          default_value_(std::move(default_value)),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(!IsVectorDataType(type_));
     }
 
-    FieldMeta(const FieldName& name, FieldId id, DataType type, int64_t max_length)
-        : name_(name), id_(id), type_(type), string_info_(StringInfo{max_length}) {
-        Assert(is_string());
+    FieldMeta(FieldName name,
+              FieldId id,
+              DataType type,
+              int64_t max_length,
+              bool nullable,
+              std::optional<DefaultValueType> default_value,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          type_(type),
+          nullable_(nullable),
+          string_info_(StringInfo{max_length}),
+          default_value_(std::move(default_value)),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(IsStringDataType(type_));
     }
 
-    FieldMeta(
-        const FieldName& name, FieldId id, DataType type, int64_t dim, std::optional<knowhere::MetricType> metric_type)
-        : name_(name), id_(id), type_(type), vector_info_(VectorInfo{dim, metric_type}) {
-        Assert(is_vector());
+    FieldMeta(FieldName name,
+              FieldId id,
+              DataType type,
+              int64_t max_length,
+              bool nullable,
+              bool enable_match,
+              bool enable_analyzer,
+              std::map<std::string, std::string>& params,
+              std::optional<DefaultValueType> default_value,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          type_(type),
+          nullable_(nullable),
+          string_info_(StringInfo{
+              max_length,
+              enable_match,
+              enable_analyzer,
+              std::move(params),
+          }),
+          default_value_(std::move(default_value)),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(IsStringDataType(type_));
     }
 
-    bool
-    is_vector() const {
-        Assert(type_ != DataType::NONE);
-        return type_ == DataType::VECTOR_BINARY || type_ == DataType::VECTOR_FLOAT;
+    FieldMeta(FieldName name,
+              FieldId id,
+              DataType type,
+              DataType element_type,
+              bool nullable,
+              std::optional<DefaultValueType> default_value,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          type_(type),
+          element_type_(element_type),
+          nullable_(nullable),
+          default_value_(std::move(default_value)),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(IsArrayDataType(type_));
     }
 
-    bool
-    is_string() const {
-        Assert(type_ != DataType::NONE);
-        return type_ == DataType::VARCHAR || type_ == DataType::STRING;
+    // pass in any value for dim for sparse vector is ok as it'll never be used:
+    // get_dim() not allowed to be invoked on a sparse vector field.
+    FieldMeta(FieldName name,
+              FieldId id,
+              DataType type,
+              int64_t dim,
+              std::optional<knowhere::MetricType> metric_type,
+              bool nullable,
+              std::optional<DefaultValueType> default_value,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          type_(type),
+          nullable_(nullable),
+          vector_info_(VectorInfo{dim, std::move(metric_type)}),
+          default_value_(std::move(default_value)),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(IsVectorDataType(type_));
+        Assert(!default_value_.has_value() &&
+               "vector fields do not support default values");
+    }
+
+    // array of vector type
+    FieldMeta(FieldName name,
+              FieldId id,
+              DataType type,
+              DataType element_type,
+              int64_t dim,
+              std::optional<knowhere::MetricType> metric_type,
+              bool nullable,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          type_(type),
+          nullable_(nullable),
+          element_type_(element_type),
+          vector_info_(VectorInfo{dim, std::move(metric_type)}),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(type_ == DataType::VECTOR_ARRAY);
+        Assert(IsVectorDataType(element_type_));
+    }
+
+    // for json stats shredding column field meta,
+    // we need to pass in the main field id
+    FieldMeta(FieldName name,
+              FieldId id,
+              int64_t main_field_id,
+              DataType type,
+              bool nullable,
+              std::optional<DefaultValueType> default_value,
+              std::string external_field_mapping = "")
+        : name_(std::move(name)),
+          id_(id),
+          main_field_id_(main_field_id),
+          type_(type),
+          nullable_(nullable),
+          default_value_(std::move(default_value)),
+          external_field_mapping_(std::move(external_field_mapping)) {
+        Assert(!IsVectorDataType(type_));
     }
 
     int64_t
     get_dim() const {
-        Assert(is_vector());
+        Assert(IsVectorDataType(type_));
+        // should not attempt to get dim() of a sparse vector from schema.
+        Assert(!IsSparseFloatVectorDataType(type_));
         Assert(vector_info_.has_value());
         return vector_info_->dim_;
     }
 
     int64_t
     get_max_len() const {
-        Assert(is_string());
+        Assert(IsStringDataType(type_));
         Assert(string_info_.has_value());
         return string_info_->max_length;
     }
 
+    int64_t
+    get_main_field_id() const {
+        return main_field_id_;
+    }
+
+    bool
+    enable_match() const;
+
+    bool
+    enable_analyzer() const;
+
+    bool
+    enable_growing_jsonStats() const;
+
+    TokenizerParams
+    get_analyzer_params() const;
+
     std::optional<knowhere::MetricType>
     get_metric_type() const {
-        Assert(is_vector());
+        Assert(IsVectorDataType(type_));
         Assert(vector_info_.has_value());
         return vector_info_->metric_type_;
     }
@@ -200,16 +236,95 @@ class FieldMeta {
         return type_;
     }
 
-    int64_t
+    DataType
+    get_element_type() const {
+        return element_type_;
+    }
+
+    bool
+    is_vector() const {
+        return IsVectorDataType(type_);
+    }
+
+    bool
+    is_json() const {
+        return type_ == DataType::JSON;
+    }
+
+    bool
+    is_string() const {
+        return IsStringDataType(type_);
+    }
+
+    bool
+    is_nullable() const {
+        return nullable_;
+    }
+
+    bool
+    NeedLoad() const {
+        return external_field_mapping_.empty();
+    }
+
+    const std::string&
+    get_external_field_mapping() const {
+        return external_field_mapping_;
+    }
+
+    bool
+    has_default_value() const {
+        return default_value_.has_value();
+    }
+
+    std::optional<DefaultValueType>
+    default_value() const {
+        return default_value_;
+    }
+
+    bool
+    is_external_field() const {
+        return !external_field_mapping_.empty();
+    }
+
+    const std::string&
+    get_external_field() const {
+        return external_field_mapping_;
+    }
+
+    void
+    set_external_field(const std::string& external_field) {
+        external_field_mapping_ = external_field;
+    }
+
+    milvus::proto::schema::FieldSchema
+    ToProto() const;
+
+    size_t
     get_sizeof() const {
-        if (is_vector()) {
-            return datatype_sizeof(type_, get_dim());
+        AssertInfo(!IsSparseFloatVectorDataType(type_),
+                   "should not attempt to get_sizeof() of a sparse vector from "
+                   "schema");
+        static const size_t ARRAY_SIZE = 128;
+        static const size_t JSON_SIZE = 512;
+        // assume float vector with dim 512, array length 10
+        static const size_t VECTOR_ARRAY_SIZE = 512 * 10 * 4;
+        if (type_ == DataType::VECTOR_ARRAY) {
+            return VECTOR_ARRAY_SIZE;
+        } else if (is_vector()) {
+            return GetDataTypeSize(type_, get_dim());
         } else if (is_string()) {
+            Assert(string_info_.has_value());
             return string_info_->max_length;
+        } else if (IsVariableDataType(type_)) {
+            return type_ == DataType::ARRAY ? ARRAY_SIZE : JSON_SIZE;
         } else {
-            return datatype_sizeof(type_);
+            return GetDataTypeSize(type_);
         }
     }
+
+ public:
+    static FieldMeta
+    ParseFrom(const milvus::proto::schema::FieldSchema& schema_proto);
 
  private:
     struct VectorInfo {
@@ -218,12 +333,22 @@ class FieldMeta {
     };
     struct StringInfo {
         int64_t max_length;
+        bool enable_match;
+        bool enable_analyzer;
+        std::map<std::string, std::string> params;
     };
     FieldName name_;
     FieldId id_;
     DataType type_ = DataType::NONE;
+    DataType element_type_ = DataType::NONE;
+    bool nullable_;
+    std::optional<DefaultValueType> default_value_;
     std::optional<VectorInfo> vector_info_;
     std::optional<StringInfo> string_info_;
+    // for json stats, the main field id is the real field id
+    // of collection schema, the field id is the json shredding field id
+    int64_t main_field_id_ = INVALID_FIELD_ID;
+    std::string external_field_mapping_;
 };
 
 }  // namespace milvus

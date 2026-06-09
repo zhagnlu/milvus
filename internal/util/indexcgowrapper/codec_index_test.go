@@ -1,21 +1,28 @@
-//go:build linux
-// +build linux
-
 package indexcgowrapper
 
 import (
+	"math"
 	"math/rand"
+	"os"
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/internal/util/funcutil"
-
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/metric"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
+
+func TestMain(m *testing.M) {
+	paramtable.Init()
+	exitCode := m.Run()
+	os.Exit(exitCode)
+}
 
 type indexTestCase struct {
 	dtype       schemapb.DataType
@@ -96,12 +103,101 @@ func generateFloatVectors(numRows, dim int) []float32 {
 	return ret
 }
 
+type Float16 uint16
+
+func NewFloat16(f float32) Float16 {
+	i := math.Float32bits(f)
+	sign := uint16((i >> 31) & 0x1)
+	exp := (i >> 23) & 0xff
+	exp16 := int16(exp) - 127 + 15
+	frac := uint16(i>>13) & 0x3ff
+	switch exp {
+	case 0:
+		exp16 = 0
+	case 0xff:
+		exp16 = 0x1f
+	default:
+		if exp16 > 0x1e {
+			exp16 = 0x1f
+			frac = 0
+		} else if exp16 < 0x01 {
+			exp16 = 0
+			frac = 0
+		}
+	}
+	f16 := (sign << 15) | uint16(exp16<<10) | frac
+	return Float16(f16)
+}
+
+type BFloat16 uint16
+
+func NewBFloat16(f float32) BFloat16 {
+	i := math.Float32bits(f)
+	sign := uint16((i >> 31) & 0x1)
+	exp := (i >> 23) & 0xff
+	exp16 := int16(exp) - 127 + 15
+	frac := uint16(i>>13) & 0x3ff
+	switch exp {
+	case 0:
+		exp16 = 0
+	case 0xff:
+		exp16 = 0x1f
+	default:
+		if exp16 > 0x1e {
+			exp16 = 0x1f
+			frac = 0
+		} else if exp16 < 0x01 {
+			exp16 = 0
+			frac = 0
+		}
+	}
+	bf16 := (sign << 15) | uint16(exp16<<10) | frac
+	return BFloat16(bf16)
+}
+
+func generateFloat16Vectors(numRows, dim int) []byte {
+	total := numRows * dim * 2
+	ret := make([]byte, total)
+	float32Array := generateFloat32Array(numRows * dim)
+	for _, f32 := range float32Array {
+		f16 := NewFloat16(f32)
+		b1 := byte(f16 & 0xff)
+		ret = append(ret, b1)
+		b2 := byte(f16 >> 8)
+		ret = append(ret, b2)
+	}
+	return ret
+}
+
+func generateBFloat16Vectors(numRows, dim int) []byte {
+	total := numRows * dim * 2
+	ret := make([]byte, total)
+	float32Array := generateFloat32Array(numRows * dim)
+	for _, f32 := range float32Array {
+		bf16 := NewBFloat16(f32)
+		b1 := byte(bf16 & 0xff)
+		ret = append(ret, b1)
+		b2 := byte(bf16 >> 8)
+		ret = append(ret, b2)
+	}
+	return ret
+}
+
 func generateBinaryVectors(numRows, dim int) []byte {
 	total := (numRows * dim) / 8
 	ret := make([]byte, total)
 	_, err := rand.Read(ret)
 	if err != nil {
 		panic(err)
+	}
+	return ret
+}
+
+func generateInt8Vectors(numRows, dim int) []int8 {
+	total := numRows * dim
+	ret := make([]int8, 0, total)
+	for i := 0; i < total; i++ {
+		ret = append(ret, int8(rand.Intn(256)-128))
 	}
 	return ret
 }
@@ -154,6 +250,21 @@ func genFieldData(dtype schemapb.DataType, numRows, dim int) storage.FieldData {
 			Data: generateFloatVectors(numRows, dim),
 			Dim:  dim,
 		}
+	case schemapb.DataType_Float16Vector:
+		return &storage.Float16VectorFieldData{
+			Data: generateFloat16Vectors(numRows, dim),
+			Dim:  dim,
+		}
+	case schemapb.DataType_BFloat16Vector:
+		return &storage.BFloat16VectorFieldData{
+			Data: generateBFloat16Vectors(numRows, dim),
+			Dim:  dim,
+		}
+	case schemapb.DataType_Int8Vector:
+		return &storage.Int8VectorFieldData{
+			Data: generateInt8Vectors(numRows, dim),
+			Dim:  dim,
+		}
 	default:
 		return nil
 	}
@@ -165,14 +276,7 @@ func genScalarIndexCases(dtype schemapb.DataType) []indexTestCase {
 			dtype:      dtype,
 			typeParams: nil,
 			indexParams: map[string]string{
-				"index_type": "inverted_index",
-			},
-		},
-		{
-			dtype:      dtype,
-			typeParams: nil,
-			indexParams: map[string]string{
-				"index_type": "flat",
+				common.IndexTypeKey: "STL_SORT",
 			},
 		},
 	}
@@ -184,14 +288,14 @@ func genStringIndexCases(dtype schemapb.DataType) []indexTestCase {
 			dtype:      dtype,
 			typeParams: nil,
 			indexParams: map[string]string{
-				"index_type": "inverted_index",
+				common.IndexTypeKey: "STL_SORT",
 			},
 		},
 		{
 			dtype:      dtype,
 			typeParams: nil,
 			indexParams: map[string]string{
-				"index_type": "marisa-trie",
+				common.IndexTypeKey: "Trie",
 			},
 		},
 	}
@@ -203,24 +307,22 @@ func genFloatVecIndexCases(dtype schemapb.DataType) []indexTestCase {
 			dtype:      dtype,
 			typeParams: nil,
 			indexParams: map[string]string{
-				"index_type":  IndexFaissIVFPQ,
-				"metric_type": L2,
-				"dim":         strconv.Itoa(dim),
-				"nlist":       strconv.Itoa(nlist),
-				"m":           strconv.Itoa(m),
-				"nbits":       strconv.Itoa(nbits),
-				"SLICE_SIZE":  strconv.Itoa(sliceSize),
+				common.IndexTypeKey:  IndexFaissIVFPQ,
+				common.MetricTypeKey: metric.L2,
+				common.DimKey:        strconv.Itoa(dim),
+				"nlist":              strconv.Itoa(nlist),
+				"m":                  strconv.Itoa(m),
+				"nbits":              strconv.Itoa(nbits),
 			},
 		},
 		{
 			dtype:      dtype,
 			typeParams: nil,
 			indexParams: map[string]string{
-				"index_type":  IndexFaissIVFFlat,
-				"metric_type": L2,
-				"dim":         strconv.Itoa(dim),
-				"nlist":       strconv.Itoa(nlist),
-				"SLICE_SIZE":  strconv.Itoa(sliceSize),
+				common.IndexTypeKey:  IndexFaissIVFFlat,
+				common.MetricTypeKey: metric.L2,
+				common.DimKey:        strconv.Itoa(dim),
+				"nlist":              strconv.Itoa(nlist),
 			},
 		},
 	}
@@ -232,12 +334,61 @@ func genBinaryVecIndexCases(dtype schemapb.DataType) []indexTestCase {
 			dtype:      dtype,
 			typeParams: nil,
 			indexParams: map[string]string{
-				"index_type":  IndexFaissBinIVFFlat,
-				"metric_type": Jaccard,
-				"dim":         strconv.Itoa(dim),
-				"nlist":       strconv.Itoa(nlist),
-				"nbits":       strconv.Itoa(nbits),
-				"SLICE_SIZE":  strconv.Itoa(sliceSize),
+				common.IndexTypeKey:  IndexFaissBinIVFFlat,
+				common.MetricTypeKey: metric.JACCARD,
+				common.DimKey:        strconv.Itoa(dim),
+				"nlist":              strconv.Itoa(nlist),
+				"nbits":              strconv.Itoa(nbits),
+			},
+		},
+	}
+}
+
+func genFloat16VecIndexCases(dtype schemapb.DataType) []indexTestCase {
+	return []indexTestCase{
+		{
+			dtype:      dtype,
+			typeParams: nil,
+			indexParams: map[string]string{
+				common.IndexTypeKey:  IndexFaissIVFPQ,
+				common.MetricTypeKey: metric.L2,
+				common.DimKey:        strconv.Itoa(dim),
+				"nlist":              strconv.Itoa(nlist),
+				"m":                  strconv.Itoa(m),
+				"nbits":              strconv.Itoa(nbits),
+			},
+		},
+	}
+}
+
+func genBFloat16VecIndexCases(dtype schemapb.DataType) []indexTestCase {
+	return []indexTestCase{
+		{
+			dtype:      dtype,
+			typeParams: nil,
+			indexParams: map[string]string{
+				common.IndexTypeKey:  IndexFaissIVFPQ,
+				common.MetricTypeKey: metric.L2,
+				common.DimKey:        strconv.Itoa(dim),
+				"nlist":              strconv.Itoa(nlist),
+				"m":                  strconv.Itoa(m),
+				"nbits":              strconv.Itoa(nbits),
+			},
+		},
+	}
+}
+
+func genInt8VecIndexCases(dtype schemapb.DataType) []indexTestCase {
+	return []indexTestCase{
+		{
+			dtype:      dtype,
+			typeParams: nil,
+			indexParams: map[string]string{
+				common.IndexTypeKey:  IndexHNSW,
+				common.MetricTypeKey: metric.L2,
+				common.DimKey:        strconv.Itoa(dim),
+				"M":                  strconv.Itoa(16),
+				"efConstruction":     strconv.Itoa(efConstruction),
 			},
 		},
 	}
@@ -267,6 +418,12 @@ func genTypedIndexCase(dtype schemapb.DataType) []indexTestCase {
 		return genBinaryVecIndexCases(dtype)
 	case schemapb.DataType_FloatVector:
 		return genFloatVecIndexCases(dtype)
+	case schemapb.DataType_Float16Vector:
+		return genFloat16VecIndexCases(dtype)
+	case schemapb.DataType_BFloat16Vector:
+		return genBFloat16VecIndexCases(dtype)
+	case schemapb.DataType_Int8Vector:
+		return genInt8VecIndexCases(dtype)
 	default:
 		return nil
 	}
@@ -285,12 +442,31 @@ func genIndexCase() []indexTestCase {
 		schemapb.DataType_VarChar,
 		schemapb.DataType_BinaryVector,
 		schemapb.DataType_FloatVector,
+		schemapb.DataType_Float16Vector,
+		schemapb.DataType_BFloat16Vector,
+		schemapb.DataType_Int8Vector,
 	}
 	var ret []indexTestCase
 	for _, dtype := range dtypes {
 		ret = append(ret, genTypedIndexCase(dtype)...)
 	}
 	return ret
+}
+
+func genStorageConfig() *indexpb.StorageConfig {
+	params := paramtable.Get()
+
+	return &indexpb.StorageConfig{
+		Address:         params.MinioCfg.Address.GetValue(),
+		AccessKeyID:     params.MinioCfg.AccessKeyID.GetValue(),
+		SecretAccessKey: params.MinioCfg.SecretAccessKey.GetValue(),
+		BucketName:      params.MinioCfg.BucketName.GetValue(),
+		RootPath:        params.MinioCfg.RootPath.GetValue(),
+		IAMEndpoint:     params.MinioCfg.IAMEndpoint.GetValue(),
+		UseSSL:          params.MinioCfg.UseSSL.GetAsBool(),
+		SslCACert:       params.MinioCfg.SslCACert.GetValue(),
+		UseIAM:          params.MinioCfg.UseIAM.GetAsBool(),
+	}
 }
 
 func TestCgoIndex(t *testing.T) {

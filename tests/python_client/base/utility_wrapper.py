@@ -6,9 +6,9 @@ import sys
 sys.path.append("..")
 from check.func_check import ResponseChecker
 from utils.api_request import api_request
-from common.common_type import BulkLoadStates
+from pymilvus import BulkInsertState
 from pymilvus.orm.role import Role
-
+from utils.util_log import test_log as log
 
 TIMEOUT = 20
 
@@ -19,68 +19,192 @@ class ApiUtilityWrapper:
     ut = utility
     role = None
 
-    def bulk_load(self, collection_name,  partition_name="", row_based=True, files="", timeout=None,
-                  using="default", check_task=None, check_items=None, **kwargs):
+    def do_bulk_insert(self, collection_name, files="", partition_name=None, timeout=None,
+                       using="default", check_task=None, check_items=None, **kwargs):
+        working_tasks = self.get_bulk_insert_working_list()
+        log.info(f"before bulk load, there are {len(working_tasks)} working tasks")
+        log.info(f"files to load: {files}")
         func_name = sys._getframe().f_code.co_name
-        res, is_succ = api_request([self.ut.bulk_load, collection_name, partition_name, row_based,
-                                    files, timeout, using], **kwargs)
+        res, is_succ = api_request([self.ut.do_bulk_insert, collection_name,
+                                    files, partition_name, timeout, using], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
                                        collection_name=collection_name, using=using).run()
+        time.sleep(1)
+        working_tasks = self.get_bulk_insert_working_list()
+        log.info(f"after bulk load, there are {len(working_tasks)} working tasks")
         return res, check_result
 
-    def get_bulk_load_state(self, task_id, timeout=None, using="default", check_task=None, check_items=None,  **kwargs):
+    def get_bulk_insert_state(self, task_id, timeout=None, using="default", check_task=None, check_items=None,
+                              **kwargs):
         func_name = sys._getframe().f_code.co_name
-        res, is_succ = api_request([self.ut.get_bulk_load_state, task_id, timeout, using], **kwargs)
+        res, is_succ = api_request([self.ut.get_bulk_insert_state, task_id, timeout, using], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
                                        task_id=task_id, using=using).run()
         return res, check_result
 
-    def wait_for_bulk_load_tasks_completed(self, task_ids, target_state=BulkLoadStates.BulkLoadPersisted,
-                                           timeout=None, using="default", **kwargs):
-        start = time.time()
-        successes = {}
-        fails = {}
+    def list_bulk_insert_tasks(self, limit=0, collection_name=None, timeout=None, using="default", check_task=None,
+                               check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, is_succ = api_request([self.ut.list_bulk_insert_tasks, limit, collection_name, timeout, using], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
+                                       limit=limit, collection_name=collection_name, using=using).run()
+        return res, check_result
+
+    def get_bulk_insert_pending_list(self):
+        tasks = {}
+        for task in self.ut.list_bulk_insert_tasks():
+            if task.state == BulkInsertState.ImportPending:
+                tasks[task.task_id] = task
+        return tasks
+
+    def get_bulk_insert_working_list(self):
+        tasks = {}
+        for task in self.ut.list_bulk_insert_tasks():
+            if task.state in [BulkInsertState.ImportStarted]:
+                tasks[task.task_id] = task
+        return tasks
+
+    def list_all_bulk_insert_tasks(self, limit=0):
+        tasks, _ = self.list_bulk_insert_tasks(limit=limit)
+        pending = 0
+        started = 0
+        persisted = 0
+        completed = 0
+        failed = 0
+        failed_and_cleaned = 0
+        unknown = 0
+        for task in tasks:
+            print(task)
+            if task.state == BulkInsertState.ImportPending:
+                pending = pending + 1
+            elif task.state == BulkInsertState.ImportStarted:
+                started = started + 1
+            elif task.state == BulkInsertState.ImportPersisted:
+                persisted = persisted + 1
+            elif task.state == BulkInsertState.ImportCompleted:
+                completed = completed + 1
+            elif task.state == BulkInsertState.ImportFailed:
+                failed = failed + 1
+            elif task.state == BulkInsertState.ImportFailedAndCleaned:
+                failed_and_cleaned = failed_and_cleaned + 1
+            else:
+                unknown = unknown + 1
+
+        log.info("There are", len(tasks), "bulkload tasks.", pending, "pending,", started, "started,", persisted,
+                 "persisted,", completed, "completed,", failed, "failed", failed_and_cleaned, "failed_and_cleaned",
+                 unknown, "unknown")
+
+    def wait_for_bulk_insert_tasks_completed(self, task_ids, target_state=BulkInsertState.ImportCompleted,
+                                             timeout=None, using="default", **kwargs):
+        tasks_state_distribution = {
+            "success": set(),
+            "failed": set(),
+            "in_progress": set()
+        }
+        tasks_state = {}
         if timeout is not None:
-            task_timeout = timeout / len(task_ids)
+            task_timeout = timeout
         else:
             task_timeout = TIMEOUT
-        while (len(successes) + len(fails)) < len(task_ids):
-            in_progress = {}
-            time.sleep(0.1)
+        start = time.time()
+        end = time.time()
+        log.info(f"wait bulk load timeout is {task_timeout}")
+        pending_tasks = self.get_bulk_insert_pending_list()
+        log.info(f"before waiting, there are {len(pending_tasks)} pending tasks")
+        while len(tasks_state_distribution["success"]) + len(tasks_state_distribution["failed"]) < len(
+                task_ids) and end - start <= task_timeout:
+            time.sleep(2)
+
             for task_id in task_ids:
-                if successes.get(task_id, None) is not None or fails.get(task_id, None) is not None:
+                if task_id in tasks_state_distribution["success"] or task_id in tasks_state_distribution["failed"]:
                     continue
                 else:
-                    state, _ = self.get_bulk_load_state(task_id, task_timeout, using, **kwargs)
-                    if target_state == BulkLoadStates.BulkLoadDataQueryable:
-                        if state.data_queryable is True:
-                            successes[task_id] = True
-                        else:
-                            in_progress[task_id] = False
-                    elif target_state == BulkLoadStates.BulkLoadDataIndexed:
-                        if state.data_indexed is True:
-                            successes[task_id] = True
-                        else:
-                            in_progress[task_id] = False
-                    else:
-                        if state.state_name == target_state:
-                            successes[task_id] = state
-                        elif state.state_name == BulkLoadStates.BulkLoadFailed:
-                            fails[task_id] = state
-                        else:
-                            in_progress[task_id] = state
-            end = time.time()
-            if timeout is not None:
-                if end - start > timeout:
-                    in_progress.update(fails)
-                    in_progress.update(successes)
-                    return False, in_progress
+                    state, _ = self.get_bulk_insert_state(task_id, task_timeout, using, **kwargs)
+                    tasks_state[task_id] = state
 
-        if len(fails) == 0:
-            return True, successes
+                    if target_state == BulkInsertState.ImportPersisted:
+                        if state.state in [BulkInsertState.ImportPersisted, BulkInsertState.ImportCompleted]:
+                            if task_id in tasks_state_distribution["in_progress"]:
+                                tasks_state_distribution["in_progress"].remove(task_id)
+                            tasks_state_distribution["success"].add(task_id)
+                        elif state.state in [BulkInsertState.ImportPending, BulkInsertState.ImportStarted]:
+                            tasks_state_distribution["in_progress"].add(task_id)
+                        else:
+                            tasks_state_distribution["failed"].add(task_id)
+
+                    if target_state == BulkInsertState.ImportCompleted:
+                        if state.state in [BulkInsertState.ImportCompleted]:
+                            if task_id in tasks_state_distribution["in_progress"]:
+                                tasks_state_distribution["in_progress"].remove(task_id)
+                            tasks_state_distribution["success"].add(task_id)
+                        elif state.state in [BulkInsertState.ImportPending, BulkInsertState.ImportStarted,
+                                             BulkInsertState.ImportPersisted]:
+                            tasks_state_distribution["in_progress"].add(task_id)
+                        else:
+                            tasks_state_distribution["failed"].add(task_id)
+
+            end = time.time()
+        pending_tasks = self.get_bulk_insert_pending_list()
+        log.info(f"after waiting, there are {len(pending_tasks)} pending tasks")
+        log.info(f"task state distribution: {tasks_state_distribution}")
+        log.info(tasks_state)
+        if len(tasks_state_distribution["success"]) == len(task_ids):
+            log.info(f"wait for bulk load tasks completed successfully, cost time: {end - start}")
+            return True, tasks_state
         else:
-            fails.update(successes)
-            return False, fails
+            log.info(f"wait for bulk load tasks completed failed, cost time: {end - start}")
+            return False, tasks_state
+
+    def wait_all_pending_tasks_finished(self):
+        task_states_map = {}
+        all_tasks, _ = self.list_bulk_insert_tasks()
+        # log.info(f"all tasks: {all_tasks}")
+        for task in all_tasks:
+            if task.state in [BulkInsertState.ImportStarted, BulkInsertState.ImportPersisted]:
+                task_states_map[task.task_id] = task.state
+
+        log.info(f"current tasks states: {task_states_map}")
+        pending_tasks = self.get_bulk_insert_pending_list()
+        working_tasks = self.get_bulk_insert_working_list()
+        log.info(
+            f"in the start, there are {len(working_tasks)} working tasks, {working_tasks} {len(pending_tasks)} pending tasks, {pending_tasks}")
+        time_cnt = 0
+        pending_task_ids = set()
+        while len(pending_tasks) > 0:
+            time.sleep(5)
+            time_cnt += 5
+            pending_tasks = self.get_bulk_insert_pending_list()
+            working_tasks = self.get_bulk_insert_working_list()
+            cur_pending_task_ids = []
+            for task_id in pending_tasks.keys():
+                cur_pending_task_ids.append(task_id)
+                pending_task_ids.add(task_id)
+            log.info(
+                f"after {time_cnt}, there are {len(working_tasks)} working tasks, {len(pending_tasks)} pending tasks")
+            log.debug(f"total pending tasks: {pending_task_ids} current pending tasks: {cur_pending_task_ids}")
+        log.info(f"after {time_cnt}, all pending tasks are finished")
+        all_tasks, _ = self.list_bulk_insert_tasks()
+        for task in all_tasks:
+            if task.task_id in pending_task_ids:
+                log.info(f"task {task.task_id} state transfer from pending to {task.state_name}")
+
+    def wait_index_build_completed(self, collection_name, timeout=None):
+        start = time.time()
+        if timeout is not None:
+            task_timeout = timeout
+        else:
+            task_timeout = TIMEOUT
+        end = time.time()
+        while end - start <= task_timeout:
+            time.sleep(0.5)
+            index_states, _ = self.index_building_progress(collection_name)
+            log.debug(f"index states: {index_states}")
+            if index_states["total_rows"] == index_states["indexed_rows"]:
+                log.info(f"index build completed")
+                return True
+            end = time.time()
+        log.info(f"index build timeout")
+        return False
 
     def get_query_segment_info(self, collection_name, timeout=None, using="default", check_task=None, check_items=None):
         timeout = TIMEOUT if timeout is None else timeout
@@ -97,6 +221,14 @@ class ApiUtilityWrapper:
         check_result = ResponseChecker(res, func_name, check_task,
                                        check_items, is_succ, collection_name=collection_name,
                                        partition_names=partition_names, using=using).run()
+        return res, check_result
+
+    def load_state(self, collection_name, partition_names=None, using="default", check_task=None, check_items=None):
+        func_name = sys._getframe().f_code.co_name
+        res, is_succ = api_request([self.ut.load_state, collection_name, partition_names, using])
+        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
+                                       collection_name=collection_name, partition_names=partition_names,
+                                       using=using).run()
         return res, check_result
 
     def wait_for_loading_complete(self, collection_name, partition_names=None, timeout=None, using="default",
@@ -231,7 +363,7 @@ class ApiUtilityWrapper:
     def create_user(self, user, password, using="default", check_task=None, check_items=None):
         func_name = sys._getframe().f_code.co_name
         res, is_succ = api_request([self.ut.create_user, user, password, using])
-        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,using=using).run()
+        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ, using=using).run()
         return res, check_result
 
     def list_usernames(self, using="default", check_task=None, check_items=None):
@@ -260,21 +392,6 @@ class ApiUtilityWrapper:
                                        using=using).run()
         return res, check_result
 
-    def init_role(self, name, using="default", check_task=None, check_items=None, **kwargs):
-        func_name = sys._getframe().f_code.co_name
-        res, is_succ = api_request([Role, name, using], **kwargs)
-        self.role = res if is_succ else None
-        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
-                                       name=name, **kwargs).run()
-        return res, check_result
-
-    def create_role(self, using="default", check_task=None, check_items=None, **kwargs):
-        func_name = sys._getframe().f_code.co_name
-        res, is_succ = api_request([self.role.create], **kwargs)
-        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
-                                       **kwargs).run()
-        return res, check_result
-
     def list_roles(self, include_user_info: bool, using="default", check_task=None, check_items=None):
         func_name = sys._getframe().f_code.co_name
         res, is_succ = api_request([self.ut.list_roles, include_user_info, using])
@@ -291,6 +408,21 @@ class ApiUtilityWrapper:
         func_name = sys._getframe().f_code.co_name
         res, is_succ = api_request([self.ut.list_users, include_role_info, using])
         check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ, using=using).run()
+        return res, check_result
+
+    def init_role(self, name, using="default", check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, is_succ = api_request([Role, name, using], **kwargs)
+        self.role = res if is_succ else None
+        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
+                                       name=name, **kwargs).run()
+        return res, check_result
+
+    def create_role(self, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, is_succ = api_request([self.role.create], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, is_succ,
+                                       **kwargs).run()
         return res, check_result
 
     def role_drop(self, check_task=None, check_items=None, **kwargs):
@@ -327,26 +459,144 @@ class ApiUtilityWrapper:
     def role_name(self):
         return self.role.name
 
-    def role_grant(self, object: str, object_name: str, privilege: str, check_task=None, check_items=None, **kwargs):
+    def role_grant(self, object: str, object_name: str, privilege: str, db_name: str = "", check_task=None, check_items=None, **kwargs):
         func_name = sys._getframe().f_code.co_name
-        res, check = api_request([self.role.grant, object, object_name, privilege], **kwargs)
+        res, check = api_request([self.role.grant, object, object_name, privilege, db_name], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
         return res, check_result
 
-    def role_revoke(self, object: str, object_name: str, privilege: str, check_task=None, check_items=None, **kwargs):
+    def role_revoke(self, object: str, object_name: str, privilege: str, db_name: str = "", check_task=None, check_items=None, **kwargs):
         func_name = sys._getframe().f_code.co_name
-        res, check = api_request([self.role.revoke, object, object_name, privilege], **kwargs)
+        res, check = api_request([self.role.revoke, object, object_name, privilege, db_name], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
         return res, check_result
 
-    def role_list_grant(self, object: str, object_name: str, check_task=None, check_items=None, **kwargs):
+    def role_grant_v2(self, privilege: str, collection_name: str, db_name: str = None, check_task=None, check_items=None, **kwargs):
         func_name = sys._getframe().f_code.co_name
-        res, check = api_request([self.role.list_grant, object, object_name], **kwargs)
+        res, check = api_request([self.role.grant_v2, privilege, collection_name, db_name], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
         return res, check_result
 
-    def role_list_grants(self, check_task=None, check_items=None, **kwargs):
+    def role_revoke_v2(self, privilege: str, collection_name: str, db_name: str = None, check_task=None, check_items=None, **kwargs):
         func_name = sys._getframe().f_code.co_name
-        res, check = api_request([self.role.list_grants], **kwargs)
+        res, check = api_request([self.role.revoke_v2, privilege, collection_name, db_name], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def role_list_grant(self, object: str, object_name: str, db_name: str = "", check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.list_grant, object, object_name, db_name], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def role_list_grants(self, db_name: str = "", check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.list_grants, db_name], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def create_resource_group(self, name, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.create_resource_group, name, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def drop_resource_group(self, name, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.drop_resource_group, name, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def list_resource_groups(self, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.list_resource_groups, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def describe_resource_group(self, name, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.describe_resource_group, name, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def update_resource_group(self, config, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.update_resource_groups, config, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def transfer_node(self, source, target, num_node, using="default", timeout=None, check_task=None, check_items=None,
+                      **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.transfer_node, source, target, num_node, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def transfer_replica(self, source, target, collection_name, num_replica, using="default", timeout=None,
+                         check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request(
+            [self.ut.transfer_replica, source, target, collection_name, num_replica, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def rename_collection(self, old_collection_name, new_collection_name, new_db_name="", timeout=None,
+                          check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.rename_collection, old_collection_name, new_collection_name, new_db_name,
+                                  timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check,
+                                       old_collection_name=old_collection_name, new_collection_name=new_collection_name,
+                                       new_db_name=new_db_name, timeout=timeout, **kwargs).run()
+        return res, check_result
+
+    def flush_all(self, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.flush_all, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check,
+                                       using=using, timeout=timeout, **kwargs).run()
+        return res, check_result
+
+    def get_server_type(self, using="default", check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.get_server_type, using], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check,
+                                       using=using, **kwargs).run()
+        return res, check_result
+
+    def list_indexes(self, collection_name, using="default", timeout=None, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.ut.list_indexes, collection_name, using, timeout], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check,
+                                       collection_name=collection_name, using=using, timeout=timeout, **kwargs).run()
+        return res, check_result
+
+    def create_privilege_group(self, privilege_group: str, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.create_privilege_group, privilege_group], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def drop_privilege_group(self, privilege_group: str, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.drop_privilege_group, privilege_group], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def list_privilege_groups(self, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.list_privilege_groups], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def add_privileges_to_group(self, privilege_group: str, privileges: list, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.add_privileges_to_group, privilege_group, privileges], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
+        return res, check_result
+
+    def remove_privileges_from_group(self, privilege_group: str, privileges: list, check_task=None, check_items=None, **kwargs):
+        func_name = sys._getframe().f_code.co_name
+        res, check = api_request([self.role.remove_privileges_from_group, privilege_group, privileges], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task, check_items, check, **kwargs).run()
         return res, check_result

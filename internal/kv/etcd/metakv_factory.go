@@ -17,22 +17,25 @@
 package etcdkv
 
 import (
-	"github.com/milvus-io/milvus/internal/kv"
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/util/etcd"
-	"github.com/milvus-io/milvus/internal/util/paramtable"
+	"time"
+
 	"go.etcd.io/etcd/server/v3/embed"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/pkg/v3/kv"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
-// NewMetaKvFactory returns an object that implements the kv.MetaKv interface using etcd.
+// NewWatchKVFactory returns an object that implements the kv.WatchKV interface using etcd.
 // The UseEmbedEtcd in the param is used to determine whether the etcd service is external or embedded.
-func NewMetaKvFactory(rootPath string, etcdCfg *paramtable.EtcdConfig) (kv.MetaKv, error) {
+func NewWatchKVFactory(rootPath string, etcdCfg *paramtable.EtcdConfig) (kv.WatchKV, error) {
 	log.Info("start etcd with rootPath",
 		zap.String("rootpath", rootPath),
-		zap.Bool("isEmbed", etcdCfg.UseEmbedEtcd))
-	if etcdCfg.UseEmbedEtcd {
-		path := etcdCfg.ConfigPath
+		zap.Bool("isEmbed", etcdCfg.UseEmbedEtcd.GetAsBool()))
+	if etcdCfg.UseEmbedEtcd.GetAsBool() {
+		path := etcdCfg.ConfigPath.GetValue()
 		var cfg *embed.Config
 		if len(path) > 0 {
 			cfgFromFile, err := embed.ConfigFromFile(path)
@@ -43,17 +46,35 @@ func NewMetaKvFactory(rootPath string, etcdCfg *paramtable.EtcdConfig) (kv.MetaK
 		} else {
 			cfg = embed.NewConfig()
 		}
-		cfg.Dir = etcdCfg.DataDir
-		metaKv, err := NewEmbededEtcdKV(cfg, rootPath)
+		cfg.Dir = etcdCfg.DataDir.GetValue()
+		watchKv, err := NewEmbededEtcdKV(cfg, rootPath, WithRequestTimeout(etcdCfg.RequestTimeout.GetAsDuration(time.Millisecond)))
 		if err != nil {
 			return nil, err
 		}
-		return metaKv, err
+		return watchKv, err
 	}
-	client, err := etcd.GetEtcdClient(etcdCfg)
+	client, err := etcd.CreateEtcdClient(
+		etcdCfg.UseEmbedEtcd.GetAsBool(),
+		etcdCfg.EtcdEnableAuth.GetAsBool(),
+		etcdCfg.EtcdAuthUserName.GetValue(),
+		etcdCfg.EtcdAuthPassword.GetValue(),
+		etcdCfg.EtcdUseSSL.GetAsBool(),
+		etcdCfg.Endpoints.GetAsStrings(),
+		etcdCfg.EtcdTLSCert.GetValue(),
+		etcdCfg.EtcdTLSKey.GetValue(),
+		etcdCfg.EtcdTLSCACert.GetValue(),
+		etcdCfg.EtcdTLSMinVersion.GetValue(),
+		etcdCfg.ClientOptions()...)
 	if err != nil {
 		return nil, err
 	}
-	metaKv := NewEtcdKV(client, rootPath)
-	return metaKv, err
+	watchKv := NewEtcdKV(client, rootPath,
+		WithRequestTimeout(etcdCfg.RequestTimeout.GetAsDuration(time.Millisecond)))
+	return watchKv, err
+}
+
+// NewMetaKvFactory returns an object that implements the kv.MetaKv interface using etcd.
+// The UseEmbedEtcd in the param is used to determine whether the etcd service is external or embedded.
+func NewMetaKvFactory(rootPath string, etcdCfg *paramtable.EtcdConfig) (kv.MetaKv, error) {
+	return NewWatchKVFactory(rootPath, etcdCfg)
 }

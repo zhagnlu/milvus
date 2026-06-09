@@ -1,51 +1,41 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package utils
 
 import (
-	"fmt"
+	"time"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 )
-
-// WrapStatus wraps status with given error code, message and errors
-func WrapStatus(code commonpb.ErrorCode, msg string, errs ...error) *commonpb.Status {
-	status := &commonpb.Status{
-		ErrorCode: code,
-		Reason:    msg,
-	}
-
-	for _, err := range errs {
-		status.Reason = fmt.Sprintf("%s, err=%v", status.Reason, err)
-	}
-
-	return status
-}
-
-// WrapError wraps error with given message
-func WrapError(msg string, err error) error {
-	return fmt.Errorf("%s[%w]", msg, err)
-}
-
-func SegmentBinlogs2SegmentInfo(collectionID int64, partitionID int64, segmentBinlogs *datapb.SegmentBinlogs) *datapb.SegmentInfo {
-	return &datapb.SegmentInfo{
-		ID:            segmentBinlogs.GetSegmentID(),
-		CollectionID:  collectionID,
-		PartitionID:   partitionID,
-		InsertChannel: segmentBinlogs.GetInsertChannel(),
-		NumOfRows:     segmentBinlogs.GetNumOfRows(),
-		Binlogs:       segmentBinlogs.GetFieldBinlogs(),
-		Statslogs:     segmentBinlogs.GetStatslogs(),
-		Deltalogs:     segmentBinlogs.GetDeltalogs(),
-	}
-}
 
 func MergeMetaSegmentIntoSegmentInfo(info *querypb.SegmentInfo, segments ...*meta.Segment) {
 	first := segments[0]
 	if info.GetSegmentID() == 0 {
 		*info = querypb.SegmentInfo{
+			NodeID:       paramtable.GetNodeID(),
 			SegmentID:    first.GetID(),
 			CollectionID: first.GetCollectionID(),
 			PartitionID:  first.GetPartitionID(),
@@ -53,6 +43,14 @@ func MergeMetaSegmentIntoSegmentInfo(info *querypb.SegmentInfo, segments ...*met
 			DmChannel:    first.GetInsertChannel(),
 			NodeIds:      make([]int64, 0),
 			SegmentState: commonpb.SegmentState_Sealed,
+			IndexInfos:   make([]*querypb.FieldIndexInfo, 0),
+			Level:        first.Level,
+			IsSorted:     first.GetIsSorted(),
+		}
+		for _, indexInfo := range first.IndexInfo {
+			info.IndexName = indexInfo.IndexName
+			info.IndexID = indexInfo.IndexID
+			info.IndexInfos = append(info.IndexInfos, indexInfo)
 		}
 	}
 
@@ -61,64 +59,50 @@ func MergeMetaSegmentIntoSegmentInfo(info *querypb.SegmentInfo, segments ...*met
 	}
 }
 
-// packSegmentLoadInfo packs SegmentLoadInfo for given segment,
-// packs with index if withIndex is true, this fetch indexes from IndexCoord
-func PackSegmentLoadInfo(segment *datapb.SegmentInfo, indexes []*querypb.FieldIndexInfo) *querypb.SegmentLoadInfo {
+// packSegmentLoadInfo packs SegmentLoadInfo for given segment
+func PackSegmentLoadInfo(segment *datapb.SegmentInfo, channelCheckpoint *msgpb.MsgPosition, indexes []*querypb.FieldIndexInfo) *querypb.SegmentLoadInfo {
+	posTime := tsoutil.PhysicalTime(channelCheckpoint.GetTimestamp())
+	tsLag := time.Since(posTime)
+	if tsLag >= 10*time.Minute {
+		log.Warn("delta position is quite stale",
+			zap.Int64("collectionID", segment.GetCollectionID()),
+			zap.Int64("segmentID", segment.GetID()),
+			zap.String("channel", segment.InsertChannel),
+			zap.Uint64("posTs", channelCheckpoint.GetTimestamp()),
+			zap.Time("posTime", posTime),
+			zap.Duration("tsLag", tsLag))
+	}
 	loadInfo := &querypb.SegmentLoadInfo{
-		SegmentID:     segment.ID,
-		PartitionID:   segment.PartitionID,
-		CollectionID:  segment.CollectionID,
-		BinlogPaths:   segment.Binlogs,
-		NumOfRows:     segment.NumOfRows,
-		Statslogs:     segment.Statslogs,
-		Deltalogs:     segment.Deltalogs,
-		InsertChannel: segment.InsertChannel,
-		IndexInfos:    indexes,
+		SegmentID:       segment.ID,
+		PartitionID:     segment.PartitionID,
+		CollectionID:    segment.CollectionID,
+		BinlogPaths:     segment.Binlogs,
+		NumOfRows:       segment.NumOfRows,
+		InsertChannel:   segment.InsertChannel,
+		IndexInfos:      indexes,
+		StartPosition:   segment.GetStartPosition(),
+		DeltaPosition:   channelCheckpoint,
+		Level:           segment.GetLevel(),
+		StorageVersion:  segment.GetStorageVersion(),
+		IsSorted:        segment.GetIsSorted(),
+		ManifestPath:    segment.GetManifestPath(),
+		CommitTimestamp: segment.GetCommitTimestamp(),
+		DataVersion:     segment.GetDataVersion(),
 	}
-	loadInfo.SegmentSize = calculateSegmentSize(loadInfo)
+
+	// Deltalogs are always populated (delta log loading has its own manifest path)
+	loadInfo.Deltalogs = segment.Deltalogs
+
+	// When manifest_path is set, stats are stored in the manifest.
+	// Skip populating legacy stats fields - the reader will load from manifest.
+	if segment.GetManifestPath() == "" {
+		loadInfo.Statslogs = segment.Statslogs
+		loadInfo.Bm25Logs = segment.Bm25Statslogs
+		loadInfo.TextStatsLogs = segment.GetTextStatsLogs()
+		loadInfo.JsonKeyStatsLogs = segment.GetJsonKeyStats()
+	}
+
 	return loadInfo
-}
-
-func calculateSegmentSize(segmentLoadInfo *querypb.SegmentLoadInfo) int64 {
-	segmentSize := int64(0)
-
-	fieldIndex := make(map[int64]*querypb.FieldIndexInfo)
-	for _, index := range segmentLoadInfo.IndexInfos {
-		if index.EnableIndex {
-			fieldID := index.FieldID
-			fieldIndex[fieldID] = index
-		}
-	}
-
-	for _, fieldBinlog := range segmentLoadInfo.BinlogPaths {
-		fieldID := fieldBinlog.FieldID
-		if index, ok := fieldIndex[fieldID]; ok {
-			segmentSize += index.IndexSize
-		} else {
-			segmentSize += getFieldSizeFromBinlog(fieldBinlog)
-		}
-	}
-
-	// Get size of state data
-	for _, fieldBinlog := range segmentLoadInfo.Statslogs {
-		segmentSize += getFieldSizeFromBinlog(fieldBinlog)
-	}
-
-	// Get size of delete data
-	for _, fieldBinlog := range segmentLoadInfo.Deltalogs {
-		segmentSize += getFieldSizeFromBinlog(fieldBinlog)
-	}
-
-	return segmentSize
-}
-
-func getFieldSizeFromBinlog(fieldBinlog *datapb.FieldBinlog) int64 {
-	fieldSize := int64(0)
-	for _, binlog := range fieldBinlog.Binlogs {
-		fieldSize += binlog.LogSize
-	}
-
-	return fieldSize
 }
 
 func MergeDmChannelInfo(infos []*datapb.VchannelInfo) *meta.DmChannel {
@@ -139,12 +123,4 @@ func MergeDmChannelInfo(infos []*datapb.VchannelInfo) *meta.DmChannel {
 	}
 
 	return dmChannel
-}
-
-func Replica2ReplicaInfo(replica *querypb.Replica) *milvuspb.ReplicaInfo {
-	return &milvuspb.ReplicaInfo{
-		ReplicaID:    replica.GetID(),
-		CollectionID: replica.GetCollectionID(),
-		NodeIds:      replica.GetNodes(),
-	}
 }

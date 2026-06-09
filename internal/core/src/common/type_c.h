@@ -15,12 +15,15 @@
 // limitations under the License.
 
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
+#include "common/common_type_c.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+// WARNING: do not change the enum value of Growing and Sealed
 enum SegmentType {
     Invalid = 0,
     Growing = 1,
@@ -29,13 +32,6 @@ enum SegmentType {
 };
 
 typedef enum SegmentType SegmentType;
-
-enum ErrorCode {
-    Success = 0,
-    UnexpectedError = 1,
-    IllegalArgument = 5,
-};
-
 // pure C don't support that we use schemapb.DataType directly.
 // Note: the value of all enumerations must match the corresponding schemapb.DataType.
 // TODO: what if there are increments in schemapb.DataType.
@@ -55,25 +51,20 @@ enum CDataType {
 
     BinaryVector = 100,
     FloatVector = 101,
+    Float16Vector = 102,
+    BFloat16Vector = 103,
+    SparseFloatVector = 104,
+    Int8Vector = 105,
+    VectorArray = 106,
 };
 typedef enum CDataType CDataType;
 
-typedef struct CStatus {
-    int error_code;
-    const char* error_msg;
-} CStatus;
+typedef void* CSegmentInterface;
 
 typedef struct CProto {
     const void* proto_blob;
     int64_t proto_size;
 } CProto;
-
-typedef struct CLoadFieldDataInfo {
-    int64_t field_id;
-    const uint8_t* blob;
-    uint64_t blob_size;
-    int64_t row_count;
-} CLoadFieldDataInfo;
 
 typedef struct CLoadDeletedRecordInfo {
     void* timestamps;
@@ -82,6 +73,100 @@ typedef struct CLoadDeletedRecordInfo {
     int64_t row_count;
 } CLoadDeletedRecordInfo;
 
+typedef struct CStorageConfig {
+    const char* address;
+    const char* bucket_name;
+    const char* access_key_id;
+    const char* access_key_value;
+    const char* root_path;
+    const char* storage_type;
+    const char* cloud_provider;
+    const char* iam_endpoint;
+    const char* log_level;
+    const char* region;
+    bool useSSL;
+    const char* sslCACert;
+    bool useIAM;
+    bool useVirtualHost;
+    int64_t requestTimeoutMs;
+    const char* gcp_credential_json;
+    bool use_custom_part_upload;
+    uint32_t max_connections;
+    const char* tls_min_version;
+    bool use_crc32c_checksum;
+} CStorageConfig;
+
+typedef struct CDiskWriteRateLimiterConfig {
+    int64_t refill_period_us;
+    int64_t avg_bps;
+    int64_t max_burst_bps;
+    int32_t high_priority_ratio;
+    int32_t middle_priority_ratio;
+    int32_t low_priority_ratio;
+} CDiskWriteRateLimiterConfig;
+
+typedef struct CDiskWriteConfig {
+    const char* mode;
+    uint64_t buffer_size_kb;
+    int nr_threads;
+    CDiskWriteRateLimiterConfig rate_limiter_config;
+} CDiskWriteConfig;
+
+typedef struct CArrowReaderConfig {
+    int64_t hole_size_limit_bytes;
+    int64_t range_size_limit_bytes;
+} CArrowReaderConfig;
+
+typedef struct CMmapConfig {
+    const char* cache_read_ahead_policy;
+    const char* mmap_path;
+    uint64_t disk_limit;
+    uint64_t fix_file_size;
+    bool growing_enable_mmap;
+    bool scalar_index_enable_mmap;
+    bool scalar_field_enable_mmap;
+    bool vector_index_enable_mmap;
+    bool vector_field_enable_mmap;
+    bool mmap_populate;
+    bool json_stats_enable_mmap;
+    const char* json_stats_mmap_path;
+} CMmapConfig;
+
+typedef struct CTraceConfig {
+    const char* exporter;
+    float sampleFraction;
+    const char* jaegerURL;
+    const char* otlpEndpoint;
+    const char* otlpMethod;
+    const char* otlpHeaders;
+    bool oltpSecure;
+
+    int nodeID;
+} CTraceConfig;
+
+typedef struct CTraceContext {
+    const uint8_t* traceID;
+    const uint8_t* spanID;
+    uint8_t traceFlags;
+} CTraceContext;
+
+typedef struct CNewSegmentResult {
+    CStatus status;
+    CSegmentInterface segmentPtr;
+} CNewSegmentResult;
+
+typedef struct CPluginContext {
+    int64_t ez_id;
+    int64_t collection_id;
+    const char* key;
+} CPluginContext;
+
+typedef struct CResourceUsage {
+    int64_t memory_bytes;
+    int64_t disk_bytes;
+} CResourceUsage;
+
 #ifdef __cplusplus
 }
+
 #endif

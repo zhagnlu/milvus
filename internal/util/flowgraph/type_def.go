@@ -17,8 +17,8 @@
 package flowgraph
 
 import (
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // Timestamp shortcut for typeutil.Timestamp
@@ -27,5 +27,5 @@ type Timestamp = typeutil.Timestamp
 // NodeName shortcut for string key
 type NodeName = string
 
-// MsgPosition shortcut for internalpb.MsgPosition
-type MsgPosition = internalpb.MsgPosition
+// MsgPosition shortcut for msgpb.MsgPosition
+type MsgPosition = msgpb.MsgPosition

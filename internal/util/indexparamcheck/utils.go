@@ -17,16 +17,21 @@
 package indexparamcheck
 
 import (
+	"fmt"
 	"strconv"
 
-	"github.com/milvus-io/milvus/internal/util/funcutil"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 // CheckIntByRange check if the data corresponding to the key is in the range of [min, max].
 // Return false if:
-//   1. the key does not exist, or
-//   2. the data cannot be converted to an integer, or
-//   3. the number is not in the range [min, max]
+//  1. the key does not exist, or
+//  2. the data cannot be converted to an integer, or
+//  3. the number is not in the range [min, max]
+//
 // Return true otherwise
 func CheckIntByRange(params map[string]string, key string, min, max int) bool {
 	valueStr, ok := params[key]
@@ -44,8 +49,9 @@ func CheckIntByRange(params map[string]string, key string, min, max int) bool {
 
 // CheckStrByValues check whether the data corresponding to the key appears in the string slice of container.
 // Return false if:
-//   1. the key does not exist, or
-//   2. the data does not appear in the container
+//  1. the key does not exist, or
+//  2. the data does not appear in the container
+//
 // Return true otherwise
 func CheckStrByValues(params map[string]string, key string, container []string) bool {
 	value, ok := params[key]
@@ -54,4 +60,44 @@ func CheckStrByValues(params map[string]string, key string, container []string) 
 	}
 
 	return funcutil.SliceContain(container, value)
+}
+
+func errOutOfRange(x interface{}, lb interface{}, ub interface{}) error {
+	return fmt.Errorf("%v out of range: [%v, %v]", x, lb, ub)
+}
+
+func setDefaultIfNotExist(params map[string]string, key string, defaultValue string) {
+	_, exist := params[key]
+	if !exist {
+		params[key] = defaultValue
+	}
+}
+
+func CheckAutoIndexHelper(key string, m map[string]string, dtype schemapb.DataType) {
+	indexType, ok := m[common.IndexTypeKey]
+	if !ok {
+		panic(fmt.Sprintf("%s invalid, index type not found", key))
+	}
+
+	checker, err := GetIndexCheckerMgrInstance().GetChecker(indexType)
+	if err != nil {
+		panic(fmt.Sprintf("%s invalid, unsupported index type: %s", key, indexType))
+	}
+
+	if err := checker.StaticCheck(dtype, schemapb.DataType_None, m); err != nil {
+		panic(fmt.Sprintf("%s invalid, parameters invalid, error: %s", key, err.Error()))
+	}
+}
+
+func CheckAutoIndexConfig() {
+	autoIndexCfg := &paramtable.Get().AutoIndexConfig
+	CheckAutoIndexHelper(autoIndexCfg.IndexParams.Key, autoIndexCfg.IndexParams.GetAsJSONMap(), schemapb.DataType_FloatVector)
+	CheckAutoIndexHelper(autoIndexCfg.BinaryIndexParams.Key, autoIndexCfg.BinaryIndexParams.GetAsJSONMap(), schemapb.DataType_BinaryVector)
+	CheckAutoIndexHelper(autoIndexCfg.BinaryIndexParams.Key, autoIndexCfg.DeduplicateIndexParams.GetAsJSONMap(), schemapb.DataType_BinaryVector)
+	CheckAutoIndexHelper(autoIndexCfg.SparseIndexParams.Key, autoIndexCfg.SparseIndexParams.GetAsJSONMap(), schemapb.DataType_SparseFloatVector)
+	CheckAutoIndexHelper(autoIndexCfg.LargeTopKIndexParams.Key, autoIndexCfg.LargeTopKIndexParams.GetAsJSONMap(), schemapb.DataType_FloatVector)
+}
+
+func ValidateParamTable() {
+	CheckAutoIndexConfig()
 }

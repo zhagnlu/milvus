@@ -25,3 +25,7 @@ const (
 const (
 	moduleName = "DataCoord"
 )
+
+const (
+	invalidIndex = "invalid"
+)

@@ -11,10 +11,10 @@
 
 #pragma once
 
-#include "knowhere/common/Dataset.h"
-#include "knowhere/common/BinarySet.h"
 #include <memory>
-#include <knowhere/index/Index.h>
+#include "common/Types.h"
+#include "index/Index.h"
+#include "storage/FileManager.h"
 
 namespace milvus::indexbuilder {
 class IndexCreatorBase {
@@ -22,17 +22,22 @@ class IndexCreatorBase {
     virtual ~IndexCreatorBase() = default;
 
     virtual void
-    Build(const knowhere::DatasetPtr& dataset) = 0;
+    Build(const milvus::DatasetPtr& dataset,
+          const bool* valid_data = nullptr,
+          const int64_t valid_data_len = 0) = 0;
 
-    virtual knowhere::BinarySet
+    virtual void
+    Build() = 0;
+
+    virtual milvus::BinarySet
     Serialize() = 0;
 
     // used for test.
     virtual void
-    Load(const knowhere::BinarySet&) = 0;
+    Load(const milvus::BinarySet&) = 0;
 
-    // virtual knowhere::IndexPtr
-    // GetIndex() = 0;
+    virtual index::IndexStatsPtr
+    Upload() = 0;
 };
 
 using IndexCreatorBasePtr = std::unique_ptr<IndexCreatorBase>;

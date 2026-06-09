@@ -182,14 +182,14 @@ pipeline {
                                 old_image_repository_modified = "${params.old_image_repository}"
                             }
 
-                            sh "helm repo add milvus https://milvus-io.github.io/milvus-helm"
+                            sh "helm repo add milvus https://zilliztech.github.io/milvus-helm"
                             sh "helm repo update"
                             if ("${params.deploy_task}" == "upgrade"){
                                 if ("${params.milvus_mode}" == "standalone") {
-                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} --set etcd.image.repository=bitnami/etcd --set etcd.image.tag=3.5.0-debian-10-r24 -f standalone-values.yaml;"    
+                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} --set etcd.image.repository=milvusdb/etcd --set etcd.image.tag=3.5.5-r2 -f standalone-values.yaml;"    
                                 }
                                 if ("${params.milvus_mode}" == "cluster") {
-                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} --set etcd.image.repository=bitnami/etcd --set etcd.image.tag=3.5.0-debian-10-r24 -f cluster-values.yaml;"    
+                                    sh "helm install --wait --timeout 720s ${env.RELEASE_NAME} milvus/milvus  --set image.all.repository=${old_image_repository_modified} --set image.all.tag=${old_image_tag_modified} --set etcd.image.repository=milvusdb/etcd --set etcd.image.tag=3.5.5-r2 -f cluster-values.yaml;"    
                                 }
                             }
 

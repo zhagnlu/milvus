@@ -1,75 +1,87 @@
 package planparserv2
 
 import (
-	"fmt"
+	"strings"
 
-	"github.com/milvus-io/milvus/internal/proto/planpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
 )
 
 var wildcards = map[byte]struct{}{
-	// '_': {}, // TODO
+	'_': {},
 	'%': {},
 }
 
 var escapeCharacter byte = '\\'
 
-// hasWildcards returns true if pattern contains any wildcard.
-func hasWildcards(pattern string) bool {
-	l := len(pattern)
-	i := l - 1
-	for ; i >= 0; i-- {
-		_, ok := wildcards[pattern[i]]
-		if ok {
-			if i > 0 && pattern[i-1] == escapeCharacter {
-				i--
-				continue
-			}
-			return true
-		}
+func optimizeLikePattern(pattern string) (planpb.OpType, string, bool) {
+	if len(pattern) == 0 {
+		return planpb.OpType_Equal, "", true
 	}
-	return false
-}
 
-// findLastNotOfWildcards find the last location not of last wildcard.
-func findLastNotOfWildcards(pattern string) int {
-	loc := len(pattern) - 1
-	for ; loc >= 0; loc-- {
-		_, ok := wildcards[pattern[loc]]
-		if !ok {
-			break
-		}
-		if ok {
-			if loc > 0 && pattern[loc-1] == escapeCharacter {
-				break
+	if pattern == "%" || pattern == "%%" {
+		return planpb.OpType_PrefixMatch, "", true
+	}
+
+	process := func(s string) (string, bool) {
+		var buf strings.Builder
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c == escapeCharacter && i+1 < len(s) {
+				next := s[i+1]
+				if _, ok := wildcards[next]; ok {
+					buf.WriteByte(next)
+					i++
+					continue
+				}
 			}
+			if _, ok := wildcards[c]; ok {
+				return "", false
+			}
+			buf.WriteByte(c)
+		}
+		return buf.String(), true
+	}
+
+	leading := pattern[0] == '%'
+	trailing := pattern[len(pattern)-1] == '%'
+
+	switch {
+	case leading && trailing:
+		inner := pattern[1 : len(pattern)-1]
+		trimmed := strings.TrimLeft(inner, "%")
+		trimmed = strings.TrimRight(trimmed, "%")
+		if subStr, valid := process(trimmed); valid {
+			// if subStr is empty, it means the pattern is all %,
+			// return prefix match and empty operand, means all match
+			if len(subStr) == 0 {
+				return planpb.OpType_PrefixMatch, "", true
+			}
+			return planpb.OpType_InnerMatch, subStr, true
+		}
+	case leading:
+		trimmed := strings.TrimLeft(pattern[1:], "%")
+		if subStr, valid := process(trimmed); valid {
+			return planpb.OpType_PostfixMatch, subStr, true
+		}
+	case trailing:
+		trimmed := strings.TrimRight(pattern[:len(pattern)-1], "%")
+		if subStr, valid := process(trimmed); valid {
+			return planpb.OpType_PrefixMatch, subStr, true
+		}
+	default:
+		if subStr, valid := process(pattern); valid {
+			return planpb.OpType_Equal, subStr, true
 		}
 	}
-	return loc
+	return planpb.OpType_Invalid, "", false
 }
 
 // translatePatternMatch translates pattern to related op type and operand.
 func translatePatternMatch(pattern string) (op planpb.OpType, operand string, err error) {
-	l := len(pattern)
-	loc := findLastNotOfWildcards(pattern)
-
-	if loc < 0 {
-		// always match.
-		return planpb.OpType_PrefixMatch, "", nil
+	op, operand, ok := optimizeLikePattern(pattern)
+	if ok {
+		return op, operand, nil
 	}
 
-	exist := hasWildcards(pattern[:loc+1])
-	if loc >= l-1 && !exist {
-		// equal match.
-		return planpb.OpType_Equal, pattern, nil
-	}
-	if !exist {
-		// prefix match.
-		return planpb.OpType_PrefixMatch, pattern[:loc+1], nil
-	}
-
-	return planpb.OpType_Invalid, "", fmt.Errorf(
-		"unsupported pattern: %s, "+
-			"only prefix pattern match like %s "+
-			"and equal match like %s(no wildcards) are supported",
-		pattern, "ab%", "ab")
+	return planpb.OpType_Match, pattern, nil
 }

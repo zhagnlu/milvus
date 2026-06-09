@@ -19,11 +19,15 @@ package storage
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 
-	"github.com/milvus-io/milvus/internal/common"
+	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/internal/util/hookutil"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/log"
 )
 
 // BinlogReader is an object to read binlog file. Binlog file's format can be
@@ -48,27 +52,15 @@ func (reader *BinlogReader) NextEventReader() (*EventReader, error) {
 	if reader.eventReader != nil {
 		reader.eventReader.Close()
 	}
-	var err error
-	reader.eventReader, err = newEventReader(reader.descriptorEvent.PayloadDataType, reader.buffer)
+	nullable, err := reader.GetNullable()
+	if err != nil {
+		return nil, err
+	}
+	reader.eventReader, err = newEventReader(reader.PayloadDataType, reader.buffer, nullable)
 	if err != nil {
 		return nil, err
 	}
 	return reader.eventReader, nil
-}
-
-func (reader *BinlogReader) readMagicNumber() (int32, error) {
-	var err error
-	reader.magicNumber, err = readMagicNumber(reader.buffer)
-	return reader.magicNumber, err
-}
-
-func (reader *BinlogReader) readDescriptorEvent() (*descriptorEvent, error) {
-	event, err := ReadDescriptorEvent(reader.buffer)
-	if err != nil {
-		return nil, err
-	}
-	reader.descriptorEvent = *event
-	return &reader.descriptorEvent, nil
 }
 
 func readMagicNumber(buffer io.Reader) (int32, error) {
@@ -93,6 +85,7 @@ func ReadDescriptorEvent(buffer io.Reader) (*descriptorEvent, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return &descriptorEvent{
 		descriptorEventHeader: *header,
 		descriptorEventData:   *data,
@@ -102,6 +95,9 @@ func ReadDescriptorEvent(buffer io.Reader) (*descriptorEvent, error) {
 // Close closes the BinlogReader object.
 // It mainly calls the Close method of the internal events, reclaims resources, and marks itself as closed.
 func (reader *BinlogReader) Close() {
+	if reader == nil {
+		return
+	}
 	if reader.isClose {
 		return
 	}
@@ -111,18 +107,70 @@ func (reader *BinlogReader) Close() {
 	reader.isClose = true
 }
 
+type BinlogReaderOption func(base *BinlogReader) error
+
+func WithReaderDecryptionContext(ezID, collectionID int64) BinlogReaderOption {
+	return func(base *BinlogReader) error {
+		edek, ok := base.GetEdek()
+		if !ok {
+			return nil
+		}
+
+		decryptor, err := hookutil.GetCipher().GetDecryptor(ezID, collectionID, []byte(edek))
+		if err != nil {
+			log.Error("failed to get decryptor", zap.Int64("ezID", ezID), zap.Int64("collectionID", collectionID), zap.Error(err))
+			return err
+		}
+
+		cipherText := make([]byte, base.buffer.Len())
+		if err := binary.Read(base.buffer, common.Endian, cipherText); err != nil {
+			return err
+		}
+
+		log.Debug("Binlog reader starts to decypt cipher text",
+			zap.Int64("collectionID", collectionID),
+			zap.Int64("fieldID", base.FieldID),
+			zap.Int("cipher size", len(cipherText)),
+		)
+		decrypted, err := decryptor.Decrypt(cipherText)
+		if err != nil {
+			log.Error("failed to decrypt", zap.Int64("ezID", ezID), zap.Int64("collectionID", collectionID), zap.Error(err))
+			return err
+		}
+		log.Debug("Binlog reader decrypted cipher text",
+			zap.Int64("collectionID", collectionID),
+			zap.Int64("fieldID", base.FieldID),
+			zap.Int("cipher size", len(cipherText)),
+			zap.Int("plain size", len(decrypted)),
+		)
+		base.buffer = bytes.NewBuffer(decrypted)
+		return nil
+	}
+}
+
 // NewBinlogReader creates binlogReader to read binlog file.
-func NewBinlogReader(data []byte) (*BinlogReader, error) {
-	reader := &BinlogReader{
-		buffer:  bytes.NewBuffer(data),
-		isClose: false,
+func NewBinlogReader(data []byte, opts ...BinlogReaderOption) (*BinlogReader, error) {
+	buffer := bytes.NewBuffer(data)
+	if _, err := readMagicNumber(buffer); err != nil {
+		return nil, err
 	}
 
-	if _, err := reader.readMagicNumber(); err != nil {
+	descriptor, err := ReadDescriptorEvent(buffer)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := reader.readDescriptorEvent(); err != nil {
-		return nil, err
+
+	reader := BinlogReader{
+		isClose:         false,
+		descriptorEvent: *descriptor,
+		buffer:          buffer,
 	}
-	return reader, nil
+
+	for _, opt := range opts {
+		if err := opt(&reader); err != nil {
+			return nil, err
+		}
+	}
+
+	return &reader, nil
 }

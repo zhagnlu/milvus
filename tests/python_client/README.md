@@ -73,7 +73,7 @@ $ kind export logs .
 
 ### PyMilvus Test Environment Deployment and Case Execution
 
-We recommend using Python 3 (3.6 or higher), consistent with the version supported by PyMilvus.
+We recommend using Python 3.12, consistent with the Python client CI runtime.
 
 > Note: Procedures listed below will be completed automatically if you deployed Milvus using KinD.
 
@@ -227,7 +227,7 @@ assert self.partition_wrap.is_empty
        # drop collection
        collection_w.drop()
        # create partition failed
-       self.partition_wrap.init_partition(collection_w.collection, partition_name, check_task=CheckTasks.err_res, check_items={ct.err_code: 1, ct.err_msg: "can't find collection"})
+       self.partition_wrap.init_partition(collection_w.collection, partition_name, check_task=CheckTasks.err_res, check_items={ct.err_code: 4, ct.err_msg: "collection not found"})
    ```
 
 - Tips

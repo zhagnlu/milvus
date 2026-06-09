@@ -11,24 +11,102 @@
 
 package indexparamcheck
 
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+)
+
 // IndexType string.
 type IndexType = string
 
 // IndexType definitions
 const (
-	IndexFaissIDMap      IndexType = "FLAT" // no index is built.
-	IndexFaissIvfFlat    IndexType = "IVF_FLAT"
-	IndexFaissIvfPQ      IndexType = "IVF_PQ"
-	IndexFaissIvfSQ8     IndexType = "IVF_SQ8"
-	IndexFaissIvfSQ8H    IndexType = "IVF_SQ8_HYBRID"
-	IndexFaissBinIDMap   IndexType = "BIN_FLAT"
-	IndexFaissBinIvfFlat IndexType = "BIN_IVF_FLAT"
-	IndexNSG             IndexType = "NSG"
-	IndexHNSW            IndexType = "HNSW"
-	IndexRHNSWFlat       IndexType = "RHNSW_FLAT"
-	IndexRHNSWPQ         IndexType = "RHNSW_PQ"
-	IndexRHNSWSQ         IndexType = "RHNSW_SQ"
-	IndexANNOY           IndexType = "ANNOY"
-	IndexNGTPANNG        IndexType = "NGT_PANNG"
-	IndexNGTONNG         IndexType = "NGT_ONNG"
+	IndexVector IndexType = "VECINDEX"
+
+	// scalar index
+	IndexSTLSORT  IndexType = "STL_SORT"
+	IndexTRIE     IndexType = "TRIE"
+	IndexTrie     IndexType = "Trie"
+	IndexBitmap   IndexType = "BITMAP"
+	IndexHybrid   IndexType = "HYBRID" // BITMAP + INVERTED
+	IndexINVERTED IndexType = "INVERTED"
+	IndexNGRAM    IndexType = "NGRAM"
+	IndexRTREE    IndexType = "RTREE"
+
+	AutoIndex IndexType = "AUTOINDEX"
 )
+
+func IsScalarIndexType(indexType IndexType) bool {
+	return indexType == IndexSTLSORT || indexType == IndexTRIE || indexType == IndexTrie ||
+		indexType == IndexBitmap || indexType == IndexHybrid || indexType == IndexINVERTED
+}
+
+func IsGpuIndex(indexType IndexType) bool {
+	return vecindexmgr.GetVecIndexMgrInstance().IsGPUVecIndex(indexType)
+}
+
+// IsVectorMmapIndex check if the vector index can be mmaped
+func IsVectorMmapIndex(indexType IndexType) bool {
+	return vecindexmgr.GetVecIndexMgrInstance().IsMMapSupported(indexType)
+}
+
+func IsOffsetCacheSupported(indexType IndexType) bool {
+	return indexType == IndexBitmap
+}
+
+func IsDiskIndex(indexType IndexType) bool {
+	return vecindexmgr.GetVecIndexMgrInstance().IsDiskANN(indexType)
+}
+
+func IsScalarMmapIndex(indexType IndexType) bool {
+	return indexType == IndexINVERTED ||
+		indexType == IndexBitmap ||
+		indexType == IndexHybrid ||
+		indexType == IndexTrie ||
+		indexType == IndexNGRAM
+}
+
+func ValidateMmapIndexParams(indexType IndexType, indexParams map[string]string) error {
+	mmapEnable, ok := indexParams[common.MmapEnabledKey]
+	if !ok {
+		return nil
+	}
+	enable, err := strconv.ParseBool(mmapEnable)
+	if err != nil {
+		return fmt.Errorf("invalid %s value: %s, expected: true, false", common.MmapEnabledKey, mmapEnable)
+	}
+	mmapSupport := indexType == AutoIndex || IsVectorMmapIndex(indexType) || IsScalarMmapIndex(indexType)
+	if enable && !mmapSupport {
+		return fmt.Errorf("index type %s does not support mmap", indexType)
+	}
+	return nil
+}
+
+func ValidateOffsetCacheIndexParams(indexType IndexType, indexParams map[string]string) error {
+	offsetCacheEnable, ok := indexParams[common.IndexOffsetCacheEnabledKey]
+	if !ok {
+		return nil
+	}
+	enable, err := strconv.ParseBool(offsetCacheEnable)
+	if err != nil {
+		return fmt.Errorf("invalid %s value: %s, expected: true, false", common.IndexOffsetCacheEnabledKey, offsetCacheEnable)
+	}
+	if enable && !IsOffsetCacheSupported(indexType) {
+		return fmt.Errorf("only bitmap index support %s now", common.IndexOffsetCacheEnabledKey)
+	}
+	return nil
+}
+
+func ValidateWarmupIndexParams(indexParams map[string]string) error {
+	warmupPolicy, ok := indexParams[common.WarmupKey]
+	if !ok {
+		return nil
+	}
+	if err := common.ValidateWarmupPolicy(warmupPolicy); err != nil {
+		return err
+	}
+	return nil
+}

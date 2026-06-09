@@ -16,9 +16,9 @@
 
 package rootcoord
 
-import "github.com/milvus-io/milvus/internal/common"
+import "github.com/milvus-io/milvus/pkg/v3/common"
 
-// system filed id:
+// system field id:
 // 0: unique row id
 // 1: timestamp
 // 100: first user field id
@@ -26,8 +26,11 @@ import "github.com/milvus-io/milvus/internal/common"
 // 102: ...
 
 const (
-	// StartOfUserFieldID id of user defined filed begin from here
+	// StartOfUserFieldID id of user defined field begin from here
 	StartOfUserFieldID = common.StartOfUserFieldID
+
+	// StartOfUserFunctionID id of user defined function begin from here
+	StartOfUserFunctionID = common.StartOfUserFunctionID
 
 	// RowIDField id of row ID field
 	RowIDField = common.RowIDField
@@ -40,4 +43,10 @@ const (
 
 	// TimeStampFieldName name of the timestamp field
 	TimeStampFieldName = common.TimeStampFieldName
+
+	// MetaFieldName name of the dynamic schema field
+	MetaFieldName = common.MetaFieldName
+
+	// NamespaceFieldName name of the namespace field
+	NamespaceFieldName = common.NamespaceFieldName
 )

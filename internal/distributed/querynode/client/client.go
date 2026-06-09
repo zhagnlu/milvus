@@ -20,75 +20,77 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
-	"github.com/milvus-io/milvus/internal/util/funcutil"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/distributed/utils"
+	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/grpcclient"
-	"github.com/milvus-io/milvus/internal/util/paramtable"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/milvus-io/milvus/internal/util/sessionutil"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-var ClientParams paramtable.GrpcClientConfig
+var Params *paramtable.ComponentParam = paramtable.Get()
 
 // Client is the grpc client of QueryNode.
 type Client struct {
-	grpcClient grpcclient.GrpcClient
+	grpcClient grpcclient.GrpcClient[querypb.QueryNodeClient]
 	addr       string
+	nodeID     int64
 }
 
 // NewClient creates a new QueryNode client.
-func NewClient(ctx context.Context, addr string) (*Client, error) {
+func NewClient(ctx context.Context, addr string, nodeID int64) (types.QueryNodeClient, error) {
 	if addr == "" {
-		return nil, fmt.Errorf("addr is empty")
+		return nil, errors.New("addr is empty")
 	}
-	ClientParams.InitOnce(typeutil.QueryNodeRole)
+	sess := sessionutil.NewSession(context.Background())
+	if sess == nil {
+		err := errors.New("new session error, maybe can not connect to etcd")
+		log.Ctx(ctx).Debug("QueryNodeClient NewClient failed", zap.Error(err))
+		return nil, err
+	}
+	config := &paramtable.Get().QueryNodeGrpcClientCfg
 	client := &Client{
-		addr: addr,
-		grpcClient: &grpcclient.ClientBase{
-			ClientMaxRecvSize:      ClientParams.ClientMaxRecvSize,
-			ClientMaxSendSize:      ClientParams.ClientMaxSendSize,
-			DialTimeout:            ClientParams.DialTimeout,
-			KeepAliveTime:          ClientParams.KeepAliveTime,
-			KeepAliveTimeout:       ClientParams.KeepAliveTimeout,
-			RetryServiceNameConfig: "milvus.proto.query.QueryNode",
-			MaxAttempts:            ClientParams.MaxAttempts,
-			InitialBackoff:         ClientParams.InitialBackoff,
-			MaxBackoff:             ClientParams.MaxBackoff,
-			BackoffMultiplier:      ClientParams.BackoffMultiplier,
-		},
+		addr:       addr,
+		grpcClient: grpcclient.NewClientBase[querypb.QueryNodeClient](config, "milvus.proto.query.QueryNode"),
+		nodeID:     nodeID,
 	}
-	client.grpcClient.SetRole(typeutil.QueryNodeRole)
+	// node shall specify node id
+	client.grpcClient.SetRole(fmt.Sprintf("%s-%d", typeutil.QueryNodeRole, nodeID))
 	client.grpcClient.SetGetAddrFunc(client.getAddr)
 	client.grpcClient.SetNewGrpcClientFunc(client.newGrpcClient)
+	client.grpcClient.SetNodeID(nodeID)
+	client.grpcClient.SetSession(sess)
 
+	if Params.InternalTLSCfg.InternalTLSEnabled.GetAsBool() {
+		client.grpcClient.EnableEncryption()
+		cp, err := utils.CreateCertPoolforClient(Params.InternalTLSCfg.InternalTLSCaPemPath.GetValue(), "QueryNode")
+		if err != nil {
+			log.Ctx(ctx).Error("Failed to create cert pool for QueryNode client")
+			return nil, err
+		}
+		client.grpcClient.SetInternalTLSCertPool(cp)
+		client.grpcClient.SetInternalTLSServerName(Params.InternalTLSCfg.InternalTLSSNI.GetValue())
+	}
 	return client, nil
 }
 
-// Init initializes QueryNode's grpc client.
-func (c *Client) Init() error {
-	return nil
-}
-
-// Start starts QueryNode's client service. But it does nothing here.
-func (c *Client) Start() error {
-	return nil
-}
-
-// Stop stops QueryNode's grpc client server.
-func (c *Client) Stop() error {
+// Close close QueryNode's grpc client
+func (c *Client) Close() error {
 	return c.grpcClient.Close()
 }
 
-// Register dummy
-func (c *Client) Register() error {
-	return nil
-}
-
-func (c *Client) newGrpcClient(cc *grpc.ClientConn) interface{} {
+func (c *Client) newGrpcClient(cc *grpc.ClientConn) querypb.QueryNodeClient {
 	return querypb.NewQueryNodeClient(cc)
 }
 
@@ -96,252 +98,353 @@ func (c *Client) getAddr() (string, error) {
 	return c.addr, nil
 }
 
-// GetComponentStates gets the component states of QueryNode.
-func (c *Client) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
+func wrapGrpcCall[T any](ctx context.Context, c *Client, call func(grpcClient querypb.QueryNodeClient) (*T, error)) (*T, error) {
+	ret, err := c.grpcClient.ReCall(ctx, func(client querypb.QueryNodeClient) (any, error) {
 		if !funcutil.CheckCtxValid(ctx) {
 			return nil, ctx.Err()
 		}
-		return client.(querypb.QueryNodeClient).GetComponentStates(ctx, &internalpb.GetComponentStatesRequest{})
+		return call(client)
 	})
 	if err != nil || ret == nil {
 		return nil, err
 	}
-	return ret.(*internalpb.ComponentStates), err
+	return ret.(*T), err
+}
+
+// GetComponentStates gets the component states of QueryNode.
+func (c *Client) GetComponentStates(ctx context.Context, _ *milvuspb.GetComponentStatesRequest, _ ...grpc.CallOption) (*milvuspb.ComponentStates, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*milvuspb.ComponentStates, error) {
+		return client.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
+	})
 }
 
 // GetTimeTickChannel gets the time tick channel of QueryNode.
-func (c *Client) GetTimeTickChannel(ctx context.Context) (*milvuspb.StringResponse, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).GetTimeTickChannel(ctx, &internalpb.GetTimeTickChannelRequest{})
+func (c *Client) GetTimeTickChannel(ctx context.Context, req *internalpb.GetTimeTickChannelRequest, _ ...grpc.CallOption) (*milvuspb.StringResponse, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*milvuspb.StringResponse, error) {
+		return client.GetTimeTickChannel(ctx, &internalpb.GetTimeTickChannelRequest{})
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*milvuspb.StringResponse), err
 }
 
 // GetStatisticsChannel gets the statistics channel of QueryNode.
-func (c *Client) GetStatisticsChannel(ctx context.Context) (*milvuspb.StringResponse, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).GetStatisticsChannel(ctx, &internalpb.GetStatisticsChannelRequest{})
+func (c *Client) GetStatisticsChannel(ctx context.Context, req *internalpb.GetStatisticsChannelRequest, _ ...grpc.CallOption) (*milvuspb.StringResponse, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*milvuspb.StringResponse, error) {
+		return client.GetStatisticsChannel(ctx, &internalpb.GetStatisticsChannelRequest{})
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*milvuspb.StringResponse), err
 }
 
 // WatchDmChannels watches the channels about data manipulation.
-func (c *Client) WatchDmChannels(ctx context.Context, req *querypb.WatchDmChannelsRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).WatchDmChannels(ctx, req)
+func (c *Client) WatchDmChannels(ctx context.Context, req *querypb.WatchDmChannelsRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.WatchDmChannels(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
 }
 
 // UnsubDmChannel unsubscribes the channels about data manipulation.
-func (c *Client) UnsubDmChannel(ctx context.Context, req *querypb.UnsubDmChannelRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).UnsubDmChannel(ctx, req)
+func (c *Client) UnsubDmChannel(ctx context.Context, req *querypb.UnsubDmChannelRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.UnsubDmChannel(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
 }
 
 // LoadSegments loads the segments to search.
-func (c *Client) LoadSegments(ctx context.Context, req *querypb.LoadSegmentsRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).LoadSegments(ctx, req)
+func (c *Client) LoadSegments(ctx context.Context, req *querypb.LoadSegmentsRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.LoadSegments(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
 }
 
 // ReleaseCollection releases the data of the specified collection in QueryNode.
-func (c *Client) ReleaseCollection(ctx context.Context, req *querypb.ReleaseCollectionRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).ReleaseCollection(ctx, req)
+func (c *Client) ReleaseCollection(ctx context.Context, req *querypb.ReleaseCollectionRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.ReleaseCollection(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
+}
+
+// LoadPartitions updates partitions meta info in QueryNode.
+func (c *Client) LoadPartitions(ctx context.Context, req *querypb.LoadPartitionsRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.LoadPartitions(ctx, req)
+	})
 }
 
 // ReleasePartitions releases the data of the specified partitions in QueryNode.
-func (c *Client) ReleasePartitions(ctx context.Context, req *querypb.ReleasePartitionsRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).ReleasePartitions(ctx, req)
+func (c *Client) ReleasePartitions(ctx context.Context, req *querypb.ReleasePartitionsRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.ReleasePartitions(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
 }
 
 // ReleaseSegments releases the data of the specified segments in QueryNode.
-func (c *Client) ReleaseSegments(ctx context.Context, req *querypb.ReleaseSegmentsRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).ReleaseSegments(ctx, req)
+func (c *Client) ReleaseSegments(ctx context.Context, req *querypb.ReleaseSegmentsRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.ReleaseSegments(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
 }
 
 // Search performs replica search tasks in QueryNode.
-func (c *Client) Search(ctx context.Context, req *querypb.SearchRequest) (*internalpb.SearchResults, error) {
-	ret, err := c.grpcClient.Call(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).Search(ctx, req)
+func (c *Client) Search(ctx context.Context, req *querypb.SearchRequest, _ ...grpc.CallOption) (*internalpb.SearchResults, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.SearchResults, error) {
+		return client.Search(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*internalpb.SearchResults), err
+}
+
+func (c *Client) SearchSegments(ctx context.Context, req *querypb.SearchRequest, _ ...grpc.CallOption) (*internalpb.SearchResults, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.SearchResults, error) {
+		return client.SearchSegments(ctx, req)
+	})
 }
 
 // Query performs replica query tasks in QueryNode.
-func (c *Client) Query(ctx context.Context, req *querypb.QueryRequest) (*internalpb.RetrieveResults, error) {
-	ret, err := c.grpcClient.Call(ctx, func(client interface{}) (interface{}, error) {
+func (c *Client) Query(ctx context.Context, req *querypb.QueryRequest, _ ...grpc.CallOption) (*internalpb.RetrieveResults, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.RetrieveResults, error) {
+		return client.Query(ctx, req)
+	})
+}
+
+func (c *Client) QueryStream(ctx context.Context, req *querypb.QueryRequest, _ ...grpc.CallOption) (querypb.QueryNode_QueryStreamClient, error) {
+	ret, err := c.grpcClient.ReCall(ctx, func(client querypb.QueryNodeClient) (any, error) {
 		if !funcutil.CheckCtxValid(ctx) {
 			return nil, ctx.Err()
 		}
-		return client.(querypb.QueryNodeClient).Query(ctx, req)
+
+		return client.QueryStream(ctx, req)
 	})
 	if err != nil || ret == nil {
 		return nil, err
 	}
-	return ret.(*internalpb.RetrieveResults), err
+	return ret.(querypb.QueryNode_QueryStreamClient), nil
+}
+
+func (c *Client) QuerySegments(ctx context.Context, req *querypb.QueryRequest, _ ...grpc.CallOption) (*internalpb.RetrieveResults, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.RetrieveResults, error) {
+		return client.QuerySegments(ctx, req)
+	})
+}
+
+func (c *Client) QueryStreamSegments(ctx context.Context, req *querypb.QueryRequest, _ ...grpc.CallOption) (querypb.QueryNode_QueryStreamSegmentsClient, error) {
+	ret, err := c.grpcClient.ReCall(ctx, func(client querypb.QueryNodeClient) (any, error) {
+		if !funcutil.CheckCtxValid(ctx) {
+			return nil, ctx.Err()
+		}
+
+		return client.QueryStreamSegments(ctx, req)
+	})
+	if err != nil || ret == nil {
+		return nil, err
+	}
+	return ret.(querypb.QueryNode_QueryStreamSegmentsClient), nil
 }
 
 // GetSegmentInfo gets the information of the specified segments in QueryNode.
-func (c *Client) GetSegmentInfo(ctx context.Context, req *querypb.GetSegmentInfoRequest) (*querypb.GetSegmentInfoResponse, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).GetSegmentInfo(ctx, req)
+func (c *Client) GetSegmentInfo(ctx context.Context, req *querypb.GetSegmentInfoRequest, _ ...grpc.CallOption) (*querypb.GetSegmentInfoResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*querypb.GetSegmentInfoResponse, error) {
+		return client.GetSegmentInfo(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*querypb.GetSegmentInfoResponse), err
 }
 
 // SyncReplicaSegments syncs replica node segments information to shard leaders.
-func (c *Client) SyncReplicaSegments(ctx context.Context, req *querypb.SyncReplicaSegmentsRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).SyncReplicaSegments(ctx, req)
+func (c *Client) SyncReplicaSegments(ctx context.Context, req *querypb.SyncReplicaSegmentsRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.SyncReplicaSegments(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
 }
 
 // ShowConfigurations gets specified configurations para of QueryNode
-func (c *Client) ShowConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest) (*internalpb.ShowConfigurationsResponse, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).ShowConfigurations(ctx, req)
+func (c *Client) ShowConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest, _ ...grpc.CallOption) (*internalpb.ShowConfigurationsResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.ShowConfigurationsResponse, error) {
+		return client.ShowConfigurations(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-
-	return ret.(*internalpb.ShowConfigurationsResponse), err
 }
 
 // GetMetrics gets the metrics information of QueryNode.
-func (c *Client) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).GetMetrics(ctx, req)
+func (c *Client) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest, _ ...grpc.CallOption) (*milvuspb.GetMetricsResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*milvuspb.GetMetricsResponse, error) {
+		return client.GetMetrics(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*milvuspb.GetMetricsResponse), err
 }
 
-func (c *Client) GetStatistics(ctx context.Context, request *querypb.GetStatisticsRequest) (*internalpb.GetStatisticsResponse, error) {
-	ret, err := c.grpcClient.Call(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).GetStatistics(ctx, request)
+func (c *Client) GetStatistics(ctx context.Context, request *querypb.GetStatisticsRequest, _ ...grpc.CallOption) (*internalpb.GetStatisticsResponse, error) {
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.GetStatisticsResponse, error) {
+		return client.GetStatistics(ctx, request)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*internalpb.GetStatisticsResponse), err
 }
 
-func (c *Client) GetDataDistribution(ctx context.Context, req *querypb.GetDataDistributionRequest) (*querypb.GetDataDistributionResponse, error) {
-	ret, err := c.grpcClient.Call(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).GetDataDistribution(ctx, req)
+func (c *Client) GetDataDistribution(ctx context.Context, req *querypb.GetDataDistributionRequest, _ ...grpc.CallOption) (*querypb.GetDataDistributionResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*querypb.GetDataDistributionResponse, error) {
+		return client.GetDataDistribution(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*querypb.GetDataDistributionResponse), err
 }
 
-func (c *Client) SyncDistribution(ctx context.Context, req *querypb.SyncDistributionRequest) (*commonpb.Status, error) {
-	ret, err := c.grpcClient.Call(ctx, func(client interface{}) (interface{}, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return client.(querypb.QueryNodeClient).SyncDistribution(ctx, req)
+func (c *Client) SyncDistribution(ctx context.Context, req *querypb.SyncDistributionRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID))
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.SyncDistribution(ctx, req)
 	})
-	if err != nil || ret == nil {
-		return nil, err
-	}
-	return ret.(*commonpb.Status), err
+}
+
+// Delete is used to forward delete message between delegator and workers.
+func (c *Client) Delete(ctx context.Context, req *querypb.DeleteRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.Delete(ctx, req)
+	})
+}
+
+// DeleteBatch is the API to apply same delete data into multiple segments.
+// it's basically same as `Delete` but cost less memory pressure.
+func (c *Client) DeleteBatch(ctx context.Context, req *querypb.DeleteBatchRequest, _ ...grpc.CallOption) (*querypb.DeleteBatchResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*querypb.DeleteBatchResponse, error) {
+		return client.DeleteBatch(ctx, req)
+	})
+}
+
+func (c *Client) UpdateSchema(ctx context.Context, req *querypb.UpdateSchemaRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.UpdateSchema(ctx, req)
+	})
+}
+
+func (c *Client) RunAnalyzer(ctx context.Context, req *querypb.RunAnalyzerRequest, _ ...grpc.CallOption) (*milvuspb.RunAnalyzerResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*milvuspb.RunAnalyzerResponse, error) {
+		return client.RunAnalyzer(ctx, req)
+	})
+}
+
+func (c *Client) DropIndex(ctx context.Context, req *querypb.DropIndexRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.DropIndex(ctx, req)
+	})
+}
+
+func (c *Client) UpdateIndex(ctx context.Context, req *querypb.UpdateIndexRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.UpdateIndex(ctx, req)
+	})
+}
+
+func (c *Client) ValidateAnalyzer(ctx context.Context, req *querypb.ValidateAnalyzerRequest, _ ...grpc.CallOption) (*querypb.ValidateAnalyzerResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*querypb.ValidateAnalyzerResponse, error) {
+		return client.ValidateAnalyzer(ctx, req)
+	})
+}
+
+func (c *Client) GetHighlight(ctx context.Context, req *querypb.GetHighlightRequest, _ ...grpc.CallOption) (*querypb.GetHighlightResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*querypb.GetHighlightResponse, error) {
+		return client.GetHighlight(ctx, req)
+	})
+}
+
+func (c *Client) SyncFileResource(ctx context.Context, req *internalpb.SyncFileResourceRequest, _ ...grpc.CallOption) (*commonpb.Status, error) {
+	req = typeutil.Clone(req)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*commonpb.Status, error) {
+		return client.SyncFileResource(ctx, req)
+	})
+}
+
+func (c *Client) ClearReadTaskQueue(ctx context.Context, req *internalpb.ClearReadTaskQueueRequest, _ ...grpc.CallOption) (*internalpb.ClearReadTaskQueueResponse, error) {
+	req = typeutil.Clone(req)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*internalpb.ClearReadTaskQueueResponse, error) {
+		return client.ClearReadTaskQueue(ctx, req)
+	})
+}
+
+func (c *Client) ComputePhraseMatchSlop(ctx context.Context, req *querypb.ComputePhraseMatchSlopRequest, _ ...grpc.CallOption) (*querypb.ComputePhraseMatchSlopResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(c.nodeID),
+	)
+	return wrapGrpcCall(ctx, c, func(client querypb.QueryNodeClient) (*querypb.ComputePhraseMatchSlopResponse, error) {
+		return client.ComputePhraseMatchSlop(ctx, req)
+	})
 }

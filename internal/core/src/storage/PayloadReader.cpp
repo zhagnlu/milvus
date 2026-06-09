@@ -14,59 +14,172 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <string>
+#include <utility>
+
+#include "arrow/api.h"
+#include "arrow/io/memory.h"
+#include "common/Consts.h"
+#include "common/EasyAssert.h"
+#include "common/Types.h"
+#include "parquet/arrow/reader.h"
+#include "parquet/file_reader.h"
+#include "parquet/metadata.h"
+#include "parquet/properties.h"
+#include "parquet/schema.h"
 #include "storage/PayloadReader.h"
-#include "exceptions/EasyAssert.h"
+#include "storage/Util.h"
 
 namespace milvus::storage {
-PayloadReader::PayloadReader(std::shared_ptr<PayloadInputStream> input, DataType data_type) : column_type_(data_type) {
-    init(input);
+
+PayloadReader::PayloadReader(const milvus::FieldDataPtr& fieldData)
+    : column_type_(fieldData->get_data_type()),
+      nullable_(fieldData->IsNullable()) {
+    field_data_ = fieldData;
 }
 
-PayloadReader::PayloadReader(const uint8_t* data, int length, DataType data_type) : column_type_(data_type) {
-    auto input = std::make_shared<storage::PayloadInputStream>(data, length);
-    init(input);
-}
-
-void
-PayloadReader::init(std::shared_ptr<PayloadInputStream> input) {
-    auto mem_pool = arrow::default_memory_pool();
-    // TODO :: Stream read file data, avoid copying
-    std::unique_ptr<parquet::arrow::FileReader> reader;
-    auto st = parquet::arrow::OpenFile(input, mem_pool, &reader);
-    AssertInfo(st.ok(), "failed to get arrow file reader");
-    std::shared_ptr<arrow::Table> table;
-    st = reader->ReadTable(&table);
-    AssertInfo(st.ok(), "failed to get reader data to arrow table");
-    auto column = table->column(0);
-    AssertInfo(column != nullptr, "returned arrow column is null");
-    AssertInfo(column->chunks().size() == 1, "arrow chunk size in arrow column should be 1");
-    auto array = column->chunk(0);
-    AssertInfo(array != nullptr, "empty arrow array of PayloadReader");
-    field_data_ = std::make_shared<FieldData>(array, column_type_);
-}
-
-bool
-PayloadReader::get_bool_payload(int idx) const {
-    AssertInfo(field_data_ != nullptr, "empty payload");
-    return field_data_->get_bool_payload(idx);
+PayloadReader::PayloadReader(const uint8_t* data,
+                             int length,
+                             DataType data_type,
+                             bool nullable,
+                             bool is_field_data)
+    : column_type_(data_type), nullable_(nullable) {
+    init(data, length, is_field_data);
 }
 
 void
-PayloadReader::get_one_string_Payload(int idx, char** cstr, int* str_size) const {
-    AssertInfo(field_data_ != nullptr, "empty payload");
-    return field_data_->get_one_string_payload(idx, cstr, str_size);
-}
+PayloadReader::init(const uint8_t* data, int length, bool is_field_data) {
+    if (column_type_ == DataType::NONE) {
+        payload_buf_ = std::make_shared<BytesBuf>(data, length);
+    } else {
+        auto input = std::make_shared<arrow::io::BufferReader>(data, length);
+        arrow::MemoryPool* pool = arrow::default_memory_pool();
+        // Configure general Parquet reader settings
+        auto reader_properties = parquet::ReaderProperties(pool);
+        reader_properties.set_buffer_size(4096 * 4);
+        // reader_properties.enable_buffered_stream();
 
-std::unique_ptr<Payload>
-PayloadReader::get_payload() const {
-    AssertInfo(field_data_ != nullptr, "empty payload");
-    return field_data_->get_payload();
-}
+        // Configure Arrow-specific Parquet reader settings
+        auto arrow_reader_props = parquet::ArrowReaderProperties();
+        arrow_reader_props.set_batch_size(128 * 1024);  // default 64 * 1024
+        arrow_reader_props.set_pre_buffer(false);
 
-int
-PayloadReader::get_payload_length() const {
-    AssertInfo(field_data_ != nullptr, "empty payload");
-    return field_data_->get_payload_length();
+        parquet::arrow::FileReaderBuilder reader_builder;
+        auto st = reader_builder.Open(input, reader_properties);
+        AssertInfo(st.ok(), "file to read file");
+        reader_builder.memory_pool(pool);
+        reader_builder.properties(arrow_reader_props);
+
+        std::unique_ptr<parquet::arrow::FileReader> arrow_reader;
+        st = reader_builder.Build(&arrow_reader);
+        AssertInfo(st.ok(), "build file reader");
+
+        int64_t column_index = 0;
+        auto file_meta = arrow_reader->parquet_reader()->metadata();
+
+        // dim is unused for sparse float vector
+        // For nullable vectors, dim is stored in Arrow schema metadata
+        if (IsVectorDataType(column_type_) &&
+            !IsVectorArrayDataType(column_type_) &&
+            !IsSparseFloatVectorDataType(column_type_)) {
+            if (nullable_) {
+                std::shared_ptr<arrow::Schema> arrow_schema;
+                auto st = arrow_reader->GetSchema(&arrow_schema);
+                AssertInfo(st.ok(), "Failed to get arrow schema");
+                AssertInfo(arrow_schema->num_fields() == 1,
+                           "Vector field should have exactly 1 field, got {}",
+                           arrow_schema->num_fields());
+
+                auto field = arrow_schema->field(0);
+                if (field->HasMetadata()) {
+                    auto metadata = field->metadata();
+                    if (metadata->Contains(DIM_KEY)) {
+                        auto dim_str = metadata->Get(DIM_KEY).ValueOrDie();
+                        dim_ = std::stoi(dim_str);
+                        AssertInfo(
+                            dim_ > 0,
+                            "nullable vector dim must be positive, got {}",
+                            dim_);
+                    } else {
+                        ThrowInfo(DataTypeInvalid,
+                                  "nullable vector field metadata missing "
+                                  "required 'dim' field");
+                    }
+                } else {
+                    ThrowInfo(DataTypeInvalid,
+                              "nullable vector field is missing metadata");
+                }
+            } else {
+                dim_ = GetDimensionFromFileMetaData(
+                    file_meta->schema()->Column(column_index), column_type_);
+            }
+        } else {
+            dim_ = 1;
+        }
+
+        // For VectorArray, get element type and dim from Arrow schema metadata
+        auto element_type = DataType::NONE;
+        if (IsVectorArrayDataType(column_type_)) {
+            std::shared_ptr<arrow::Schema> arrow_schema;
+            st = arrow_reader->GetSchema(&arrow_schema);
+            AssertInfo(st.ok(), "Failed to get arrow schema for VectorArray");
+            AssertInfo(arrow_schema->num_fields() == 1,
+                       "VectorArray should have exactly 1 field, got {}",
+                       arrow_schema->num_fields());
+
+            auto field = arrow_schema->field(0);
+            AssertInfo(field->HasMetadata(),
+                       "VectorArray field is missing metadata");
+
+            auto metadata = field->metadata();
+            AssertInfo(metadata != nullptr, "VectorArray metadata is null");
+
+            // Get element type
+            AssertInfo(
+                metadata->Contains(ELEMENT_TYPE_KEY_FOR_ARROW),
+                "VectorArray metadata missing required 'elementType' field");
+            auto element_type_str =
+                metadata->Get(ELEMENT_TYPE_KEY_FOR_ARROW).ValueOrDie();
+            auto element_type_int = std::stoi(element_type_str);
+            element_type = static_cast<DataType>(element_type_int);
+
+            // Get dimension from metadata
+            AssertInfo(metadata->Contains(DIM_KEY),
+                       "VectorArray metadata missing required 'dim' field");
+            auto dim_str = metadata->Get(DIM_KEY).ValueOrDie();
+            dim_ = std::stoi(dim_str);
+            AssertInfo(
+                dim_ > 0, "VectorArray dim must be positive, got {}", dim_);
+        }
+
+        std::shared_ptr<::arrow::RecordBatchReader> rb_reader;
+        st = arrow_reader->GetRecordBatchReader(&rb_reader);
+        AssertInfo(st.ok(), "get record batch reader");
+
+        if (is_field_data) {
+            auto total_num_rows = file_meta->num_rows();
+
+            // Create FieldData, passing element_type for VectorArray
+            field_data_ = CreateFieldData(
+                column_type_, element_type, nullable_, dim_, total_num_rows);
+
+            for (arrow::Result<std::shared_ptr<arrow::RecordBatch>>
+                     maybe_batch : *rb_reader) {
+                AssertInfo(maybe_batch.ok(), "get batch record success");
+                auto array = maybe_batch.ValueOrDie()->column(column_index);
+                // to read
+                field_data_->FillFieldData(array);
+            }
+
+            if (!nullable_ || !IsVectorDataType(column_type_)) {
+                AssertInfo(field_data_->IsFull(),
+                           "field data hasn't been filled done");
+            }
+        } else {
+            arrow_reader_ = std::move(arrow_reader);
+            record_batch_reader_ = std::move(rb_reader);
+        }
+    }
 }
 
 }  // namespace milvus::storage

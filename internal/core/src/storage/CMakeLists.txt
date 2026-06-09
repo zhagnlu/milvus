@@ -6,7 +6,7 @@
 # "License"); you may not use this file except in compliance
 # with the License. You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,33 +14,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_source_at_current_directory()
 
-option( EMBEDDED_MILVUS "Enable embedded Milvus" OFF )
+add_subdirectory(minio)
+add_subdirectory(aliyun)
+add_subdirectory(tencent)
+add_subdirectory(huawei)
 
-if ( EMBEDDED_MILVUS )
-    add_compile_definitions( EMBEDDED_MILVUS )
+if (ENABLE_GCP_NATIVE)
+    add_definitions(-DENABLE_GCP_NATIVE)
+    add_subdirectory(gcp-native-storage)
 endif()
 
-milvus_add_pkg_config("milvus_storage")
-
-set(STORAGE_FILES
-        parquet_c.cpp
-        PayloadStream.cpp
-        DataCodec.cpp
-        Util.cpp
-        PayloadReader.cpp
-        PayloadWriter.cpp
-        FieldData.cpp
-        IndexData.cpp
-        InsertData.cpp
-        Event.cpp
-        )
-add_library(milvus_storage SHARED ${STORAGE_FILES})
-#target_link_libraries( milvus_storage PUBLIC milvus_common boost_system boost_filesystem aws-cpp-sdk-s3 pthread)
-target_link_libraries( milvus_storage PUBLIC milvus_common pthread)
-
-if(NOT CMAKE_INSTALL_PREFIX)
-    set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_BINARY_DIR})
+if (ENABLE_AZURE_FS)
+    set(AZURE_BUILD_DIR ON)
+    add_definitions(-DAZURE_BUILD_DIR)
+    add_subdirectory(azure)
 endif()
 
-install(TARGETS  milvus_storage DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+if(USE_OPENDAL)
+    include_directories(${OPENDAL_INCLUDE_DIR})
+    set(SOURCE_FILES ${SOURCE_FILES} opendal/OpenDALChunkManager.cpp)
+endif()
+
+# Add loon_ffi subdirectory to include loon FFI source files
+add_subdirectory(loon_ffi)
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/loon_ffi)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/plugin)
+
+add_library(milvus_storage OBJECT ${SOURCE_FILES})
+target_link_libraries(milvus_storage PUBLIC milvus_conan_deps)

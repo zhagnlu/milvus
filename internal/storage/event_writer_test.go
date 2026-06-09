@@ -21,9 +21,10 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/common"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/pkg/v3/common"
 )
 
 func TestEventTypeCode_String(t *testing.T) {
@@ -39,7 +40,7 @@ func TestEventTypeCode_String(t *testing.T) {
 func TestSizeofStruct(t *testing.T) {
 	var buf bytes.Buffer
 	err := binary.Write(&buf, common.Endian, baseEventHeader{})
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	s1 := binary.Size(baseEventHeader{})
 	s2 := binary.Size(&baseEventHeader{})
 	assert.Equal(t, s1, s2)
@@ -52,40 +53,40 @@ func TestSizeofStruct(t *testing.T) {
 		PostHeaderLengths:          []uint8{0, 1, 2, 3},
 	}
 	err = de.Write(&buf)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	s3 := binary.Size(de.DescriptorEventDataFixPart) + binary.Size(de.PostHeaderLengths) + binary.Size(de.ExtraLength) + int(de.ExtraLength)
 	assert.Equal(t, s3, buf.Len())
 }
 
 func TestEventWriter(t *testing.T) {
 	insertEvent, err := newInsertEventWriter(schemapb.DataType_Int32)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	insertEvent.Close()
 
 	insertEvent, err = newInsertEventWriter(schemapb.DataType_Int32)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	defer insertEvent.Close()
 
-	err = insertEvent.AddInt64ToPayload([]int64{1, 1})
-	assert.NotNil(t, err)
-	err = insertEvent.AddInt32ToPayload([]int32{1, 2, 3})
-	assert.Nil(t, err)
+	err = insertEvent.AddInt64ToPayload([]int64{1, 1}, nil)
+	assert.Error(t, err)
+	err = insertEvent.AddInt32ToPayload([]int32{1, 2, 3}, nil)
+	assert.NoError(t, err)
 	nums, err := insertEvent.GetPayloadLengthFromWriter()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.EqualValues(t, 3, nums)
 	err = insertEvent.Finish()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	length, err := insertEvent.GetMemoryUsageInBytes()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.EqualValues(t, length, insertEvent.EventLength)
-	err = insertEvent.AddInt32ToPayload([]int32{1})
-	assert.NotNil(t, err)
+	err = insertEvent.AddInt32ToPayload([]int32{1}, nil)
+	assert.Error(t, err)
 	buffer := new(bytes.Buffer)
 	insertEvent.SetEventTimestamp(100, 200)
 	err = insertEvent.Write(buffer)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	length, err = insertEvent.GetMemoryUsageInBytes()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.EqualValues(t, length, buffer.Len())
 	insertEvent.Close()
 }

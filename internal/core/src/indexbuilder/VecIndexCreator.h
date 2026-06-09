@@ -11,107 +11,72 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <memory>
-#include <optional>
 #include <string>
-#include <vector>
 
+#include "common/BitsetView.h"
+#include "common/OpContext.h"
+#include "common/QueryInfo.h"
+#include "common/QueryResult.h"
+#include "common/Types.h"
+#include "common/protobuf_utils.h"
+#include "index/Index.h"
+#include "index/IndexStats.h"
 #include "indexbuilder/IndexCreatorBase.h"
-#include "knowhere/common/BinarySet.h"
-#include "knowhere/index/VecIndex.h"
+#include "storage/FileManager.h"
 
 namespace milvus::indexbuilder {
 
 // TODO: better to distinguish binary vec & float vec.
 class VecIndexCreator : public IndexCreatorBase {
  public:
-    explicit VecIndexCreator(const char* serialized_type_params, const char* serialized_index_params);
+    explicit VecIndexCreator(
+        DataType data_type,
+        Config& config,
+        const storage::FileManagerContext& file_manager_context =
+            storage::FileManagerContext());
+
+    VecIndexCreator(DataType data_type,
+                    const std::string& field_name,
+                    const int64_t dim,
+                    Config& config,
+                    const storage::FileManagerContext& file_manager_context);
 
     void
-    Build(const knowhere::DatasetPtr& dataset) override {
-        BuildWithoutIds(dataset);
-    }
+    Build(const milvus::DatasetPtr& dataset,
+          const bool* valid_data = nullptr,
+          const int64_t valid_data_len = 0) override;
 
-    knowhere::BinarySet
+    void
+    Build() override;
+
+    milvus::BinarySet
     Serialize() override;
 
     void
-    Load(const knowhere::BinarySet& binary_set) override;
+    Load(const milvus::BinarySet& binary_set) override;
 
     int64_t
     dim();
 
- public:
-    // used for tests
-    struct QueryResult {
-        std::vector<knowhere::IDType> ids;
-        std::vector<float> distances;
-        int64_t nq;
-        int64_t topk;
-    };
+    std::unique_ptr<SearchResult>
+    Query(const milvus::DatasetPtr& dataset,
+          const SearchInfo& search_info,
+          const BitsetView& bitset,
+          milvus::OpContext* op_context);
 
-    std::unique_ptr<QueryResult>
-    Query(const knowhere::DatasetPtr& dataset);
-
-    std::unique_ptr<QueryResult>
-    QueryWithParam(const knowhere::DatasetPtr& dataset, const char* serialized_search_params);
-
- private:
-    void
-    parse();
-
-    std::string
-    get_index_type();
-
-    std::string
-    get_metric_type();
-
-    knowhere::IndexMode
-    get_index_mode();
-
-    int64_t
-    get_index_file_slice_size();
-
-    template <typename T>
-    std::optional<T>
-    get_config_by_name(const std::string& name);
-
-    void
-    StoreRawData(const knowhere::DatasetPtr& dataset);
-
-    void
-    LoadRawData();
-
-    template <typename T>
-    void
-    check_parameter(knowhere::Config& conf,
-                    const std::string& key,
-                    std::function<T(std::string)> fn,
-                    std::optional<T> default_v = std::nullopt);
-
-    template <typename ParamsT>
-    void
-    parse_impl(const std::string& serialized_params_str, knowhere::Config& conf);
-
-    std::unique_ptr<QueryResult>
-    QueryImpl(const knowhere::DatasetPtr& dataset, const knowhere::Config& conf);
+    index::IndexStatsPtr
+    Upload() override;
 
  public:
     void
-    BuildWithIds(const knowhere::DatasetPtr& dataset);
-
-    void
-    BuildWithoutIds(const knowhere::DatasetPtr& dataset);
+    CleanLocalData();
 
  private:
-    knowhere::VecIndexPtr index_ = nullptr;
-    std::string type_params_;
-    std::string index_params_;
-    knowhere::Config type_config_;
-    knowhere::Config index_config_;
-    knowhere::Config config_;
-    std::vector<uint8_t> raw_data_;
-    std::once_flag raw_data_loaded_;
+    milvus::index::IndexBasePtr index_ = nullptr;
+    Config config_;
+    DataType data_type_;
 };
 
 }  // namespace milvus::indexbuilder

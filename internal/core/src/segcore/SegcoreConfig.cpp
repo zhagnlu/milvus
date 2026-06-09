@@ -9,18 +9,20 @@
 // is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
-#include "common/Schema.h"
 #include "SegcoreConfig.h"
-#include "utils/Json.h"
+
+#include <exception>
+#include <vector>
+
 #include "yaml-cpp/yaml.h"
 
 namespace milvus::segcore {
 
 static YAML::Node
 subnode(const YAML::Node& parent, const std::string& key) {
-    AssertInfo(parent.IsMap(), "wrong type node when getting key[" + key + "]");
+    AssertInfo(parent.IsMap(), "wrong type node when getting key[{}]", key);
     auto& node = parent[key];
-    AssertInfo(node.IsDefined(), "key[" + key + "] not found in sub-node");
+    AssertInfo(node.IsDefined(), "key[{}] not found in sub-node", key);
     return node;
 }
 
@@ -37,7 +39,7 @@ apply_parser(const YAML::Node& node, Func func) {
             results.emplace_back(func(element));
         }
     } else {
-        PanicInfo("node should be scalar or sequence");
+        ThrowInfo(ConfigInvalid, "node should be scalar or sequence");
     }
     return results;
 }
@@ -100,8 +102,9 @@ SegcoreConfig::parse_from(const std::string& config_path) {
     } catch (const SegcoreError& e) {
         throw e;
     } catch (const std::exception& e) {
-        std::string str = std::string("Invalid Yaml: ") + config_path + ", err: " + e.what();
-        PanicInfo(str);
+        std::string str =
+            std::string("Invalid Yaml: ") + config_path + ", err: " + e.what();
+        ThrowInfo(ConfigInvalid, str);
     }
 }
 

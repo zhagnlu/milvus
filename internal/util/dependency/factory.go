@@ -2,97 +2,151 @@ package dependency
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
+	"github.com/cockroachdb/errors"
+	"go.uber.org/zap"
+
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
+const (
+	mqTypeDefault    = "default"
+	mqTypeRocksmq    = "rocksmq"
+	mqTypeKafka      = "kafka"
+	mqTypePulsar     = "pulsar"
+	mqTypeWoodpecker = "woodpecker"
+)
+
+type mqEnable struct {
+	Rocksmq    bool
+	Pulsar     bool
+	Kafka      bool
+	Woodpecker bool
+}
+
+// DefaultFactory is a factory that produces instances of storage.ChunkManager and message queue.
 type DefaultFactory struct {
 	standAlone          bool
 	chunkManagerFactory storage.Factory
 	msgStreamFactory    msgstream.Factory
 }
 
+// testRocksmqPath returns a unique temporary path for RocksMQ in tests.
+// This avoids RocksDB LOCK file conflicts when multiple test packages run in parallel.
+func testRocksmqPath() string {
+	dir, _ := os.MkdirTemp("", "milvus_ut_rocksmq_*")
+	return filepath.Join(dir, "rdb_data")
+}
+
+// Only for test
 func NewDefaultFactory(standAlone bool) *DefaultFactory {
+	params := paramtable.Get()
 	return &DefaultFactory{
 		standAlone:       standAlone,
-		msgStreamFactory: msgstream.NewRmsFactory("/tmp/milvus/rocksmq/"),
-		chunkManagerFactory: storage.NewChunkManagerFactory("local", "local",
-			storage.RootPath("/tmp/milvus")),
+		msgStreamFactory: msgstream.NewRocksmqFactory(testRocksmqPath(), &params.ServiceParam),
+		chunkManagerFactory: storage.NewChunkManagerFactory("local",
+			objectstorage.RootPath("/tmp/milvus")),
 	}
 }
 
+// Only for test
+func MockDefaultFactory(standAlone bool, params *paramtable.ComponentParam) *DefaultFactory {
+	return &DefaultFactory{
+		standAlone:          standAlone,
+		msgStreamFactory:    msgstream.NewRocksmqFactory(testRocksmqPath(), &params.ServiceParam),
+		chunkManagerFactory: storage.NewChunkManagerFactoryWithParam(params),
+	}
+}
+
+// NewFactory creates a new instance of the DefaultFactory type.
+// If standAlone is true, the factory will operate in standalone mode.
 func NewFactory(standAlone bool) *DefaultFactory {
 	return &DefaultFactory{standAlone: standAlone}
 }
 
 // Init create a msg factory(TODO only support one mq at the same time.)
 // In order to guarantee backward compatibility of config file, we still support multiple mq configs.
-// 1. Rocksmq only run on local mode, and it has the highest priority
-// 2. Pulsar has higher priority than Kafka within remote msg
+// The initialization of MQ follows the following rules, if the mq.type is default.
+// 1. standalone(local) mode: rocksmq(default) > Pulsar > Kafka
+// 2. cluster mode:  Pulsar(default) > Kafka (rocksmq is unsupported in cluster mode)
 func (f *DefaultFactory) Init(params *paramtable.ComponentParam) {
 	// skip if using default factory
 	if f.msgStreamFactory != nil {
 		return
 	}
 
-	// init storage
-	if params.CommonCfg.StorageType == "local" {
-		f.chunkManagerFactory = storage.NewChunkManagerFactory("local", "local",
-			storage.RootPath(params.LocalStorageCfg.Path))
-	} else {
-		f.chunkManagerFactory = storage.NewChunkManagerFactory("local", "minio",
-			storage.RootPath(params.MinioCfg.RootPath),
-			storage.Address(params.MinioCfg.Address),
-			storage.AccessKeyID(params.MinioCfg.AccessKeyID),
-			storage.SecretAccessKeyID(params.MinioCfg.SecretAccessKey),
-			storage.UseSSL(params.MinioCfg.UseSSL),
-			storage.BucketName(params.MinioCfg.BucketName),
-			storage.UseIAM(params.MinioCfg.UseIAM),
-			storage.IAMEndpoint(params.MinioCfg.IAMEndpoint),
-			storage.CreateBucket(true))
-	}
+	f.chunkManagerFactory = storage.NewChunkManagerFactoryWithParam(params)
 
-	// init mq storage
-	if f.standAlone {
-		f.msgStreamFactory = f.initMQLocalService(params)
-		if f.msgStreamFactory == nil {
-			f.msgStreamFactory = f.initMQRemoteService(params)
-			if f.msgStreamFactory == nil {
-				panic("no available mq configuration, must config rocksmq, Pulsar or Kafka at least one of these!")
-			}
-		}
-		return
-	}
-
-	f.msgStreamFactory = f.initMQRemoteService(params)
-	if f.msgStreamFactory == nil {
-		panic("no available remote mq configuration, must config Pulsar or Kafka at least one of these!")
+	// initialize mq client or embedded mq.
+	if err := f.initMQ(f.standAlone, params); err != nil {
+		panic(err)
 	}
 }
 
-func (f *DefaultFactory) initMQLocalService(params *paramtable.ComponentParam) msgstream.Factory {
-	if params.RocksmqEnable() {
-		path, err := params.Load("rocksmq.path")
-		if err != nil {
-			panic(err)
-		}
-		return msgstream.NewRmsFactory(path)
+func (f *DefaultFactory) initMQ(standalone bool, params *paramtable.ComponentParam) error {
+	mqType := mustSelectMQType(standalone, params.MQCfg.Type.GetValue(), mqEnable{params.RocksmqEnable(), params.PulsarEnable(), params.KafkaEnable(), params.WoodpeckerEnable()})
+	metrics.RegisterMQType(mqType)
+	log.Info("try to init mq", zap.Bool("standalone", standalone), zap.String("mqType", mqType))
+
+	switch mqType {
+	case mqTypeRocksmq:
+		f.msgStreamFactory = msgstream.NewRocksmqFactory(params.RocksmqCfg.Path.GetValue(), &params.ServiceParam)
+	case mqTypePulsar:
+		f.msgStreamFactory = msgstream.NewPmsFactory(&params.ServiceParam)
+	case mqTypeKafka:
+		f.msgStreamFactory = msgstream.NewKmsFactory(&params.ServiceParam)
+	case mqTypeWoodpecker:
+		f.msgStreamFactory = msgstream.NewWpmsFactory(&params.ServiceParam)
+	}
+	if f.msgStreamFactory == nil {
+		return errors.New("failed to create MQ: check the milvus log for initialization failures")
 	}
 	return nil
 }
 
-// initRemoteService Pulsar has higher priority than Kafka.
-func (f *DefaultFactory) initMQRemoteService(params *paramtable.ComponentParam) msgstream.Factory {
-	if params.PulsarEnable() {
-		return msgstream.NewPmsFactory(&params.PulsarCfg)
+// Select valid mq if mq type is default.
+func mustSelectMQType(standalone bool, mqType string, enable mqEnable) string {
+	if mqType != mqTypeDefault {
+		if err := validateMQType(standalone, mqType); err != nil {
+			panic(err)
+		}
+		return mqType
 	}
 
-	if params.KafkaEnable() {
-		return msgstream.NewKmsFactory(&params.KafkaCfg)
+	if standalone {
+		if enable.Rocksmq {
+			return mqTypeRocksmq
+		}
+	}
+	if enable.Pulsar {
+		return mqTypePulsar
+	}
+	if enable.Kafka {
+		return mqTypeKafka
+	}
+	if enable.Woodpecker {
+		return mqTypeWoodpecker
 	}
 
+	panic(errors.Errorf("no available mq config found, %s, enable: %+v", mqType, enable))
+}
+
+// Validate mq type.
+func validateMQType(standalone bool, mqType string) error {
+	if mqType != mqTypeRocksmq && mqType != mqTypeKafka && mqType != mqTypePulsar && mqType != mqTypeWoodpecker {
+		return errors.Newf("mq type %s is invalid", mqType)
+	}
+	if !standalone && mqType == mqTypeRocksmq {
+		return errors.Newf("mq %s is only valid in standalone mode")
+	}
 	return nil
 }
 
@@ -104,25 +158,33 @@ func (f *DefaultFactory) NewTtMsgStream(ctx context.Context) (msgstream.MsgStrea
 	return f.msgStreamFactory.NewTtMsgStream(ctx)
 }
 
-func (f *DefaultFactory) NewQueryMsgStream(ctx context.Context) (msgstream.MsgStream, error) {
-	return f.msgStreamFactory.NewQueryMsgStream(ctx)
-}
-
 func (f *DefaultFactory) NewMsgStreamDisposer(ctx context.Context) func([]string, string) error {
 	return f.msgStreamFactory.NewMsgStreamDisposer(ctx)
 }
 
-func (f *DefaultFactory) NewCacheStorageChunkManager(ctx context.Context) (storage.ChunkManager, error) {
-	return f.chunkManagerFactory.NewCacheStorageChunkManager(ctx)
-}
-
-func (f *DefaultFactory) NewVectorStorageChunkManager(ctx context.Context) (storage.ChunkManager, error) {
-	return f.chunkManagerFactory.NewVectorStorageChunkManager(ctx)
+func (f *DefaultFactory) NewPersistentStorageChunkManager(ctx context.Context) (storage.ChunkManager, error) {
+	return f.chunkManagerFactory.NewPersistentStorageChunkManager(ctx)
 }
 
 type Factory interface {
 	msgstream.Factory
 	Init(p *paramtable.ComponentParam)
-	NewCacheStorageChunkManager(ctx context.Context) (storage.ChunkManager, error)
-	NewVectorStorageChunkManager(ctx context.Context) (storage.ChunkManager, error)
+	NewPersistentStorageChunkManager(ctx context.Context) (storage.ChunkManager, error)
+}
+
+func HealthCheck(mqType string) *common.MQClusterStatus {
+	clusterStatus := &common.MQClusterStatus{MqType: mqType}
+	switch mqType {
+	case mqTypeRocksmq:
+		// TODO: implement health checker for rocks mq
+		clusterStatus.Health = true
+	case mqTypePulsar:
+		msgstream.PulsarHealthCheck(clusterStatus)
+	case mqTypeKafka:
+		msgstream.KafkaHealthCheck(clusterStatus)
+	case mqTypeWoodpecker:
+		// TODO: implement health checker for woodpecker
+		clusterStatus.Health = true
+	}
+	return clusterStatus
 }

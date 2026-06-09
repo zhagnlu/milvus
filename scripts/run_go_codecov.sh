@@ -16,28 +16,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FILE_COVERAGE_INFO="go_coverage.txt"
-FILE_COVERAGE_HTML="go_coverage.html"
+FILE_COVERAGE_INFO="$PWD/go_coverage.txt"
+FILE_COVERAGE_HTML="$PWD/go_coverage.html"
 
-set -ex
-echo "mode: atomic" > ${FILE_COVERAGE_INFO}
 
 BASEDIR=$(dirname "$0")
 source $BASEDIR/setenv.sh
 
-# run unittest
-echo "Running unittest under ./internal"
-if [[ $(uname -s) == "Darwin" && "$(uname -m)" == "arm64" ]]; then
-    APPLE_SILICON_FLAG="-tags dynamic"
+set -e
+
+echo "mode: atomic" > ${FILE_COVERAGE_INFO}
+
+TEST_CMD=$@
+if [ -z "$TEST_CMD" ]; then
+   TEST_CMD="go test" 
 fi
-for d in $(go list ./internal/... | grep -v -e vendor -e kafka -e planparserv2/generated -e internal/mocks); do
-    go test -race ${APPLE_SILICON_FLAG} -v -coverpkg=./... -coverprofile=profile.out -covermode=atomic "$d"
-    if [ -f profile.out ]; then
-        grep -v kafka profile.out | grep -v planparserv2/generated | sed '1d' >> ${FILE_COVERAGE_INFO}
-        rm profile.out
+
+PARALLEL=${PARALLEL:-1}
+
+export MILVUS_UT_WITHOUT_KAFKA=1 # kafka is not available in the CI environment, so skip the kafka tests
+
+# starting the timer
+beginTime=$(date +%s)
+echo -e "=== Running go unittest (parallel=$PARALLEL) ===\n\n"
+
+for d in cmd/tools internal pkg client; do
+    pushd "$d"
+    PROFILE="profile_${d//\//_}.out"
+    echo -e "-----------------------------------\nRunning test cases under $d with -p $PARALLEL ..."
+
+    $TEST_CMD \
+        "-gcflags=all=-N -l" \
+        -race \
+        -tags dynamic,test \
+        -v \
+        -failfast \
+        -buildvcs=false \
+        -coverpkg=./... \
+        -coverprofile="$PROFILE" \
+        -covermode=atomic \
+        -p "$PARALLEL" \
+        -ldflags="-r ${RPATH}" \
+        ./...
+
+    if [ -f "$PROFILE" ]; then
+        sed '1{/^mode:/d}' "$PROFILE" | grep -vE '(planparserv2/generated|mocks)' >> "${FILE_COVERAGE_INFO}" || [ $? -eq 1 ]
+        rm "$PROFILE"
     fi
+    echo -e "-----------------------------------\n"
+    popd
 done
 
+endTime=$(date +%s)
+echo -e "=== Total time for go unittest: $(($endTime-$beginTime)) s ==="
+
 # generate html report
-go tool cover -html=./${FILE_COVERAGE_INFO} -o ./${FILE_COVERAGE_HTML}
-echo "Generate go coverage report to ${FILE_COVERAGE_HTML}"
+# go tool cover -html=./${FILE_COVERAGE_INFO} -o ./${FILE_COVERAGE_HTML}
+# echo "Generate go coverage report to ${FILE_COVERAGE_HTML}"

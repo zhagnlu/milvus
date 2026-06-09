@@ -18,138 +18,23 @@ package grpcquerynode
 
 import (
 	"context"
-	"errors"
+	"os"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/types"
-
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type MockQueryNode struct {
-	states     *internalpb.ComponentStates
-	status     *commonpb.Status
-	err        error
-	initErr    error
-	startErr   error
-	regErr     error
-	stopErr    error
-	strResp    *milvuspb.StringResponse
-	infoResp   *querypb.GetSegmentInfoResponse
-	metricResp *milvuspb.GetMetricsResponse
-	configResp *internalpb.ShowConfigurationsResponse
-	StatsResp  *internalpb.GetStatisticsResponse
-	searchResp *internalpb.SearchResults
-	queryResp  *internalpb.RetrieveResults
-	distResp   *querypb.GetDataDistributionResponse
-}
-
-func (m *MockQueryNode) Init() error {
-	return m.initErr
-}
-
-func (m *MockQueryNode) Start() error {
-	return m.startErr
-}
-
-func (m *MockQueryNode) Stop() error {
-	return m.stopErr
-}
-
-func (m *MockQueryNode) Register() error {
-	return m.regErr
-}
-
-func (m *MockQueryNode) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return m.states, m.err
-}
-
-func (m *MockQueryNode) GetStatisticsChannel(ctx context.Context) (*milvuspb.StringResponse, error) {
-	return m.strResp, m.err
-}
-
-func (m *MockQueryNode) GetTimeTickChannel(ctx context.Context) (*milvuspb.StringResponse, error) {
-	return m.strResp, m.err
-}
-
-func (m *MockQueryNode) WatchDmChannels(ctx context.Context, req *querypb.WatchDmChannelsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockQueryNode) LoadSegments(ctx context.Context, req *querypb.LoadSegmentsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockQueryNode) ReleaseCollection(ctx context.Context, req *querypb.ReleaseCollectionRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockQueryNode) ReleasePartitions(ctx context.Context, req *querypb.ReleasePartitionsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockQueryNode) ReleaseSegments(ctx context.Context, req *querypb.ReleaseSegmentsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockQueryNode) GetSegmentInfo(ctx context.Context, req *querypb.GetSegmentInfoRequest) (*querypb.GetSegmentInfoResponse, error) {
-	return m.infoResp, m.err
-}
-
-func (m *MockQueryNode) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
-	return m.metricResp, m.err
-}
-
-func (m *MockQueryNode) GetStatistics(ctx context.Context, req *querypb.GetStatisticsRequest) (*internalpb.GetStatisticsResponse, error) {
-	return m.StatsResp, m.err
-}
-
-func (m *MockQueryNode) Search(ctx context.Context, req *querypb.SearchRequest) (*internalpb.SearchResults, error) {
-	return m.searchResp, m.err
-}
-
-func (m *MockQueryNode) Query(ctx context.Context, req *querypb.QueryRequest) (*internalpb.RetrieveResults, error) {
-	return m.queryResp, m.err
-}
-
-func (m *MockQueryNode) SyncReplicaSegments(ctx context.Context, req *querypb.SyncReplicaSegmentsRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-
-func (m *MockQueryNode) SetEtcdClient(client *clientv3.Client) {
-}
-
-func (m *MockQueryNode) UpdateStateCode(code internalpb.StateCode) {
-}
-
-func (m *MockQueryNode) SetRootCoord(rc types.RootCoord) error {
-	return m.err
-}
-
-func (m *MockQueryNode) SetIndexCoord(index types.IndexCoord) error {
-	return m.err
-}
-
-func (m *MockQueryNode) ShowConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest) (*internalpb.ShowConfigurationsResponse, error) {
-	return m.configResp, m.err
-}
-
-func (m *MockQueryNode) UnsubDmChannel(ctx context.Context, req *querypb.UnsubDmChannelRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
-func (m *MockQueryNode) GetDataDistribution(context.Context, *querypb.GetDataDistributionRequest) (*querypb.GetDataDistributionResponse, error) {
-	return m.distResp, m.err
-}
-func (m *MockQueryNode) SyncDistribution(context.Context, *querypb.SyncDistributionRequest) (*commonpb.Status, error) {
-	return m.status, m.err
-}
 
 type MockRootCoord struct {
 	types.RootCoord
@@ -179,159 +64,195 @@ func (m *MockRootCoord) Register() error {
 func (m *MockRootCoord) SetEtcdClient(client *clientv3.Client) {
 }
 
-func (m *MockRootCoord) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return &internalpb.ComponentStates{
-		State:  &internalpb.ComponentInfo{StateCode: internalpb.StateCode_Healthy},
+func (m *MockRootCoord) GetComponentStates(ctx context.Context, req *milvuspb.GetComponentStatesRequest) (*milvuspb.ComponentStates, error) {
+	return &milvuspb.ComponentStates{
+		State:  &milvuspb.ComponentInfo{StateCode: commonpb.StateCode_Healthy},
 		Status: &commonpb.Status{ErrorCode: m.stateErr},
 	}, nil
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type MockIndexCoord struct {
-	types.IndexCoord
-	initErr  error
-	startErr error
-	regErr   error
-	stopErr  error
-	stateErr commonpb.ErrorCode
+
+func TestMain(m *testing.M) {
+	paramtable.Init()
+	os.Exit(m.Run())
 }
 
-func (m *MockIndexCoord) Init() error {
-	return m.initErr
-}
-
-func (m *MockIndexCoord) Start() error {
-	return m.startErr
-}
-
-func (m *MockIndexCoord) Stop() error {
-	return m.stopErr
-}
-
-func (m *MockIndexCoord) Register() error {
-	return m.regErr
-}
-
-func (m *MockIndexCoord) SetEtcdClient(client *clientv3.Client) {
-}
-
-func (m *MockIndexCoord) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return &internalpb.ComponentStates{
-		State:  &internalpb.ComponentInfo{StateCode: internalpb.StateCode_Healthy},
-		Status: &commonpb.Status{ErrorCode: m.stateErr},
-	}, nil
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 func Test_NewServer(t *testing.T) {
 	ctx := context.Background()
 	server, err := NewServer(ctx, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, server)
 
-	mqn := &MockQueryNode{
-		states:     &internalpb.ComponentStates{State: &internalpb.ComponentInfo{StateCode: internalpb.StateCode_Healthy}},
-		status:     &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-		err:        nil,
-		strResp:    &milvuspb.StringResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}},
-		infoResp:   &querypb.GetSegmentInfoResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}},
-		metricResp: &milvuspb.GetMetricsResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}},
-		configResp: &internalpb.ShowConfigurationsResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}},
-	}
-	server.querynode = mqn
+	mockQN := mocks.NewMockQueryNode(t)
+	mockQN.EXPECT().Start().Return(nil).Maybe()
+	mockQN.EXPECT().Stop().Return(nil).Maybe()
+	mockQN.EXPECT().Register().Return(nil).Maybe()
+	mockQN.EXPECT().SetEtcdClient(mock.Anything).Maybe()
+	mockQN.EXPECT().SetAddress(mock.Anything).Maybe()
+	mockQN.EXPECT().UpdateStateCode(mock.Anything).Maybe()
+	mockQN.EXPECT().Init().Return(nil).Maybe()
+	mockQN.EXPECT().GetNodeID().Return(2).Maybe()
+	server.querynode = mockQN
 
 	t.Run("Run", func(t *testing.T) {
+		err = server.Prepare()
+		assert.NoError(t, err)
 		err = server.Run()
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 	})
 
 	t.Run("GetComponentStates", func(t *testing.T) {
-		req := &internalpb.GetComponentStatesRequest{}
+		mockQN.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Return(&milvuspb.ComponentStates{
+			State: &milvuspb.ComponentInfo{
+				StateCode: commonpb.StateCode_Healthy,
+			},
+		}, nil)
+		req := &milvuspb.GetComponentStatesRequest{}
 		states, err := server.GetComponentStates(ctx, req)
-		assert.Nil(t, err)
-		assert.Equal(t, internalpb.StateCode_Healthy, states.State.StateCode)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.StateCode_Healthy, states.State.StateCode)
 	})
 
 	t.Run("GetStatisticsChannel", func(t *testing.T) {
+		mockQN.EXPECT().GetStatisticsChannel(mock.Anything, mock.Anything).Return(&milvuspb.StringResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}}, nil)
 		req := &internalpb.GetStatisticsChannelRequest{}
 		resp, err := server.GetStatisticsChannel(ctx, req)
-		assert.Nil(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.Status.ErrorCode)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	t.Run("GetTimeTickChannel", func(t *testing.T) {
+		mockQN.EXPECT().GetTimeTickChannel(mock.Anything, mock.Anything).Return(&milvuspb.StringResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}}, nil)
 		req := &internalpb.GetTimeTickChannelRequest{}
 		resp, err := server.GetTimeTickChannel(ctx, req)
-		assert.Nil(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.Status.ErrorCode)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	t.Run("WatchDmChannels", func(t *testing.T) {
+		mockQN.EXPECT().WatchDmChannels(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
 		req := &querypb.WatchDmChannelsRequest{}
 		resp, err := server.WatchDmChannels(ctx, req)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 	})
 
 	t.Run("LoadSegments", func(t *testing.T) {
+		mockQN.EXPECT().LoadSegments(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
 		req := &querypb.LoadSegmentsRequest{}
 		resp, err := server.LoadSegments(ctx, req)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 	})
 
 	t.Run("ReleaseCollection", func(t *testing.T) {
+		mockQN.EXPECT().ReleaseCollection(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
 		req := &querypb.ReleaseCollectionRequest{}
 		resp, err := server.ReleaseCollection(ctx, req)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+	})
+
+	t.Run("LoadPartitions", func(t *testing.T) {
+		mockQN.EXPECT().LoadPartitions(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
+		req := &querypb.LoadPartitionsRequest{}
+		resp, err := server.LoadPartitions(ctx, req)
+		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 	})
 
 	t.Run("ReleasePartitions", func(t *testing.T) {
+		mockQN.EXPECT().ReleasePartitions(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
 		req := &querypb.ReleasePartitionsRequest{}
 		resp, err := server.ReleasePartitions(ctx, req)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 	})
 
 	t.Run("ReleaseSegments", func(t *testing.T) {
+		mockQN.EXPECT().ReleaseSegments(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
 		req := &querypb.ReleaseSegmentsRequest{}
 		resp, err := server.ReleaseSegments(ctx, req)
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 	})
 
 	t.Run("GetSegmentInfo", func(t *testing.T) {
+		mockQN.EXPECT().GetSegmentInfo(mock.Anything, mock.Anything).Return(&querypb.GetSegmentInfoResponse{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
 		req := &querypb.GetSegmentInfoRequest{}
 		resp, err := server.GetSegmentInfo(ctx, req)
-		assert.Nil(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.Status.ErrorCode)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	t.Run("GetMetrics", func(t *testing.T) {
+		mockQN.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(
+			&milvuspb.GetMetricsResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}}, nil)
 		req := &milvuspb.GetMetricsRequest{
 			Request: "",
 		}
 		resp, err := server.GetMetrics(ctx, req)
-		assert.Nil(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.Status.ErrorCode)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	t.Run("Search", func(t *testing.T) {
+		mockQN.EXPECT().Search(mock.Anything, mock.Anything).Return(&internalpb.SearchResults{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
 		req := &querypb.SearchRequest{}
 		resp, err := server.Search(ctx, req)
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
+	t.Run("SearchSegments", func(t *testing.T) {
+		mockQN.EXPECT().SearchSegments(mock.Anything, mock.Anything).Return(&internalpb.SearchResults{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
+		req := &querypb.SearchRequest{}
+		resp, err := server.SearchSegments(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
 	t.Run("Query", func(t *testing.T) {
+		mockQN.EXPECT().Query(mock.Anything, mock.Anything).Return(&internalpb.RetrieveResults{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
 		req := &querypb.QueryRequest{}
 		resp, err := server.Query(ctx, req)
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
+	t.Run("QueryStream", func(t *testing.T) {
+		mockQN.EXPECT().QueryStream(mock.Anything, mock.Anything).Return(nil)
+		ret := server.QueryStream(nil, nil)
+		assert.Nil(t, ret)
+	})
+
+	t.Run("QuerySegments", func(t *testing.T) {
+		mockQN.EXPECT().QuerySegments(mock.Anything, mock.Anything).Return(&internalpb.RetrieveResults{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
+		req := &querypb.QueryRequest{}
+		resp, err := server.QuerySegments(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("QueryStreamSegments", func(t *testing.T) {
+		mockQN.EXPECT().QueryStreamSegments(mock.Anything, mock.Anything).Return(nil)
+		ret := server.QueryStreamSegments(nil, nil)
+		assert.Nil(t, ret)
+	})
+
 	t.Run("SyncReplicaSegments", func(t *testing.T) {
+		mockQN.EXPECT().SyncReplicaSegments(mock.Anything, mock.Anything).Return(&commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil)
 		req := &querypb.SyncReplicaSegmentsRequest{}
 		resp, err := server.SyncReplicaSegments(ctx, req)
 		assert.NoError(t, err)
@@ -339,6 +260,9 @@ func Test_NewServer(t *testing.T) {
 	})
 
 	t.Run("ShowConfigurtaions", func(t *testing.T) {
+		mockQN.EXPECT().ShowConfigurations(mock.Anything, mock.Anything).Return(&internalpb.ShowConfigurationsResponse{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
 		req := &internalpb.ShowConfigurationsRequest{
 			Pattern: "Cache",
 		}
@@ -347,25 +271,73 @@ func Test_NewServer(t *testing.T) {
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
+	t.Run("DeleteBatch", func(t *testing.T) {
+		mockQN.EXPECT().DeleteBatch(mock.Anything, mock.Anything).Return(&querypb.DeleteBatchResponse{
+			Status: merr.Success(),
+		}, nil)
+
+		resp, err := server.DeleteBatch(ctx, &querypb.DeleteBatchRequest{})
+		assert.NoError(t, merr.CheckRPCCall(resp, err))
+	})
+
+	t.Run("RunAnalyzer", func(t *testing.T) {
+		mockQN.EXPECT().RunAnalyzer(mock.Anything, mock.Anything).Return(&milvuspb.RunAnalyzerResponse{
+			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
+		req := &querypb.RunAnalyzerRequest{}
+		resp, err := server.RunAnalyzer(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("GetHighlight", func(t *testing.T) {
+		mockQN.EXPECT().GetHighlight(mock.Anything, mock.Anything).Return(&querypb.GetHighlightResponse{
+			Status: merr.Success(),
+		}, nil)
+
+		resp, err := server.GetHighlight(ctx, &querypb.GetHighlightRequest{
+			Channel: "test-channel",
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("ValidateAnalyzer", func(t *testing.T) {
+		mockQN.EXPECT().ValidateAnalyzer(mock.Anything, mock.Anything).Return(&querypb.ValidateAnalyzerResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}}, nil)
+		req := &querypb.ValidateAnalyzerRequest{}
+		resp, err := server.ValidateAnalyzer(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
 	err = server.Stop()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 }
 
 func Test_Run(t *testing.T) {
 	ctx := context.Background()
 	server, err := NewServer(ctx, nil)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.NotNil(t, server)
 
-	server.querynode = &MockQueryNode{startErr: errors.New("Failed")}
+	mockQN := mocks.NewMockQueryNode(t)
+	mockQN.EXPECT().Start().Return(errors.New("Failed")).Maybe()
+	mockQN.EXPECT().Stop().Return(errors.New("Failed")).Maybe()
+	mockQN.EXPECT().Register().Return(errors.New("Failed")).Maybe()
+	mockQN.EXPECT().SetEtcdClient(mock.Anything).Maybe()
+	mockQN.EXPECT().SetAddress(mock.Anything).Maybe()
+	mockQN.EXPECT().UpdateStateCode(mock.Anything).Maybe()
+	mockQN.EXPECT().Init().Return(nil).Maybe()
+	mockQN.EXPECT().GetNodeID().Return(2).Maybe()
+	server.querynode = mockQN
+	err = server.Prepare()
+	assert.NoError(t, err)
 	err = server.Run()
 	assert.Error(t, err)
 
-	server.querynode = &MockQueryNode{regErr: errors.New("Failed")}
 	err = server.Run()
 	assert.Error(t, err)
 
-	server.querynode = &MockQueryNode{stopErr: errors.New("Failed")}
 	err = server.Stop()
 	assert.Error(t, err)
 }

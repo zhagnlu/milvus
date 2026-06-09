@@ -11,8 +11,12 @@ on:
     paths:
       - 'scripts/**'
       - 'internal/**'
+      - 'pkg/**'
+      - 'client/**'
       - 'cmd/**'
       - 'build/**'
+      - 'tests/integration/**'
+      - 'tests/go_client/**'
       - '.github/workflows/code-checker.yaml'
       - '.env'
       - docker-compose.yml
@@ -22,126 +26,107 @@ on:
       # FIXME(wxyu): not need to run code check, update the ci-passed rules and remove these two lines
       - go.mod
       - go.sum
+      - .golangci.yml
+      - rules.go
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ubuntu:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    name: Code Checker AMD64 Ubuntu 22.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     strategy:
       fail-fast: false
-      matrix:
-        include:
-        - name: Code Checker AMD64 Ubuntu 20.04
-          os: ubuntu-20.04
-    env:
-      UBUNTU: 20.04
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        if: ${{ ! startsWith(runner.name, 'self') }} # skip this step if it is self-hosted runner
+        with:
+          root-reserve-mb: 20480
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Cache CCache Volumes
-        uses: actions/cache@v3
+      - name: Download Caches
+        uses: ./.github/actions/cache-restore
         with:
-          path: .docker/amd64-ubuntu20.04-ccache
-          key: ubuntu20.04-ccache-${{ hashFiles('internal/core/**') }}
-          restore-keys: ubuntu20.04-ccache-
-      - name: Cache Third Party
-        uses: actions/cache@v3
-        with:
-          path: .docker/thirdparty
-          key: ubuntu20.04-thirdparty-${{ hashFiles('internal/core/thirdparty/**') }}
-          restore-keys: ubuntu20.04-thirdparty-
-      - name: Cache Go Mod Volumes
-        uses: actions/cache@v3
-        with:
-          path: .docker/amd64-ubuntu20.04-go-mod
-          key: ubuntu20.04-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: ubuntu20.04-go-mod-
+          os: 'ubuntu22.04'
       - name: Code Check
         env:
-          CHECK_BUILDER: "1"
+          OS_NAME: 'ubuntu22.04'
         run: |
-           ./build/builder.sh /bin/bash -c "make check-proto-product && make verifiers"
-  centos:
-    name: Code Checker CentOS 7
-    # Run in centos docker 
-    runs-on: ubuntu-20.04
-    timeout-minutes: 60
+          ./build/builder.sh /bin/bash -c "git config --global --add safe.directory /go/src/github.com/milvus-io/milvus && make check-proto-product && make verifiers"
+      - name: Save Caches
+        uses: ./.github/actions/cache-save
+        if: github.event_name != 'pull_request'
+        with:
+          os: 'ubuntu22.04'
+
+  amazonlinux:
+    if: ${{ false }} # skip for now
+    name: Code Checker Amazonlinux 2023
+    # Run in amazonlinux docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        if: ${{ ! startsWith(runner.name, 'self') }} # skip this step if it is self-hosted runner
+        with:
+          root-reserve-mb: 20480
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Cache CCache Volumes
-        uses: actions/cache@v3
+      - name: Download Caches
+        uses: ./.github/actions/cache-restore
         with:
-          path: .docker/amd64-centos7-ccache
-          key: centos7-ccache-${{ hashFiles('internal/core/**') }}
-          restore-keys: centos7-ccache-
-      - name: Cache Third Party
-        uses: actions/cache@v3
-        with:
-          path: .docker/thirdparty
-          key: centos7-thirdparty-${{ hashFiles('internal/core/thirdparty/**') }}
-          restore-keys: centos7-thirdparty-
-      - name: Cache Go Mod Volumes
-        uses: actions/cache@v3
-        with:
-          path: .docker/amd64-centos7-go-mod
-          key: centos7-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: centos7-go-mod-
+          os: 'amazonlinux2023'
       - name: Code Check
-        env:
-          CHECK_BUILDER: "1"
-          OS_NAME: "centos7"
         run: |
-           ./build/builder.sh /bin/bash -c "make install"
-  mingw64:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - name: Code Checker MinGW
-          os: windows-2019
+          sed -i 's/ubuntu22.04/amazonlinux2023/g' .env
+          ./build/builder.sh /bin/bash -c "make install"
+      - name: Save Caches
+        uses: ./.github/actions/cache-save
+        if: github.event_name != 'pull_request'
+        with:
+          os: 'amazonlinux2023'
+
+  rockylinux:
+    if: ${{ false }} # skip for now
+    name: Code Checker rockylinux9
+    # Run in rockylinux docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
-      - name: Set git to use LF
-        run: |
-          git config --global core.autocrlf false
-          git config --global core.eol lf
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        if: ${{ ! startsWith(runner.name, 'self') }} # skip this step if it is self-hosted runner
+        with:
+          root-reserve-mb: 20480
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Cache go
-        uses: actions/cache@v3
+      - name: Download Caches
+        uses: ./.github/actions/cache-restore
         with:
-          path: |
-            %LocalAppData%\go-build
-            ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
-      - name: Cache ccache
-        uses: actions/cache@v3
-        with:
-          path: |
-            ${{ github.workspace }}/.ccache
-          key: ${{ runner.os }}-ccache-${{ hashFiles('internal/core/**') }}
-          restore-keys: ${{ runner.os }}-ccache-
-      - name: Configure Toolchain
-        uses: msys2/setup-msys2@v2.12.0
-        with:
-          msystem: mingw64
-      - name: Install Deps
-        shell: msys2 {0}
-        run: |
-          sh scripts/install_deps_msys.sh
+          os: 'rockylinux9'
       - name: Code Check
-        shell: msys2 {0}
-        env:
-          CCACHE_COMPILERCHECK: content
-          CCACHE_COMPRESS: 1
-          CCACHE_COMPRESSLEVEL: 5
-          CCACHE_MAXSIZE: 2G
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
-          go version
-          mingw32-make verifiers build-go
+          sed -i 's/ubuntu22.04/rockylinux9/g' .env
+          ./build/builder.sh /bin/bash -c "make install"
+      - name: Save Caches
+        uses: ./.github/actions/cache-save
+        if: github.event_name != 'pull_request'
+        with:
+          os: 'rockylinux9'

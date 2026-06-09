@@ -11,16 +11,52 @@
 
 #pragma once
 
+#include <map>
+#include <string>
+#include <vector>
+
 #include "common/BitsetView.h"
+#include "common/FieldMeta.h"
+#include "common/OpContext.h"
+#include "common/QueryInfo.h"
+#include "common/Types.h"
+#include "knowhere/expected.h"
+#include "knowhere/index/index_node.h"
 #include "query/SubSearchResult.h"
 #include "query/helper.h"
 
 namespace milvus::query {
 
+void
+CheckBruteForceSearchParam(const FieldMeta& field,
+                           const SearchInfo& search_info);
+
 SubSearchResult
-BruteForceSearch(const dataset::SearchDataset& dataset,
-                 const void* chunk_data_raw,
-                 int64_t chunk_rows,
-                 const BitsetView& bitset);
+BruteForceSearch(const dataset::SearchDataset& query_ds,
+                 const dataset::RawDataset& raw_ds,
+                 const SearchInfo& search_info,
+                 const std::map<std::string, std::string>& index_info,
+                 const BitsetView& bitset,
+                 DataType data_type,
+                 DataType element_type,
+                 milvus::OpContext* op_context);
+
+knowhere::expected<std::vector<knowhere::IndexNode::IteratorPtr>>
+GetBruteForceSearchIterators(
+    const dataset::SearchDataset& query_ds,
+    const dataset::RawDataset& raw_ds,
+    const SearchInfo& search_info,
+    const std::map<std::string, std::string>& index_info,
+    const BitsetView& bitset,
+    DataType data_type);
+
+SubSearchResult
+PackBruteForceSearchIteratorsIntoSubResult(
+    const dataset::SearchDataset& query_ds,
+    const dataset::RawDataset& raw_ds,
+    const SearchInfo& search_info,
+    const std::map<std::string, std::string>& index_info,
+    const BitsetView& bitset,
+    DataType data_type);
 
 }  // namespace milvus::query

@@ -19,12 +19,16 @@ package datanode
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/util/metricsinfo"
-	"github.com/milvus-io/milvus/internal/util/ratelimitutil"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/flushcommon/util"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/ratelimitutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // getQuotaMetrics returns DataNodeQuotaMetrics.
@@ -32,7 +36,7 @@ func (node *DataNode) getQuotaMetrics() (*metricsinfo.DataNodeQuotaMetrics, erro
 	var err error
 	rms := make([]metricsinfo.RateMetric, 0)
 	getRateMetric := func(label metricsinfo.RateMetricLabel) {
-		rate, err2 := rateCol.Rate(label, ratelimitutil.DefaultAvgDuration)
+		rate, err2 := util.GetRateCollector().Rate(label, ratelimitutil.DefaultAvgDuration)
 		if err2 != nil {
 			err = err2
 			return
@@ -48,100 +52,70 @@ func (node *DataNode) getQuotaMetrics() (*metricsinfo.DataNodeQuotaMetrics, erro
 		return nil, err
 	}
 
+	minFGChannel, minFGTt := util.GetRateCollector().GetMinFlowGraphTt()
 	return &metricsinfo.DataNodeQuotaMetrics{
 		Hms: metricsinfo.HardwareMetrics{},
 		Rms: rms,
 		Fgm: metricsinfo.FlowGraphMetric{
-			MinFlowGraphTt: rateCol.getMinFlowGraphTt(),
-			NumFlowGraph:   node.flowgraphManager.getFlowGraphNum(),
+			MinFlowGraphChannel: minFGChannel,
+			MinFlowGraphTt:      minFGTt,
+		},
+		Effect: metricsinfo.NodeEffect{
+			NodeID: node.GetSession().ServerID,
 		},
 	}, nil
 }
 
-//getComponentConfigurations returns the configurations of dataNode matching req.Pattern
-func getComponentConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest) *internalpb.ShowConfigurationsResponse {
-	prefix := "datanode."
-	matchedConfig := Params.DataNodeCfg.Base.GetByPattern(prefix + req.Pattern)
-	configList := make([]*commonpb.KeyValuePair, 0, len(matchedConfig))
-	for key, value := range matchedConfig {
-		configList = append(configList,
-			&commonpb.KeyValuePair{
-				Key:   key,
-				Value: value,
-			})
-	}
-
-	return &internalpb.ShowConfigurationsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		Configuations: configList,
-	}
-}
-
-func (node *DataNode) getSystemInfoMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
+func (node *DataNode) getSystemInfoMetrics(ctx context.Context, _ *milvuspb.GetMetricsRequest) (string, error) {
 	// TODO(dragondriver): add more metrics
-	usedMem := metricsinfo.GetUsedMemoryCount()
-	totalMem := metricsinfo.GetMemoryCount()
+	usedMem := hardware.GetUsedMemoryCount()
+	totalMem := hardware.GetMemoryCount()
 
 	quotaMetrics, err := node.getQuotaMetrics()
 	if err != nil {
-		return &milvuspb.GetMetricsResponse{
-			Status: &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_UnexpectedError,
-				Reason:    err.Error(),
-			},
-			ComponentName: metricsinfo.ConstructComponentName(typeutil.DataNodeRole, Params.DataNodeCfg.GetNodeID()),
-		}, nil
+		return "", err
 	}
+
+	used, total, err := hardware.GetDiskUsage(paramtable.Get().LocalStorageCfg.Path.GetValue())
+	if err != nil {
+		log.Ctx(ctx).Warn("get disk usage failed", zap.Error(err))
+	}
+
+	ioWait, err := hardware.GetIOWait()
+	if err != nil {
+		log.Ctx(ctx).Warn("get iowait failed", zap.Error(err))
+	}
+
 	hardwareMetrics := metricsinfo.HardwareMetrics{
-		IP:           node.session.Address,
-		CPUCoreCount: metricsinfo.GetCPUCoreCount(false),
-		CPUCoreUsage: metricsinfo.GetCPUUsage(),
-		Memory:       totalMem,
-		MemoryUsage:  usedMem,
-		Disk:         metricsinfo.GetDiskCount(),
-		DiskUsage:    metricsinfo.GetDiskUsage(),
+		IP:               node.session.Address,
+		CPUCoreCount:     hardware.GetCPUNum(),
+		CPUCoreUsage:     hardware.GetCPUUsage(),
+		Memory:           totalMem,
+		MemoryUsage:      usedMem,
+		Disk:             total,
+		DiskUsage:        used,
+		IOWaitPercentage: ioWait,
 	}
 	quotaMetrics.Hms = hardwareMetrics
 
 	nodeInfos := metricsinfo.DataNodeInfos{
 		BaseComponentInfos: metricsinfo.BaseComponentInfos{
-			Name:          metricsinfo.ConstructComponentName(typeutil.DataNodeRole, Params.DataNodeCfg.GetNodeID()),
+			Name:          metricsinfo.ConstructComponentName(typeutil.DataNodeRole, paramtable.GetNodeID()),
 			HardwareInfos: hardwareMetrics,
 			SystemInfo:    metricsinfo.DeployMetrics{},
-			CreatedTime:   Params.DataNodeCfg.CreatedTime.String(),
-			UpdatedTime:   Params.DataNodeCfg.UpdatedTime.String(),
+			CreatedTime:   paramtable.GetCreateTime().String(),
+			UpdatedTime:   paramtable.GetUpdateTime().String(),
 			Type:          typeutil.DataNodeRole,
-			ID:            node.session.ServerID,
+			ID:            node.GetSession().ServerID,
 		},
 		SystemConfigurations: metricsinfo.DataNodeConfiguration{
-			FlushInsertBufferSize: Params.DataNodeCfg.FlushInsertBufferSize,
+			MinioBucketName:       Params.MinioCfg.BucketName.GetValue(),
+			SimdType:              Params.CommonCfg.SimdType.GetValue(),
+			FlushInsertBufferSize: Params.DataNodeCfg.FlushInsertBufferSize.GetAsInt64(),
 		},
 		QuotaMetrics: quotaMetrics,
 	}
 
 	metricsinfo.FillDeployMetricsWithEnv(&nodeInfos.SystemInfo)
-
-	resp, err := metricsinfo.MarshalComponentInfos(nodeInfos)
-	if err != nil {
-		return &milvuspb.GetMetricsResponse{
-			Status: &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_UnexpectedError,
-				Reason:    err.Error(),
-			},
-			Response:      "",
-			ComponentName: metricsinfo.ConstructComponentName(typeutil.DataNodeRole, Params.DataNodeCfg.GetNodeID()),
-		}, nil
-	}
-
-	return &milvuspb.GetMetricsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		Response:      resp,
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.DataNodeRole, Params.DataNodeCfg.GetNodeID()),
-	}, nil
+	return metricsinfo.MarshalComponentInfos(nodeInfos)
 }

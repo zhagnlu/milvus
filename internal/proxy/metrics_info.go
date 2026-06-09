@@ -18,84 +18,78 @@ package proxy
 
 import (
 	"context"
-	"sync"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/util/metricsinfo"
-	"github.com/milvus-io/milvus/internal/util/ratelimitutil"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/ratelimitutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-type getMetricsFuncType func(ctx context.Context, request *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error)
-type showConfigurationsFuncType func(ctx context.Context, request *internalpb.ShowConfigurationsRequest) (*internalpb.ShowConfigurationsResponse, error)
+type (
+	getMetricsFuncType         func(ctx context.Context, request *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error)
+	showConfigurationsFuncType func(ctx context.Context, request *internalpb.ShowConfigurationsRequest) (*internalpb.ShowConfigurationsResponse, error)
+)
 
 // getQuotaMetrics returns ProxyQuotaMetrics.
-func getQuotaMetrics() (*metricsinfo.ProxyQuotaMetrics, error) {
+func getQuotaMetrics(node *Proxy) (*metricsinfo.ProxyQuotaMetrics, error) {
 	var err error
 	rms := make([]metricsinfo.RateMetric, 0)
-	getRateMetric := func(rateType internalpb.RateType) {
-		rate, err2 := rateCol.Rate(rateType.String(), ratelimitutil.DefaultAvgDuration)
+	getRateMetric := func(label string) {
+		rate, err2 := rateCol.Rate(label, ratelimitutil.DefaultAvgDuration)
 		if err2 != nil {
 			err = err2
 			return
 		}
 		rms = append(rms, metricsinfo.RateMetric{
-			Label: rateType.String(),
+			Label: label,
 			Rate:  rate,
 		})
 	}
-	getRateMetric(internalpb.RateType_DMLInsert)
-	getRateMetric(internalpb.RateType_DMLDelete)
-	getRateMetric(internalpb.RateType_DQLSearch)
-	getRateMetric(internalpb.RateType_DQLQuery)
+
+	getSubLabelRateMetric := func(label string) {
+		rates, err2 := rateCol.RateSubLabel(label, ratelimitutil.DefaultAvgDuration)
+		if err2 != nil {
+			err = err2
+			return
+		}
+		for s, f := range rates {
+			rms = append(rms, metricsinfo.RateMetric{
+				Label: s,
+				Rate:  f,
+			})
+		}
+	}
+	getRateMetric(internalpb.RateType_DMLInsert.String())
+	getRateMetric(internalpb.RateType_DMLDelete.String())
+	getRateMetric(internalpb.RateType_DQLSearch.String())
+	getSubLabelRateMetric(internalpb.RateType_DQLSearch.String())
+	getRateMetric(internalpb.RateType_DQLQuery.String())
+	getSubLabelRateMetric(internalpb.RateType_DQLQuery.String())
 	if err != nil {
 		return nil, err
 	}
 	return &metricsinfo.ProxyQuotaMetrics{
-		Hms: metricsinfo.HardwareMetrics{},
-		Rms: rms,
+		Hms:          metricsinfo.HardwareMetrics{},
+		Rms:          rms,
+		QueueMetrics: node.sched.getMetrics(),
 	}, nil
 }
 
 // getProxyMetrics get metrics of Proxy, not including the topological metrics of Query cluster and Data cluster.
 func getProxyMetrics(ctx context.Context, request *milvuspb.GetMetricsRequest, node *Proxy) (*milvuspb.GetMetricsResponse, error) {
-	totalMem := metricsinfo.GetMemoryCount()
-	usedMem := metricsinfo.GetUsedMemoryCount()
-	quotaMetrics, err := getQuotaMetrics()
+	quotaMetrics, err := getQuotaMetrics(node)
 	if err != nil {
 		return nil, err
 	}
-	hardwareMetrics := metricsinfo.HardwareMetrics{
-		IP:           node.session.Address,
-		CPUCoreCount: metricsinfo.GetCPUCoreCount(false),
-		CPUCoreUsage: metricsinfo.GetCPUUsage(),
-		Memory:       totalMem,
-		MemoryUsage:  usedMem,
-		Disk:         metricsinfo.GetDiskCount(),
-		DiskUsage:    metricsinfo.GetDiskUsage(),
-	}
-	quotaMetrics.Hms = hardwareMetrics
-
-	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, Params.ProxyCfg.GetNodeID())
-	proxyMetricInfo := metricsinfo.ProxyInfos{
-		BaseComponentInfos: metricsinfo.BaseComponentInfos{
-			HasError:      false,
-			Name:          proxyRoleName,
-			HardwareInfos: hardwareMetrics,
-			SystemInfo:    metricsinfo.DeployMetrics{},
-			CreatedTime:   Params.ProxyCfg.CreatedTime.String(),
-			UpdatedTime:   Params.ProxyCfg.UpdatedTime.String(),
-			Type:          typeutil.ProxyRole,
-			ID:            node.session.ServerID,
-		},
-		SystemConfigurations: metricsinfo.ProxyConfiguration{
-			DefaultPartitionName: Params.CommonCfg.DefaultPartitionName,
-			DefaultIndexName:     Params.CommonCfg.DefaultIndexName,
-		},
-		QuotaMetrics: quotaMetrics,
-	}
+	proxyMetricInfo := getProxyMetricInfo(ctx, node, quotaMetrics)
+	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, paramtable.GetNodeID())
 
 	resp, err := metricsinfo.MarshalComponentInfos(proxyMetricInfo)
 	if err != nil {
@@ -103,12 +97,57 @@ func getProxyMetrics(ctx context.Context, request *milvuspb.GetMetricsRequest, n
 	}
 
 	return &milvuspb.GetMetricsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
+		Status:        merr.Success(),
 		Response:      resp,
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.ProxyRole, Params.ProxyCfg.GetNodeID()),
+		ComponentName: proxyRoleName,
 	}, nil
+}
+
+func getProxyMetricInfo(ctx context.Context, node *Proxy, quotaMetrics *metricsinfo.ProxyQuotaMetrics) *metricsinfo.ProxyInfos {
+	totalMem := hardware.GetMemoryCount()
+	usedMem := hardware.GetUsedMemoryCount()
+	used, total, err := hardware.GetDiskUsage(paramtable.Get().LocalStorageCfg.Path.GetValue())
+	if err != nil {
+		log.Ctx(ctx).Warn("get disk usage failed", zap.Error(err))
+	}
+
+	ioWait, err := hardware.GetIOWait()
+	if err != nil {
+		log.Ctx(ctx).Warn("get iowait failed", zap.Error(err))
+	}
+	hardwareMetrics := metricsinfo.HardwareMetrics{
+		IP:               node.session.Address,
+		CPUCoreCount:     hardware.GetCPUNum(),
+		CPUCoreUsage:     hardware.GetCPUUsage(),
+		Memory:           totalMem,
+		MemoryUsage:      usedMem,
+		Disk:             total,
+		DiskUsage:        used,
+		IOWaitPercentage: ioWait,
+	}
+
+	if quotaMetrics != nil {
+		quotaMetrics.Hms = hardwareMetrics
+	}
+
+	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, paramtable.GetNodeID())
+	return &metricsinfo.ProxyInfos{
+		BaseComponentInfos: metricsinfo.BaseComponentInfos{
+			HasError:      false,
+			Name:          proxyRoleName,
+			HardwareInfos: hardwareMetrics,
+			SystemInfo:    metricsinfo.DeployMetrics{},
+			CreatedTime:   paramtable.GetCreateTime().String(),
+			UpdatedTime:   paramtable.GetUpdateTime().String(),
+			Type:          typeutil.ProxyRole,
+			ID:            node.session.ServerID,
+		},
+		SystemConfigurations: metricsinfo.ProxyConfiguration{
+			DefaultPartitionName: Params.CommonCfg.DefaultPartitionName.GetValue(),
+			DefaultIndexName:     Params.CommonCfg.DefaultIndexName.GetValue(),
+		},
+		QuotaMetrics: quotaMetrics,
+	}
 }
 
 // getSystemInfoMetrics returns the system information metrics.
@@ -124,394 +163,88 @@ func getSystemInfoMetrics(
 
 	identifierMap := make(map[string]int)
 
-	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, Params.ProxyCfg.GetNodeID())
+	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, paramtable.GetNodeID())
 	identifierMap[proxyRoleName] = int(node.session.ServerID)
 
+	proxyInfo := getProxyMetricInfo(ctx, node, nil)
 	proxyTopologyNode := metricsinfo.SystemTopologyNode{
 		Identifier: int(node.session.ServerID),
 		Connected:  make([]metricsinfo.ConnectionEdge, 0),
-		Infos: &metricsinfo.ProxyInfos{
-			BaseComponentInfos: metricsinfo.BaseComponentInfos{
-				HasError:    false,
-				ErrorReason: "",
-				Name:        proxyRoleName,
-				HardwareInfos: metricsinfo.HardwareMetrics{
-					IP:           node.session.Address,
-					CPUCoreCount: metricsinfo.GetCPUCoreCount(false),
-					CPUCoreUsage: metricsinfo.GetCPUUsage(),
-					Memory:       metricsinfo.GetMemoryCount(),
-					MemoryUsage:  metricsinfo.GetUsedMemoryCount(),
-					Disk:         metricsinfo.GetDiskCount(),
-					DiskUsage:    metricsinfo.GetDiskUsage(),
-				},
-				SystemInfo:  metricsinfo.DeployMetrics{},
-				CreatedTime: Params.ProxyCfg.CreatedTime.String(),
-				UpdatedTime: Params.ProxyCfg.UpdatedTime.String(),
-				Type:        typeutil.ProxyRole,
-				ID:          node.session.ServerID,
-			},
-			SystemConfigurations: metricsinfo.ProxyConfiguration{
-				DefaultPartitionName: Params.CommonCfg.DefaultPartitionName,
-				DefaultIndexName:     Params.CommonCfg.DefaultIndexName,
-			},
-		},
+		Infos:      proxyInfo,
 	}
 	metricsinfo.FillDeployMetricsWithEnv(&(proxyTopologyNode.Infos.(*metricsinfo.ProxyInfos).SystemInfo))
 
-	var wg sync.WaitGroup
-
-	var queryCoordResp *milvuspb.GetMetricsResponse
-	var queryCoordErr error
-	var queryCoordTopology metricsinfo.QueryCoordTopology
-	queryCoordRoleName := ""
-
-	var dataCoordResp *milvuspb.GetMetricsResponse
-	var dataCoordErr error
-	var dataCoordTopology metricsinfo.DataCoordTopology
-	dataCoordRoleName := ""
-
-	var indexCoordResp *milvuspb.GetMetricsResponse
-	var indexCoordErr error
-	var indexCoordTopology metricsinfo.IndexCoordTopology
-	indexCoordRoleName := ""
-
-	var rootCoordResp *milvuspb.GetMetricsResponse
-	var rootCoordErr error
-	var rootCoordTopology metricsinfo.RootCoordTopology
-	rootCoordRoleName := ""
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		queryCoordResp, queryCoordErr = node.queryCoord.GetMetrics(ctx, request)
-		queryCoordRoleName = queryCoordResp.GetComponentName()
-		queryCoordErr = metricsinfo.UnmarshalTopology(queryCoordResp.Response, &queryCoordTopology)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		dataCoordResp, dataCoordErr = node.dataCoord.GetMetrics(ctx, request)
-		dataCoordRoleName = dataCoordResp.GetComponentName()
-		dataCoordErr = metricsinfo.UnmarshalTopology(dataCoordResp.Response, &dataCoordTopology)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		indexCoordResp, indexCoordErr = node.indexCoord.GetMetrics(ctx, request)
-		indexCoordRoleName = indexCoordResp.GetComponentName()
-		indexCoordErr = metricsinfo.UnmarshalTopology(indexCoordResp.Response, &indexCoordTopology)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		rootCoordResp, rootCoordErr = node.rootCoord.GetMetrics(ctx, request)
-		rootCoordRoleName = rootCoordResp.GetComponentName()
-		rootCoordErr = metricsinfo.UnmarshalTopology(rootCoordResp.Response, &rootCoordTopology)
-	}()
-
-	wg.Wait()
-
-	identifierMap[queryCoordRoleName] = int(queryCoordTopology.Cluster.Self.ID)
-	identifierMap[dataCoordRoleName] = int(dataCoordTopology.Cluster.Self.ID)
-	identifierMap[indexCoordRoleName] = int(indexCoordTopology.Cluster.Self.ID)
-	identifierMap[rootCoordRoleName] = int(rootCoordTopology.Self.ID)
-
-	if queryCoordErr == nil && queryCoordResp != nil {
-		proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
-			ConnectedIdentifier: identifierMap[queryCoordRoleName],
-			Type:                metricsinfo.Forward,
-			TargetType:          typeutil.QueryCoordRole,
-		})
-
-		// QueryCoord in system topology graph
-		queryCoordTopologyNode := metricsinfo.SystemTopologyNode{
-			Identifier: identifierMap[queryCoordRoleName],
-			Connected:  make([]metricsinfo.ConnectionEdge, 0),
-			Infos:      &queryCoordTopology.Cluster.Self,
-		}
-
-		// fill connection edge, a little trick here
-		for _, edge := range queryCoordTopology.Connections.ConnectedComponents {
-			switch edge.TargetType {
-			case typeutil.RootCoordRole:
-				if rootCoordErr == nil && rootCoordResp != nil {
-					queryCoordTopologyNode.Connected = append(queryCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[rootCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.RootCoordRole,
-					})
-				}
-			case typeutil.DataCoordRole:
-				if dataCoordErr == nil && dataCoordResp != nil {
-					queryCoordTopologyNode.Connected = append(queryCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[dataCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.DataCoordRole,
-					})
-				}
-			case typeutil.IndexCoordRole:
-				if indexCoordErr == nil && indexCoordResp != nil {
-					queryCoordTopologyNode.Connected = append(queryCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[indexCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.IndexCoordRole,
-					})
-				}
-			case typeutil.QueryCoordRole:
-				queryCoordTopologyNode.Connected = append(queryCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-					ConnectedIdentifier: identifierMap[queryCoordRoleName],
-					Type:                metricsinfo.Forward,
-					TargetType:          typeutil.QueryCoordRole,
-				})
-			}
-		}
-
-		// add query nodes to system topology graph
-		for _, queryNode := range queryCoordTopology.Cluster.ConnectedNodes {
-			node := queryNode
-			identifier := int(node.ID)
-			identifierMap[queryNode.Name] = identifier
-			queryNodeTopologyNode := metricsinfo.SystemTopologyNode{
-				Identifier: identifier,
-				Connected:  nil,
-				Infos:      &node,
-			}
-			systemTopology.NodesInfo = append(systemTopology.NodesInfo, queryNodeTopologyNode)
-			queryCoordTopologyNode.Connected = append(queryCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-				ConnectedIdentifier: identifier,
-				Type:                metricsinfo.CoordConnectToNode,
-				TargetType:          typeutil.QueryNodeRole,
-			})
-		}
-
-		// add QueryCoord to system topology graph
-		systemTopology.NodesInfo = append(systemTopology.NodesInfo, queryCoordTopologyNode)
+	mixCoordResp, err := node.mixCoord.GetMetrics(ctx, request)
+	if err != nil {
+		return &milvuspb.GetMetricsResponse{
+			Status:        merr.Status(err),
+			Response:      "",
+			ComponentName: proxyRoleName,
+		}, nil
 	}
 
-	if dataCoordErr == nil && dataCoordResp != nil {
-		proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
-			ConnectedIdentifier: identifierMap[dataCoordRoleName],
-			Type:                metricsinfo.Forward,
-			TargetType:          typeutil.DataCoordRole,
-		})
-
-		// DataCoord in system topology graph
-		dataCoordTopologyNode := metricsinfo.SystemTopologyNode{
-			Identifier: identifierMap[dataCoordRoleName],
-			Connected:  make([]metricsinfo.ConnectionEdge, 0),
-			Infos:      &dataCoordTopology.Cluster.Self,
-		}
-
-		// fill connection edge, a little trick here
-		for _, edge := range dataCoordTopology.Connections.ConnectedComponents {
-			switch edge.TargetType {
-			case typeutil.RootCoordRole:
-				if rootCoordErr == nil && rootCoordResp != nil {
-					dataCoordTopologyNode.Connected = append(dataCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[rootCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.RootCoordRole,
-					})
-				}
-			case typeutil.DataCoordRole:
-				dataCoordTopologyNode.Connected = append(dataCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-					ConnectedIdentifier: identifierMap[dataCoordRoleName],
-					Type:                metricsinfo.Forward,
-					TargetType:          typeutil.DataCoordRole,
-				})
-			case typeutil.IndexCoordRole:
-				if indexCoordErr == nil && indexCoordResp != nil {
-					dataCoordTopologyNode.Connected = append(dataCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[indexCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.IndexCoordRole,
-					})
-				}
-			case typeutil.QueryCoordRole:
-				if queryCoordErr == nil && queryCoordResp != nil {
-					dataCoordTopologyNode.Connected = append(dataCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[queryCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.QueryCoordRole,
-					})
-				}
-			}
-		}
-
-		// add data nodes to system topology graph
-		for _, dataNode := range dataCoordTopology.Cluster.ConnectedNodes {
-			node := dataNode
-			identifier := int(node.ID)
-			identifierMap[dataNode.Name] = identifier
-			dataNodeTopologyNode := metricsinfo.SystemTopologyNode{
-				Identifier: identifier,
-				Connected:  nil,
-				Infos:      &node,
-			}
-			systemTopology.NodesInfo = append(systemTopology.NodesInfo, dataNodeTopologyNode)
-			dataCoordTopologyNode.Connected = append(dataCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-				ConnectedIdentifier: identifier,
-				Type:                metricsinfo.CoordConnectToNode,
-				TargetType:          typeutil.DataNodeRole,
-			})
-		}
-
-		// add DataCoord to system topology graph
-		systemTopology.NodesInfo = append(systemTopology.NodesInfo, dataCoordTopologyNode)
+	var mixCoordTopology metricsinfo.SystemTopology
+	err = metricsinfo.UnmarshalTopology(mixCoordResp.GetResponse(), &mixCoordTopology)
+	if err != nil {
+		return &milvuspb.GetMetricsResponse{
+			Status:        merr.Status(err),
+			Response:      "",
+			ComponentName: proxyRoleName,
+		}, nil
 	}
 
-	if indexCoordErr == nil && indexCoordResp != nil {
-		proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
-			ConnectedIdentifier: identifierMap[indexCoordRoleName],
-			Type:                metricsinfo.Forward,
-			TargetType:          typeutil.IndexCoordRole,
-		})
-
-		// index coord in system topology graph
-		indexCoordTopologyNode := metricsinfo.SystemTopologyNode{
-			Identifier: identifierMap[indexCoordRoleName],
-			Connected:  make([]metricsinfo.ConnectionEdge, 0),
-			Infos:      &indexCoordTopology.Cluster.Self,
-		}
-
-		// fill connection edge, a little trick here
-		for _, edge := range indexCoordTopology.Connections.ConnectedComponents {
-			switch edge.TargetType {
-			case typeutil.RootCoordRole:
-				if rootCoordErr == nil && rootCoordResp != nil {
-					indexCoordTopologyNode.Connected = append(indexCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[rootCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.RootCoordRole,
-					})
-				}
-			case typeutil.DataCoordRole:
-				if dataCoordErr == nil && dataCoordResp != nil {
-					indexCoordTopologyNode.Connected = append(indexCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[dataCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.DataCoordRole,
-					})
-				}
-			case typeutil.IndexCoordRole:
-				indexCoordTopologyNode.Connected = append(indexCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-					ConnectedIdentifier: identifierMap[indexCoordRoleName],
-					Type:                metricsinfo.Forward,
-					TargetType:          typeutil.IndexCoordRole,
-				})
-			case typeutil.QueryCoordRole:
-				if queryCoordErr == nil && queryCoordResp != nil {
-					indexCoordTopologyNode.Connected = append(indexCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[queryCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.QueryCoordRole,
-					})
-				}
-			}
-		}
-
-		// add index nodes to system topology graph
-		for _, indexNode := range indexCoordTopology.Cluster.ConnectedNodes {
-			node := indexNode
-			identifier := int(node.ID)
-			identifierMap[indexNode.Name] = identifier
-			indexNodeTopologyNode := metricsinfo.SystemTopologyNode{
-				Identifier: identifier,
-				Connected:  nil,
-				Infos:      &node,
-			}
-			systemTopology.NodesInfo = append(systemTopology.NodesInfo, indexNodeTopologyNode)
-			indexCoordTopologyNode.Connected = append(indexCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-				ConnectedIdentifier: identifier,
-				Type:                metricsinfo.CoordConnectToNode,
-				TargetType:          typeutil.IndexNodeRole,
-			})
-		}
-
-		// add index coord to system topology graph
-		systemTopology.NodesInfo = append(systemTopology.NodesInfo, indexCoordTopologyNode)
-	}
-
-	if rootCoordErr == nil && rootCoordResp != nil {
-		proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
-			ConnectedIdentifier: identifierMap[rootCoordRoleName],
-			Type:                metricsinfo.Forward,
-			TargetType:          typeutil.RootCoordRole,
-		})
-
-		// root coord in system topology graph
-		rootCoordTopologyNode := metricsinfo.SystemTopologyNode{
-			Identifier: identifierMap[rootCoordRoleName],
-			Connected:  make([]metricsinfo.ConnectionEdge, 0),
-			Infos:      &rootCoordTopology.Self,
-		}
-
-		// fill connection edge, a little trick here
-		for _, edge := range rootCoordTopology.Connections.ConnectedComponents {
-			switch edge.TargetType {
-			case typeutil.RootCoordRole:
-				rootCoordTopologyNode.Connected = append(rootCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-					ConnectedIdentifier: identifierMap[rootCoordRoleName],
+	for _, node := range mixCoordTopology.NodesInfo {
+		if node.Infos != nil {
+			switch node.Infos.(type) {
+			case *metricsinfo.RootCoordInfos:
+				proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
+					ConnectedIdentifier: node.Identifier,
 					Type:                metricsinfo.Forward,
 					TargetType:          typeutil.RootCoordRole,
 				})
-			case typeutil.DataCoordRole:
-				if dataCoordErr == nil && dataCoordResp != nil {
-					rootCoordTopologyNode.Connected = append(rootCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[dataCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.DataCoordRole,
-					})
-				}
-			case typeutil.IndexCoordRole:
-				rootCoordTopologyNode.Connected = append(rootCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-					ConnectedIdentifier: identifierMap[indexCoordRoleName],
+			case *metricsinfo.DataCoordInfos:
+				proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
+					ConnectedIdentifier: node.Identifier,
 					Type:                metricsinfo.Forward,
-					TargetType:          typeutil.IndexCoordRole,
+					TargetType:          typeutil.DataCoordRole,
 				})
-			case typeutil.QueryCoordRole:
-				if queryCoordErr == nil && queryCoordResp != nil {
-					rootCoordTopologyNode.Connected = append(rootCoordTopologyNode.Connected, metricsinfo.ConnectionEdge{
-						ConnectedIdentifier: identifierMap[queryCoordRoleName],
-						Type:                metricsinfo.Forward,
-						TargetType:          typeutil.QueryCoordRole,
-					})
-				}
+			case *metricsinfo.QueryCoordInfos:
+				proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
+					ConnectedIdentifier: node.Identifier,
+					Type:                metricsinfo.Forward,
+					TargetType:          typeutil.QueryCoordRole,
+				})
+			case *metricsinfo.QueryNodeInfos:
+				proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
+					ConnectedIdentifier: node.Identifier,
+					Type:                metricsinfo.Forward,
+					TargetType:          typeutil.QueryNodeRole,
+				})
+			case *metricsinfo.DataNodeInfos:
+				proxyTopologyNode.Connected = append(proxyTopologyNode.Connected, metricsinfo.ConnectionEdge{
+					ConnectedIdentifier: node.Identifier,
+					Type:                metricsinfo.Forward,
+					TargetType:          typeutil.DataNodeRole,
+				})
 			}
 		}
-
-		// add root coord to system topology graph
-		systemTopology.NodesInfo = append(systemTopology.NodesInfo, rootCoordTopologyNode)
 	}
 
-	// add proxy to system topology graph
 	systemTopology.NodesInfo = append(systemTopology.NodesInfo, proxyTopologyNode)
+	systemTopology.NodesInfo = append(systemTopology.NodesInfo, mixCoordTopology.NodesInfo...)
 
 	resp, err := metricsinfo.MarshalTopology(systemTopology)
 	if err != nil {
 		return &milvuspb.GetMetricsResponse{
-			Status: &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_UnexpectedError,
-				Reason:    err.Error(),
-			},
+			Status:        merr.Status(err),
 			Response:      "",
-			ComponentName: metricsinfo.ConstructComponentName(typeutil.ProxyRole, Params.ProxyCfg.GetNodeID()),
+			ComponentName: proxyRoleName,
 		}, nil
 	}
 
 	return &milvuspb.GetMetricsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
+		Status:        merr.Success(),
 		Response:      resp,
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.ProxyRole, Params.ProxyCfg.GetNodeID()),
+		ComponentName: proxyRoleName,
 	}, nil
 }

@@ -1,30 +1,42 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	grpcquerynodeclient "github.com/milvus-io/milvus/internal/distributed/querynode/client"
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	grpcquerynodeclient "github.com/milvus-io/milvus/internal/distributed/querynode/client"
+	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
-const (
-	updateTickerDuration = 1 * time.Minute
-	segmentBufferSize    = 16
-	bufferFlushPeriod    = 500 * time.Millisecond
-)
-
-var (
-	ErrNodeNotFound = errors.New("NodeNotFound")
-)
+var ErrNodeNotFound = errors.New("NodeNotFound")
 
 func WrapErrNodeNotFound(nodeID int64) error {
 	return fmt.Errorf("%w(%v)", ErrNodeNotFound, nodeID)
@@ -35,17 +47,20 @@ type Cluster interface {
 	UnsubDmChannel(ctx context.Context, nodeID int64, req *querypb.UnsubDmChannelRequest) (*commonpb.Status, error)
 	LoadSegments(ctx context.Context, nodeID int64, req *querypb.LoadSegmentsRequest) (*commonpb.Status, error)
 	ReleaseSegments(ctx context.Context, nodeID int64, req *querypb.ReleaseSegmentsRequest) (*commonpb.Status, error)
+	LoadPartitions(ctx context.Context, nodeID int64, req *querypb.LoadPartitionsRequest) (*commonpb.Status, error)
+	ReleasePartitions(ctx context.Context, nodeID int64, req *querypb.ReleasePartitionsRequest) (*commonpb.Status, error)
 	GetDataDistribution(ctx context.Context, nodeID int64, req *querypb.GetDataDistributionRequest) (*querypb.GetDataDistributionResponse, error)
 	GetMetrics(ctx context.Context, nodeID int64, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error)
 	SyncDistribution(ctx context.Context, nodeID int64, req *querypb.SyncDistributionRequest) (*commonpb.Status, error)
-	Start(ctx context.Context)
+	GetComponentStates(ctx context.Context, nodeID int64) (*milvuspb.ComponentStates, error)
+	DropIndex(ctx context.Context, nodeID int64, req *querypb.DropIndexRequest) (*commonpb.Status, error)
+	RunAnalyzer(ctx context.Context, nodeID int64, req *querypb.RunAnalyzerRequest) (*milvuspb.RunAnalyzerResponse, error)
+	ValidateAnalyzer(ctx context.Context, nodeID int64, req *querypb.ValidateAnalyzerRequest) (*querypb.ValidateAnalyzerResponse, error)
+	SyncFileResource(ctx context.Context, nodeID int64, req *internalpb.SyncFileResourceRequest) (*commonpb.Status, error)
+	ClearReadTaskQueue(ctx context.Context, nodeID int64, req *internalpb.ClearReadTaskQueueRequest) (*internalpb.ClearReadTaskQueueResponse, error)
+	ComputePhraseMatchSlop(ctx context.Context, nodeID int64, req *querypb.ComputePhraseMatchSlopRequest) (*querypb.ComputePhraseMatchSlopResponse, error)
+	Start()
 	Stop()
-}
-
-type segmentIndex struct {
-	NodeID       int64
-	CollectionID int64
-	Shard        string
 }
 
 // QueryCluster is used to send requests to QueryNodes and manage connections
@@ -54,63 +69,74 @@ type QueryCluster struct {
 	nodeManager *NodeManager
 	wg          sync.WaitGroup
 	ch          chan struct{}
-
-	scheduler *typeutil.GroupScheduler[segmentIndex, *commonpb.Status]
+	stopOnce    sync.Once
 }
 
-func NewCluster(nodeManager *NodeManager) *QueryCluster {
+type QueryNodeCreator func(ctx context.Context, addr string, nodeID int64) (types.QueryNodeClient, error)
+
+func DefaultQueryNodeCreator(ctx context.Context, addr string, nodeID int64) (types.QueryNodeClient, error) {
+	return grpcquerynodeclient.NewClient(ctx, addr, nodeID)
+}
+
+func NewCluster(nodeManager *NodeManager, queryNodeCreator QueryNodeCreator) *QueryCluster {
 	c := &QueryCluster{
-		clients:     newClients(),
+		clients:     newClients(queryNodeCreator),
 		nodeManager: nodeManager,
 		ch:          make(chan struct{}),
-		scheduler:   typeutil.NewGroupScheduler[segmentIndex, *commonpb.Status](),
 	}
-	c.wg.Add(1)
-	go c.updateLoop()
 	return c
 }
 
-func (c *QueryCluster) Start(ctx context.Context) {
-	c.scheduler.Start(ctx)
+func (c *QueryCluster) Start() {
+	c.wg.Add(1)
+	go c.updateLoop()
 }
 
 func (c *QueryCluster) Stop() {
-	c.clients.closeAll()
-	close(c.ch)
-	c.scheduler.Stop()
-	c.wg.Wait()
+	c.stopOnce.Do(func() {
+		c.closeAll()
+		close(c.ch)
+		c.wg.Wait()
+	})
 }
 
 func (c *QueryCluster) updateLoop() {
 	defer c.wg.Done()
-	ticker := time.NewTicker(updateTickerDuration)
+	interval := paramtable.Get().QueryCoordCfg.CheckNodeSessionInterval.GetAsDuration(time.Second)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-c.ch:
 			log.Info("cluster closed")
 			return
 		case <-ticker.C:
-			nodes := c.clients.getAllNodeIDs()
+			nodes := c.getAllNodeIDs()
 			for _, id := range nodes {
 				if c.nodeManager.Get(id) == nil {
-					c.clients.close(id)
+					c.close(id)
 				}
+			}
+			// apply dynamic update only when changed
+			newInterval := paramtable.Get().QueryCoordCfg.CheckNodeSessionInterval.GetAsDuration(time.Second)
+			if newInterval != interval {
+				interval = newInterval
+				select {
+				case <-ticker.C:
+				default:
+				}
+				ticker.Reset(interval)
 			}
 		}
 	}
 }
 
 func (c *QueryCluster) LoadSegments(ctx context.Context, nodeID int64, req *querypb.LoadSegmentsRequest) (*commonpb.Status, error) {
-	// task := NewLoadSegmentsTask(c, nodeID, req)
-	// c.scheduler.Add(task)
-	// return task.Wait()
-	return c.loadSegments(ctx, nodeID, req)
-}
-
-func (c *QueryCluster) loadSegments(ctx context.Context, nodeID int64, req *querypb.LoadSegmentsRequest) (*commonpb.Status, error) {
 	var status *commonpb.Status
 	var err error
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req = proto.Clone(req).(*querypb.LoadSegmentsRequest)
+		req.Base.TargetID = nodeID
 		status, err = cli.LoadSegments(ctx, req)
 	})
 	if err1 != nil {
@@ -122,7 +148,9 @@ func (c *QueryCluster) loadSegments(ctx context.Context, nodeID int64, req *quer
 func (c *QueryCluster) WatchDmChannels(ctx context.Context, nodeID int64, req *querypb.WatchDmChannelsRequest) (*commonpb.Status, error) {
 	var status *commonpb.Status
 	var err error
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.WatchDmChannelsRequest)
+		req.Base.TargetID = nodeID
 		status, err = cli.WatchDmChannels(ctx, req)
 	})
 	if err1 != nil {
@@ -134,7 +162,9 @@ func (c *QueryCluster) WatchDmChannels(ctx context.Context, nodeID int64, req *q
 func (c *QueryCluster) UnsubDmChannel(ctx context.Context, nodeID int64, req *querypb.UnsubDmChannelRequest) (*commonpb.Status, error) {
 	var status *commonpb.Status
 	var err error
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.UnsubDmChannelRequest)
+		req.Base.TargetID = nodeID
 		status, err = cli.UnsubDmChannel(ctx, req)
 	})
 	if err1 != nil {
@@ -146,8 +176,38 @@ func (c *QueryCluster) UnsubDmChannel(ctx context.Context, nodeID int64, req *qu
 func (c *QueryCluster) ReleaseSegments(ctx context.Context, nodeID int64, req *querypb.ReleaseSegmentsRequest) (*commonpb.Status, error) {
 	var status *commonpb.Status
 	var err error
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.ReleaseSegmentsRequest)
+		req.Base.TargetID = nodeID
 		status, err = cli.ReleaseSegments(ctx, req)
+	})
+	if err1 != nil {
+		return nil, err1
+	}
+	return status, err
+}
+
+func (c *QueryCluster) LoadPartitions(ctx context.Context, nodeID int64, req *querypb.LoadPartitionsRequest) (*commonpb.Status, error) {
+	var status *commonpb.Status
+	var err error
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.LoadPartitionsRequest)
+		req.Base.TargetID = nodeID
+		status, err = cli.LoadPartitions(ctx, req)
+	})
+	if err1 != nil {
+		return nil, err1
+	}
+	return status, err
+}
+
+func (c *QueryCluster) ReleasePartitions(ctx context.Context, nodeID int64, req *querypb.ReleasePartitionsRequest) (*commonpb.Status, error) {
+	var status *commonpb.Status
+	var err error
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.ReleasePartitionsRequest)
+		req.Base.TargetID = nodeID
+		status, err = cli.ReleasePartitions(ctx, req)
 	})
 	if err1 != nil {
 		return nil, err1
@@ -158,7 +218,11 @@ func (c *QueryCluster) ReleaseSegments(ctx context.Context, nodeID int64, req *q
 func (c *QueryCluster) GetDataDistribution(ctx context.Context, nodeID int64, req *querypb.GetDataDistributionRequest) (*querypb.GetDataDistributionResponse, error) {
 	var resp *querypb.GetDataDistributionResponse
 	var err error
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.GetDataDistributionRequest)
+		req.Base = &commonpb.MsgBase{
+			TargetID: nodeID,
+		}
 		resp, err = cli.GetDataDistribution(ctx, req)
 	})
 	if err1 != nil {
@@ -172,7 +236,7 @@ func (c *QueryCluster) GetMetrics(ctx context.Context, nodeID int64, req *milvus
 		resp *milvuspb.GetMetricsResponse
 		err  error
 	)
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
 		resp, err = cli.GetMetrics(ctx, req)
 	})
 	if err1 != nil {
@@ -186,7 +250,9 @@ func (c *QueryCluster) SyncDistribution(ctx context.Context, nodeID int64, req *
 		resp *commonpb.Status
 		err  error
 	)
-	err1 := c.send(ctx, nodeID, func(cli *grpcquerynodeclient.Client) {
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		req := proto.Clone(req).(*querypb.SyncDistributionRequest)
+		req.Base.TargetID = nodeID
 		resp, err = cli.SyncDistribution(ctx, req)
 	})
 	if err1 != nil {
@@ -195,13 +261,117 @@ func (c *QueryCluster) SyncDistribution(ctx context.Context, nodeID int64, req *
 	return resp, err
 }
 
-func (c *QueryCluster) send(ctx context.Context, nodeID int64, fn func(cli *grpcquerynodeclient.Client)) error {
+func (c *QueryCluster) GetComponentStates(ctx context.Context, nodeID int64) (*milvuspb.ComponentStates, error) {
+	var (
+		resp *milvuspb.ComponentStates
+		err  error
+	)
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
+	})
+	if err1 != nil {
+		return nil, err1
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) DropIndex(ctx context.Context, nodeID int64, req *querypb.DropIndexRequest) (*commonpb.Status, error) {
+	var (
+		resp *commonpb.Status
+		err  error
+	)
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.DropIndex(ctx, req)
+	})
+	if err1 != nil {
+		return nil, err1
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) RunAnalyzer(ctx context.Context, nodeID int64, req *querypb.RunAnalyzerRequest) (*milvuspb.RunAnalyzerResponse, error) {
+	var (
+		resp *milvuspb.RunAnalyzerResponse
+		err  error
+	)
+
+	sendErr := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.RunAnalyzer(ctx, req)
+	})
+	if sendErr != nil {
+		return nil, sendErr
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) ValidateAnalyzer(ctx context.Context, nodeID int64, req *querypb.ValidateAnalyzerRequest) (*querypb.ValidateAnalyzerResponse, error) {
+	var (
+		resp *querypb.ValidateAnalyzerResponse
+		err  error
+	)
+
+	sendErr := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.ValidateAnalyzer(ctx, req)
+	})
+	if sendErr != nil {
+		return nil, sendErr
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) SyncFileResource(ctx context.Context, nodeID int64, req *internalpb.SyncFileResourceRequest) (*commonpb.Status, error) {
+	var (
+		resp *commonpb.Status
+		err  error
+	)
+
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.SyncFileResource(ctx, req)
+	})
+	if err1 != nil {
+		return nil, err1
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) ClearReadTaskQueue(ctx context.Context, nodeID int64, req *internalpb.ClearReadTaskQueueRequest) (*internalpb.ClearReadTaskQueueResponse, error) {
+	var (
+		resp *internalpb.ClearReadTaskQueueResponse
+		err  error
+	)
+
+	req = proto.Clone(req).(*internalpb.ClearReadTaskQueueRequest)
+	err1 := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.ClearReadTaskQueue(ctx, req)
+	})
+	if err1 != nil {
+		return nil, err1
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) ComputePhraseMatchSlop(ctx context.Context, nodeID int64, req *querypb.ComputePhraseMatchSlopRequest) (*querypb.ComputePhraseMatchSlopResponse, error) {
+	var (
+		resp *querypb.ComputePhraseMatchSlopResponse
+		err  error
+	)
+
+	sendErr := c.send(ctx, nodeID, func(cli types.QueryNodeClient) {
+		resp, err = cli.ComputePhraseMatchSlop(ctx, req)
+	})
+	if sendErr != nil {
+		return nil, sendErr
+	}
+	return resp, err
+}
+
+func (c *QueryCluster) send(ctx context.Context, nodeID int64, fn func(cli types.QueryNodeClient)) error {
 	node := c.nodeManager.Get(nodeID)
 	if node == nil {
 		return WrapErrNodeNotFound(nodeID)
 	}
 
-	cli, err := c.clients.getOrCreate(ctx, node)
+	cli, err := c.getOrCreate(ctx, node)
 	if err != nil {
 		return err
 	}
@@ -212,7 +382,8 @@ func (c *QueryCluster) send(ctx context.Context, nodeID int64, fn func(cli *grpc
 
 type clients struct {
 	sync.RWMutex
-	clients map[int64]*grpcquerynodeclient.Client // nodeID -> client
+	clients          map[int64]types.QueryNodeClient // nodeID -> client
+	queryNodeCreator QueryNodeCreator
 }
 
 func (c *clients) getAllNodeIDs() []int64 {
@@ -226,47 +397,36 @@ func (c *clients) getAllNodeIDs() []int64 {
 	return ret
 }
 
-func (c *clients) getOrCreate(ctx context.Context, node *NodeInfo) (*grpcquerynodeclient.Client, error) {
+func (c *clients) getOrCreate(ctx context.Context, node *NodeInfo) (types.QueryNodeClient, error) {
 	if cli := c.get(node.ID()); cli != nil {
 		return cli, nil
 	}
-
-	newCli, err := createNewClient(context.Background(), node.Addr())
-	if err != nil {
-		return nil, err
-	}
-	c.set(node.ID(), newCli)
-	return c.get(node.ID()), nil
+	return c.create(node)
 }
 
-func createNewClient(ctx context.Context, addr string) (*grpcquerynodeclient.Client, error) {
-	newCli, err := grpcquerynodeclient.NewClient(ctx, addr)
+func createNewClient(ctx context.Context, addr string, nodeID int64, queryNodeCreator QueryNodeCreator) (types.QueryNodeClient, error) {
+	newCli, err := queryNodeCreator(ctx, addr, nodeID)
 	if err != nil {
-		return nil, err
-	}
-	if err = newCli.Init(); err != nil {
-		return nil, err
-	}
-	if err = newCli.Start(); err != nil {
 		return nil, err
 	}
 	return newCli, nil
 }
 
-func (c *clients) set(nodeID int64, client *grpcquerynodeclient.Client) {
+func (c *clients) create(node *NodeInfo) (types.QueryNodeClient, error) {
 	c.Lock()
 	defer c.Unlock()
-	if _, ok := c.clients[nodeID]; ok {
-		if err := client.Stop(); err != nil {
-			log.Warn("close new created client error", zap.Int64("nodeID", nodeID), zap.Error(err))
-			return
-		}
-		log.Info("use old client", zap.Int64("nodeID", nodeID))
+	if cli, ok := c.clients[node.ID()]; ok {
+		return cli, nil
 	}
-	c.clients[nodeID] = client
+	cli, err := createNewClient(context.Background(), node.Addr(), node.ID(), c.queryNodeCreator)
+	if err != nil {
+		return nil, err
+	}
+	c.clients[node.ID()] = cli
+	return cli, nil
 }
 
-func (c *clients) get(nodeID int64) *grpcquerynodeclient.Client {
+func (c *clients) get(nodeID int64) types.QueryNodeClient {
 	c.RLock()
 	defer c.RUnlock()
 	return c.clients[nodeID]
@@ -276,7 +436,7 @@ func (c *clients) close(nodeID int64) {
 	c.Lock()
 	defer c.Unlock()
 	if cli, ok := c.clients[nodeID]; ok {
-		if err := cli.Stop(); err != nil {
+		if err := cli.Close(); err != nil {
 			log.Warn("error occurred during stopping client", zap.Int64("nodeID", nodeID), zap.Error(err))
 		}
 		delete(c.clients, nodeID)
@@ -287,12 +447,15 @@ func (c *clients) closeAll() {
 	c.Lock()
 	defer c.Unlock()
 	for nodeID, cli := range c.clients {
-		if err := cli.Stop(); err != nil {
+		if err := cli.Close(); err != nil {
 			log.Warn("error occurred during stopping client", zap.Int64("nodeID", nodeID), zap.Error(err))
 		}
 	}
 }
 
-func newClients() *clients {
-	return &clients{clients: make(map[int64]*grpcquerynodeclient.Client)}
+func newClients(queryNodeCreator QueryNodeCreator) *clients {
+	return &clients{
+		clients:          make(map[int64]types.QueryNodeClient),
+		queryNodeCreator: queryNodeCreator,
+	}
 }

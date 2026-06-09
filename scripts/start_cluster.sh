@@ -21,31 +21,24 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
   if test -f "$LIBJEMALLOC"; then
     #echo "Found $LIBJEMALLOC"
     export LD_PRELOAD="$LIBJEMALLOC"
+    export MALLOC_CONF=background_thread:true
   else
     echo "WARN: Cannot find $LIBJEMALLOC"
   fi
+  export LD_LIBRARY_PATH=$PWD/internal/core/output/lib/:$LD_LIBRARY_PATH
 fi
 
-echo "Starting rootcoord..."
-nohup ./bin/milvus run rootcoord > /tmp/rootcoord.log 2>&1 &
-
-echo "Starting datacoord..."
-nohup ./bin/milvus run datacoord > /tmp/datacoord.log 2>&1 &
+echo "Starting mixcoord..."
+nohup ./bin/milvus run mixcoord --run-with-subprocess >/tmp/mixcoord.log 2>&1 &
 
 echo "Starting datanode..."
-nohup ./bin/milvus run datanode > /tmp/datanode.log 2>&1 &
-
-echo "Starting proxy..."
-nohup ./bin/milvus run proxy > /tmp/proxy.log 2>&1 &
-
-echo "Starting querycoord..."
-nohup ./bin/milvus run querycoord > /tmp/querycoord.log 2>&1 &
+nohup ./bin/milvus run datanode --run-with-subprocess >/tmp/datanode.log 2>&1 &
 
 echo "Starting querynode..."
-nohup ./bin/milvus run querynode > /tmp/querynode.log 2>&1 &
+nohup ./bin/milvus run querynode --run-with-subprocess >/tmp/querynode.log 2>&1 &
 
-echo "Starting indexcoord..."
-nohup ./bin/milvus run indexcoord > /tmp/indexcoord.log 2>&1 &
+echo "Starting streamingnode..."
+nohup ./bin/milvus run streamingnode --run-with-subprocess >/tmp/streamingnode.log 2>&1 &
 
-echo "Starting indexnode..."
-nohup ./bin/milvus run indexnode > /tmp/indexnode.log 2>&1 &
+echo "Starting proxy..."
+nohup ./bin/milvus run proxy --run-with-subprocess >/tmp/proxy.log 2>&1 &

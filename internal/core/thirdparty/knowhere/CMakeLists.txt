@@ -11,79 +11,99 @@
 # or implied. See the License for the specific language governing permissions and limitations under the License.
 #-------------------------------------------------------------------------------
 
-set( KNOWHERE_VERSION v1.3.0 )
-set( KNOWHERE_SOURCE_MD5 "e43de07b5a5603bda1e340cc7309c115")
+# Update KNOWHERE_VERSION for the first occurrence
+milvus_add_pkg_config("knowhere")
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY INCLUDE_DIRECTORIES "")
+set( KNOWHERE_VERSION v3.0.3 )
+set( GIT_REPOSITORY  "https://github.com/zilliztech/knowhere.git")
 
-if ( DEFINED ENV{MILVUS_KNOWHERE_URL} )
-    set( KNOWHERE_SOURCE_URL "$ENV{MILVUS_KNOWHERE_URL}" )
+message(STATUS "Knowhere repo: ${GIT_REPOSITORY}")
+message(STATUS "Knowhere version: ${KNOWHERE_VERSION}")
+
+message(STATUS "Building knowhere-${KNOWHERE_VERSION} from source")
+message(STATUS ${CMAKE_BUILD_TYPE})
+
+if ( BUILD_DISK_ANN STREQUAL "ON" )
+    set(WITH_DISKANN ON CACHE BOOL "" FORCE )
 else ()
-    set( KNOWHERE_SOURCE_URL
-        "https://github.com/milvus-io/knowhere/archive/refs/tags/${KNOWHERE_VERSION}.tar.gz" )
+    set(WITH_DISKANN OFF CACHE BOOL "" FORCE )
 endif ()
 
-macro(build_knowhere)
-    message(STATUS "Building knowhere-${KNOWHERE_VERSION} from source")
-    set (KNOWHERE_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX})
+if ( INDEX_ENGINE STREQUAL "cardinal" )
+    set(WITH_CARDINAL ON CACHE BOOL "" FORCE )
+else ()
+    set(WITH_CARDINAL OFF CACHE BOOL "" FORCE )
+endif()
 
-    set(KNOWHERE_CMAKE_ARGS
-            ${EP_COMMON_CMAKE_ARGS}
-            -DCMAKE_BUILD_TYPE=Release
-            -DCMAKE_INSTALL_PREFIX=${KNOWHERE_INSTALL_PREFIX}
-            -DKNOWHERE_WITH_DISKANN=false
-            )
+if ( MILVUS_GPU_VERSION STREQUAL "ON" )
+    set(WITH_CUVS ON CACHE BOOL "" FORCE )
+    set(raft_DIR "${FETCHCONTENT_BASE_DIR}/raft-build" CACHE PATH "Path to raft build directory" FORCE)
+    set(rmm_DIR "${FETCHCONTENT_BASE_DIR}/rmm-build" CACHE PATH "Path to rmm build directory" FORCE)
+endif ()
 
-    externalproject_add(knowhere_ep
-            #GIT_REPOSITORY  "https://github.com/milvus-io/knowhere.git"
-            #GIT_TAG         main
-            URL             ${KNOWHERE_SOURCE_URL}
-            URL_MD5         ${KNOWHERE_SOURCE_MD5}
-            CMAKE_ARGS      ${KNOWHERE_CMAKE_ARGS}
-            BUILD_COMMAND   ${MAKE} ${MAKE_BUILD_ARGS}
-            PREFIX          ${CMAKE_BINARY_DIR}/3rdparty_download/knowhere-subbuild
-            BINARY_DIR      knowhere-bin
-            INSTALL_DIR     ${KNOWHERE_INSTALL_PREFIX}
-            )
+if ( WITH_SVS STREQUAL "ON" )
+    set(WITH_SVS ON CACHE BOOL "" FORCE )
+else ()
+    set(WITH_SVS OFF CACHE BOOL "" FORCE )
+endif()
 
-    ExternalProject_Get_Property(knowhere_ep INSTALL_DIR)
-    message(STATUS ${INSTALL_DIR})
+# Conan 2.x: CMAKE_PREFIX_PATH is set by conan_toolchain.cmake
+FetchContent_Declare(
+        knowhere
+        GIT_REPOSITORY  ${GIT_REPOSITORY}
+        GIT_TAG         ${KNOWHERE_VERSION}
+        SOURCE_DIR      ${CMAKE_CURRENT_BINARY_DIR}/knowhere-src
+        BINARY_DIR      ${CMAKE_CURRENT_BINARY_DIR}/knowhere-build
+        DOWNLOAD_DIR    ${THIRDPARTY_DOWNLOAD_PATH} )
 
-    if( NOT IS_DIRECTORY ${INSTALL_DIR}/include )
-        file( MAKE_DIRECTORY "${INSTALL_DIR}/include" )
-    endif()
+FetchContent_GetProperties( knowhere )
+if ( NOT knowhere_POPULATED )
+    FetchContent_Populate( knowhere )
 
-    add_library(knowhere SHARED IMPORTED)
+    # Adding the following target:
+    # knowhere
+    add_subdirectory( ${knowhere_SOURCE_DIR}
+                      ${knowhere_BINARY_DIR} )
+endif()
 
-    if (MSYS)
-        set_target_properties( knowhere
-            PROPERTIES
-                IMPORTED_GLOBAL     TRUE
-                IMPORTED_IMPLIB     ${INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}knowhere${CMAKE_SHARED_LIBRARY_SUFFIX}.a
-                INTERFACE_INCLUDE_DIRECTORIES ${INSTALL_DIR}/${CMAKE_INSTALL_INCLUDEDIR})
-    else ()
-        set_target_properties( knowhere
-                PROPERTIES
-                IMPORTED_GLOBAL     TRUE
-                IMPORTED_LOCATION   ${INSTALL_DIR}/${CMAKE_INSTALL_LIBDIR}/${CMAKE_SHARED_LIBRARY_PREFIX}knowhere${CMAKE_SHARED_LIBRARY_SUFFIX}
-                INTERFACE_INCLUDE_DIRECTORIES ${INSTALL_DIR}/${CMAKE_INSTALL_INCLUDEDIR})
-    endif ()
-
-    add_dependencies(knowhere knowhere_ep)
-endmacro()
-
-set(KNOWHERE_SOURCE "AUTO")
-if (KNOWHERE_SOURCE STREQUAL "AUTO")
-    find_package(knowhere)
-    message(STATUS "knowhere libraries: ${KNOWHERE_LIBRARIES}")
-    message(STATUS "knowhere found: ${KNOWHERE_FOUND}")
-
-    if (KNOWHERE_FOUND)
-        add_library(knowhere)
+# Install the SVS runtime shared library alongside libknowhere.so so that
+# the Go linker (and the final binary at runtime) can find it.
+# svs_SOURCE_DIR is set inside knowhere's subdirectory scope and does not
+# propagate here, so we derive the path from FETCHCONTENT_BASE_DIR which
+# is in the CMake cache (set by internal/core/CMakeLists.txt).
+if ( WITH_SVS STREQUAL "ON" )
+    set( _SVS_LIB_DIR "${FETCHCONTENT_BASE_DIR}/svs-src/lib" )
+    if ( EXISTS "${_SVS_LIB_DIR}" )
+        install(DIRECTORY ${_SVS_LIB_DIR}/
+                DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}
+                FILES_MATCHING PATTERN "libsvs_runtime.so*")
     else()
-        build_knowhere()
+        message(WARNING "SVS enabled but ${_SVS_LIB_DIR} not found \u2014 libsvs_runtime.so will not be installed")
     endif()
-elseif (KNOWHERE_SOURCE STREQUAL "BUNDLED")
-    build_knowhere()
-elseif (KNOWHERE_SOURCE STREQUAL "SYSTEM")
-    find_package(knowhere REQUIRED)
-    add_library(knowhere)
-endif ()
+endif()
+
+if ( WITH_CUVS STREQUAL "ON" )
+    set( _RMM_LIB_DIR "${FETCHCONTENT_BASE_DIR}/rmm-build" )
+    if ( EXISTS "${_RMM_LIB_DIR}" )
+        install(DIRECTORY ${_RMM_LIB_DIR}/
+                DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}
+                FILES_MATCHING PATTERN "librmm.so*")
+    else()
+        message(WARNING "cuVS enabled but ${_RMM_LIB_DIR} not found \u2014 librmm.so will not be installed")
+    endif()
+
+    set( _RAPIDS_LOGGER_LIB_DIR "${FETCHCONTENT_BASE_DIR}/rapids_logger-build" )
+    if ( EXISTS "${_RAPIDS_LOGGER_LIB_DIR}" )
+        install(DIRECTORY ${_RAPIDS_LOGGER_LIB_DIR}/
+                DESTINATION ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}
+                FILES_MATCHING PATTERN "librapids_logger.so*")
+    else()
+        message(WARNING "cuVS enabled but ${_RAPIDS_LOGGER_LIB_DIR} not found \u2014 librapids_logger.so will not be installed")
+    endif()
+endif()
+
+# get prometheus COMPILE_OPTIONS
+get_property( var DIRECTORY "${knowhere_SOURCE_DIR}" PROPERTY COMPILE_OPTIONS )
+message( STATUS "knowhere src compile options: ${var}" )
+
+set( KNOWHERE_INCLUDE_DIR ${knowhere_SOURCE_DIR}/include CACHE INTERNAL "Path to knowhere include directory" )

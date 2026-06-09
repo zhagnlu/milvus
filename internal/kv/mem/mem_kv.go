@@ -17,13 +17,21 @@
 package memkv
 
 import (
+	"context"
 	"strings"
 	"sync"
 
-	"github.com/milvus-io/milvus/internal/common"
-
 	"github.com/google/btree"
+	"github.com/samber/lo"
+
+	"github.com/milvus-io/milvus/pkg/v3/kv"
+	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+// implementation assertion
+var _ kv.TxnKV = (*MemoryKV)(nil)
 
 // MemoryKV implements BaseKv interface and relies on underling btree.BTree.
 // As its name implies, all data is stored in memory.
@@ -77,29 +85,29 @@ func (s memoryKVItem) Less(than btree.Item) bool {
 }
 
 // Load loads an object with @key.
-func (kv *MemoryKV) Load(key string) (string, error) {
+func (kv *MemoryKV) Load(ctx context.Context, key string) (string, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 	item := kv.tree.Get(memoryKVItem{key: key})
 	if item == nil {
-		return "", common.NewKeyNotExistError(key)
+		return "", merr.WrapErrIoKeyNotFound(key)
 	}
 	return item.(memoryKVItem).value.String(), nil
 }
 
 // LoadBytes loads an object with @key.
-func (kv *MemoryKV) LoadBytes(key string) ([]byte, error) {
+func (kv *MemoryKV) LoadBytes(ctx context.Context, key string) ([]byte, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 	item := kv.tree.Get(memoryKVItem{key: key})
 	if item == nil {
-		return []byte{}, common.NewKeyNotExistError(key)
+		return nil, merr.WrapErrIoKeyNotFound(key)
 	}
 	return item.(memoryKVItem).value.ByteSlice(), nil
 }
 
 // Get return value if key exists, or return empty string
-func (kv *MemoryKV) Get(key string) string {
+func (kv *MemoryKV) Get(ctx context.Context, key string) string {
 	kv.RLock()
 	defer kv.RUnlock()
 	item := kv.tree.Get(memoryKVItem{key: key})
@@ -110,7 +118,7 @@ func (kv *MemoryKV) Get(key string) string {
 }
 
 // LoadBytesWithDefault loads an object with @key. If the object does not exist, @defaultValue will be returned.
-func (kv *MemoryKV) LoadBytesWithDefault(key string, defaultValue []byte) []byte {
+func (kv *MemoryKV) LoadBytesWithDefault(ctx context.Context, key string, defaultValue []byte) []byte {
 	kv.RLock()
 	defer kv.RUnlock()
 	item := kv.tree.Get(memoryKVItem{key: key})
@@ -121,7 +129,7 @@ func (kv *MemoryKV) LoadBytesWithDefault(key string, defaultValue []byte) []byte
 }
 
 // LoadBytesRange loads objects with range @startKey to @endKey with @limit number of objects.
-func (kv *MemoryKV) LoadBytesRange(key, endKey string, limit int) ([]string, [][]byte, error) {
+func (kv *MemoryKV) LoadBytesRange(ctx context.Context, key, endKey string, limit int) ([]string, [][]byte, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 	keys := make([]string, 0, limit)
@@ -138,7 +146,7 @@ func (kv *MemoryKV) LoadBytesRange(key, endKey string, limit int) ([]string, [][
 }
 
 // Save object with @key to btree. Object value is @value.
-func (kv *MemoryKV) Save(key, value string) error {
+func (kv *MemoryKV) Save(ctx context.Context, key, value string) error {
 	kv.Lock()
 	defer kv.Unlock()
 	kv.tree.ReplaceOrInsert(memoryKVItem{key, StringValue(value)})
@@ -146,7 +154,7 @@ func (kv *MemoryKV) Save(key, value string) error {
 }
 
 // SaveBytes object with @key to btree. Object value is @value.
-func (kv *MemoryKV) SaveBytes(key string, value []byte) error {
+func (kv *MemoryKV) SaveBytes(ctx context.Context, key string, value []byte) error {
 	kv.Lock()
 	defer kv.Unlock()
 	kv.tree.ReplaceOrInsert(memoryKVItem{key, ByteSliceValue(value)})
@@ -154,7 +162,7 @@ func (kv *MemoryKV) SaveBytes(key string, value []byte) error {
 }
 
 // Remove deletes an object with @key.
-func (kv *MemoryKV) Remove(key string) error {
+func (kv *MemoryKV) Remove(ctx context.Context, key string) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -163,7 +171,7 @@ func (kv *MemoryKV) Remove(key string) error {
 }
 
 // MultiLoad loads objects with multi @keys.
-func (kv *MemoryKV) MultiLoad(keys []string) ([]string, error) {
+func (kv *MemoryKV) MultiLoad(ctx context.Context, keys []string) ([]string, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 	result := make([]string, 0, len(keys))
@@ -175,7 +183,7 @@ func (kv *MemoryKV) MultiLoad(keys []string) ([]string, error) {
 }
 
 // MultiLoadBytes loads objects with multi @keys.
-func (kv *MemoryKV) MultiLoadBytes(keys []string) ([][]byte, error) {
+func (kv *MemoryKV) MultiLoadBytes(ctx context.Context, keys []string) ([][]byte, error) {
 	kv.RLock()
 	defer kv.RUnlock()
 	result := make([][]byte, 0, len(keys))
@@ -187,7 +195,7 @@ func (kv *MemoryKV) MultiLoadBytes(keys []string) ([][]byte, error) {
 }
 
 // MultiSave saves given key-value pairs in MemoryKV atomicly.
-func (kv *MemoryKV) MultiSave(kvs map[string]string) error {
+func (kv *MemoryKV) MultiSave(ctx context.Context, kvs map[string]string) error {
 	kv.Lock()
 	defer kv.Unlock()
 	for key, value := range kvs {
@@ -197,7 +205,7 @@ func (kv *MemoryKV) MultiSave(kvs map[string]string) error {
 }
 
 // MultiSaveBytes saves given key-value pairs in MemoryKV atomicly.
-func (kv *MemoryKV) MultiSaveBytes(kvs map[string][]byte) error {
+func (kv *MemoryKV) MultiSaveBytes(ctx context.Context, kvs map[string][]byte) error {
 	kv.Lock()
 	defer kv.Unlock()
 	for key, value := range kvs {
@@ -207,7 +215,7 @@ func (kv *MemoryKV) MultiSaveBytes(kvs map[string][]byte) error {
 }
 
 // MultiRemove removes given @keys in MemoryKV atomicly.
-func (kv *MemoryKV) MultiRemove(keys []string) error {
+func (kv *MemoryKV) MultiRemove(ctx context.Context, keys []string) error {
 	kv.Lock()
 	defer kv.Unlock()
 	for _, key := range keys {
@@ -217,20 +225,29 @@ func (kv *MemoryKV) MultiRemove(keys []string) error {
 }
 
 // MultiSaveAndRemove saves and removes given key-value pairs in MemoryKV atomicly.
-func (kv *MemoryKV) MultiSaveAndRemove(saves map[string]string, removals []string) error {
+func (kv *MemoryKV) MultiSaveAndRemove(ctx context.Context, saves map[string]string, removals []string, preds ...predicates.Predicate) error {
+	if len(preds) > 0 {
+		return merr.WrapErrServiceUnavailable("predicates not supported")
+	}
 	kv.Lock()
 	defer kv.Unlock()
-	for key, value := range saves {
-		kv.tree.ReplaceOrInsert(memoryKVItem{key, StringValue(value)})
-	}
+	// use complement to remove keys that are not in saves
+	saveKeys := typeutil.NewSet(lo.Keys(saves)...)
+	removeKeys := typeutil.NewSet(removals...)
+	removals = removeKeys.Complement(saveKeys).Collect()
 	for _, key := range removals {
 		kv.tree.Delete(memoryKVItem{key: key})
 	}
+
+	for key, value := range saves {
+		kv.tree.ReplaceOrInsert(memoryKVItem{key, StringValue(value)})
+	}
+
 	return nil
 }
 
 // MultiSaveBytesAndRemove saves and removes given key-value pairs in MemoryKV atomicly.
-func (kv *MemoryKV) MultiSaveBytesAndRemove(saves map[string][]byte, removals []string) error {
+func (kv *MemoryKV) MultiSaveBytesAndRemove(ctx context.Context, saves map[string][]byte, removals []string) error {
 	kv.Lock()
 	defer kv.Unlock()
 	for key, value := range saves {
@@ -243,7 +260,7 @@ func (kv *MemoryKV) MultiSaveBytesAndRemove(saves map[string][]byte, removals []
 }
 
 // LoadWithPrefix returns all keys & values with given prefix.
-func (kv *MemoryKV) LoadWithPrefix(key string) ([]string, []string, error) {
+func (kv *MemoryKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -261,7 +278,7 @@ func (kv *MemoryKV) LoadWithPrefix(key string) ([]string, []string, error) {
 }
 
 // LoadBytesWithPrefix returns all keys & values with given prefix.
-func (kv *MemoryKV) LoadBytesWithPrefix(key string) ([]string, [][]byte, error) {
+func (kv *MemoryKV) LoadBytesWithPrefix(ctx context.Context, key string) ([]string, [][]byte, error) {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -282,13 +299,11 @@ func (kv *MemoryKV) LoadBytesWithPrefix(key string) ([]string, [][]byte, error) 
 func (kv *MemoryKV) Close() {
 }
 
-// MultiRemoveWithPrefix not implemented
-func (kv *MemoryKV) MultiRemoveWithPrefix(keys []string) error {
-	panic("not implement")
-}
-
 // MultiSaveAndRemoveWithPrefix saves key-value pairs in @saves, & remove key with prefix in @removals in MemoryKV atomically.
-func (kv *MemoryKV) MultiSaveAndRemoveWithPrefix(saves map[string]string, removals []string) error {
+func (kv *MemoryKV) MultiSaveAndRemoveWithPrefix(ctx context.Context, saves map[string]string, removals []string, preds ...predicates.Predicate) error {
+	if len(preds) > 0 {
+		return merr.WrapErrServiceUnavailable("predicates not supported")
+	}
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -312,7 +327,7 @@ func (kv *MemoryKV) MultiSaveAndRemoveWithPrefix(saves map[string]string, remova
 }
 
 // MultiSaveBytesAndRemoveWithPrefix saves key-value pairs in @saves, & remove key with prefix in @removals in MemoryKV atomically.
-func (kv *MemoryKV) MultiSaveBytesAndRemoveWithPrefix(saves map[string][]byte, removals []string) error {
+func (kv *MemoryKV) MultiSaveBytesAndRemoveWithPrefix(ctx context.Context, saves map[string][]byte, removals []string) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -336,7 +351,7 @@ func (kv *MemoryKV) MultiSaveBytesAndRemoveWithPrefix(saves map[string][]byte, r
 }
 
 // RemoveWithPrefix remove key of given prefix in MemoryKV atomicly.
-func (kv *MemoryKV) RemoveWithPrefix(key string) error {
+func (kv *MemoryKV) RemoveWithPrefix(ctx context.Context, key string) error {
 	kv.Lock()
 	defer kv.Unlock()
 
@@ -352,4 +367,23 @@ func (kv *MemoryKV) RemoveWithPrefix(key string) error {
 		kv.tree.Delete(item)
 	}
 	return nil
+}
+
+func (kv *MemoryKV) Has(ctx context.Context, key string) (bool, error) {
+	kv.Lock()
+	defer kv.Unlock()
+	return kv.tree.Has(memoryKVItem{key: key}), nil
+}
+
+func (kv *MemoryKV) HasPrefix(ctx context.Context, prefix string) (bool, error) {
+	kv.Lock()
+	defer kv.Unlock()
+
+	var has bool
+	kv.tree.AscendGreaterOrEqual(memoryKVItem{key: prefix}, func(i btree.Item) bool {
+		has = strings.HasPrefix(i.(memoryKVItem).key, prefix)
+		return false
+	})
+
+	return has, nil
 }

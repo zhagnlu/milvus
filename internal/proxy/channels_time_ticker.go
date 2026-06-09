@@ -23,7 +23,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // ticker can update ts only when the minTs are greater than the ts of ticker, we can use maxTs to update current later
@@ -90,7 +91,7 @@ func (ticker *channelsTimeTickerImpl) initCurrents(current Timestamp) {
 }
 
 func (ticker *channelsTimeTickerImpl) tick() error {
-	now, err := ticker.tso.AllocOne()
+	now, err := ticker.tso.AllocOne(ticker.ctx)
 	if err != nil {
 		log.Warn("Proxy channelsTimeTickerImpl failed to get ts from tso", zap.Error(err))
 		return err
@@ -98,7 +99,7 @@ func (ticker *channelsTimeTickerImpl) tick() error {
 
 	stats, err2 := ticker.getStatisticsFunc()
 	if err2 != nil {
-		log.Debug("Proxy channelsTimeTickerImpl failed to getStatistics", zap.Error(err2))
+		log.Warn("failed to get tt statistics", zap.Error(err))
 		return nil
 	}
 
@@ -118,7 +119,7 @@ func (ticker *channelsTimeTickerImpl) tick() error {
 		} else {
 			if stat.minTs > current {
 				ticker.minTsStatistics[pchan] = stat.minTs - 1
-				next := now + Timestamp(Params.ProxyCfg.TimeTickInterval)
+				next := now + Timestamp(Params.ProxyCfg.TimeTickInterval.GetAsDuration(time.Millisecond))
 				if next > stat.maxTs {
 					next = stat.maxTs
 				}
@@ -132,6 +133,11 @@ func (ticker *channelsTimeTickerImpl) tick() error {
 	}
 
 	for pchan, value := range stats {
+		if value.minTs == typeutil.ZeroTimestamp {
+			log.Warn("channelsTimeTickerImpl.tick, stats contains physical channel which min ts is zero ",
+				zap.String("pchan", pchan))
+			continue
+		}
 		_, ok := ticker.currents[pchan]
 		if !ok {
 			ticker.minTsStatistics[pchan] = value.minTs - 1
@@ -168,7 +174,7 @@ func (ticker *channelsTimeTickerImpl) tickLoop() {
 func (ticker *channelsTimeTickerImpl) start() error {
 	ticker.initStatistics()
 
-	current, err := ticker.tso.AllocOne()
+	current, err := ticker.tso.AllocOne(ticker.ctx)
 	if err != nil {
 		return err
 	}
@@ -213,7 +219,6 @@ func newChannelsTimeTicker(
 	getStatisticsFunc getPChanStatisticsFuncType,
 	tso tsoAllocator,
 ) *channelsTimeTickerImpl {
-
 	ctx1, cancel := context.WithCancel(ctx)
 
 	ticker := &channelsTimeTickerImpl{

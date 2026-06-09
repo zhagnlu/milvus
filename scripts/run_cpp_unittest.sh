@@ -35,11 +35,31 @@ if [ -d "${CORE_INSTALL_PREFIX}/lib" ]; then
     export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${CORE_INSTALL_PREFIX}/lib
 fi
 
+# Suppress known LeakSanitizer false positives from uninstrumented shared libraries
+LSAN_SUPPRESSIONS="${MILVUS_CORE_DIR}/lsan_suppressions.txt"
+if [ -f "${LSAN_SUPPRESSIONS}" ]; then
+    export LSAN_OPTIONS="suppressions=${LSAN_SUPPRESSIONS}"
+fi
+
 # run unittest
+arg="$1"
+filter_value="${arg#*=}"
+
 for UNITTEST_DIR in "${UNITTEST_DIRS[@]}"; do
   if [ ! -d "${UNITTEST_DIR}" ]; then
     echo "The unittest folder does not exist!"
     exit 1
+  fi
+
+
+  if [[ $filter_value ]]; then
+    if [ $filter_value == "--gtest_list_tests" ]; then
+	  ${UNITTEST_DIR}/all_tests $filter_value
+	  exit 0
+    else
+	  ${UNITTEST_DIR}/all_tests --gtest_filter=$filter_value
+	  exit 0
+    fi
   fi
 
   echo "Running all unittest ..."
@@ -48,6 +68,22 @@ for UNITTEST_DIR in "${UNITTEST_DIRS[@]}"; do
       echo ${UNITTEST_DIR}/all_tests "run failed"
       exit 1
   fi
+  if [ -f "${UNITTEST_DIR}/dynamic_simd_test" ]; then
+      echo "Running dynamic simd test"
+      ${UNITTEST_DIR}/dynamic_simd_test
+      if [ $? -ne 0 ]; then 
+        echo ${UNITTEST_DIR}/dynamic_simd_test "run failed"
+        exit 1
+      fi
+  fi
+
+  echo "Running json_stats unittest"
+  ${UNITTEST_DIR}/json_stats_test
+  if [ $? -ne 0 ]; then
+      echo ${UNITTEST_DIR}/json_stats_test "run failed"
+      exit 1
+  fi
+
 done
 
 # run cwrapper unittest

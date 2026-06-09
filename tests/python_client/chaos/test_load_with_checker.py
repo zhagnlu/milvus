@@ -4,17 +4,17 @@ import json
 from time import sleep
 from minio import Minio
 from pymilvus import connections
-from chaos.checker import (CreateChecker,
+from chaos.checker import (CollectionCreateChecker,
                            InsertChecker,
                            FlushChecker,
                            SearchChecker,
                            QueryChecker,
-                           IndexChecker,
+                           IndexCreateChecker,
                            DeleteChecker,
                            CompactChecker,
-                           DropChecker,
+                           CollectionDropChecker,
                            LoadBalanceChecker,
-                           BulkLoadChecker,
+                           BulkInsertChecker,
                            Op)
 from common.cus_resource_opts import CustomResourceOperations as CusResource
 from common.milvus_sys import MilvusSys
@@ -56,35 +56,35 @@ class TestChaos(TestChaosBase):
     def init_health_checkers(self):
         c_name = cf.gen_unique_str("Checker_")
         checkers = {
-            # Op.create: CreateChecker(collection_name=c_name),
+            # Op.create: CollectionCreateChecker(collection_name=c_name),
             # Op.insert: InsertChecker(collection_name=c_name),
             # Op.flush: FlushChecker(collection_name=c_name),
             # Op.query: QueryChecker(collection_name=c_name),
             # Op.search: SearchChecker(collection_name=c_name),
             # Op.delete: DeleteChecker(collection_name=c_name),
             # Op.compact: CompactChecker(collection_name=c_name),
-            # Op.index: IndexChecker(),
-            # Op.drop: DropChecker(),
-            # Op.bulk_load: BulkLoadChecker(),
+            # Op.index: IndexCreateChecker(),
+            # Op.drop: CollectionDropChecker(),
+            # Op.bulk_insert: BulkInsertChecker(),
             Op.load_balance: LoadBalanceChecker()
         }
         self.health_checkers = checkers
-        self.prepare_bulk_load()
+        self.prepare_bulk_insert()
 
-    def prepare_bulk_load(self, nb=30000, row_based=True):
-        if Op.bulk_load not in self.health_checkers:
-            log.info("bulk_load checker is not in  health checkers, skip prepare bulk load")
+    def prepare_bulk_insert(self, nb=30000, row_based=True):
+        if Op.bulk_insert not in self.health_checkers:
+            log.info("bulk_insert checker is not in  health checkers, skip prepare bulk insert")
             return
-        log.info("bulk_load checker is in  health checkers, prepare data firstly")
+        log.info("bulk_insert checker is in  health checkers, prepare data firstly")
         release_name = self.instance_name
         minio_ip_pod_pair = get_pod_ip_name_pairs("chaos-testing", f"release={release_name}, app=minio")
         ms = MilvusSys()
         minio_ip = list(minio_ip_pod_pair.keys())[0]
         minio_port = "9000"
         minio_endpoint = f"{minio_ip}:{minio_port}"
-        bucket_name = ms.index_nodes[0]["infos"]["system_configurations"]["minio_bucket_name"]
+        bucket_name = ms.data_nodes[0]["infos"]["system_configurations"]["minio_bucket_name"]
         schema = cf.gen_default_collection_schema()
-        data = cf.gen_default_list_data_for_bulk_load(nb=nb)
+        data = cf.gen_default_list_data_for_bulk_insert(nb=nb)
         fields_name = [field.name for field in schema.fields]
         if not row_based:
             data_dict = dict(zip(fields_name, data))
@@ -95,17 +95,17 @@ class TestChaos(TestChaosBase):
                 entity = dict(zip(fields_name, entity_value))
                 entities.append(entity)
             data_dict = {"rows": entities}
-        file_name = "bulk_load_data_source.json"
+        file_name = "bulk_insert_data_source.json"
         files = [file_name]
         #TODO: npy file type is not supported so far
-        log.info("generate bulk load file")
+        log.info("generate bulk insert file")
         with open(file_name, "w") as f:
             f.write(json.dumps(data_dict))
         log.info("upload file to minio")
         client = Minio(minio_endpoint, access_key="minioadmin", secret_key="minioadmin", secure=False)
         client.fput_object(bucket_name, file_name, file_name)
-        self.health_checkers[Op.bulk_load].update(schema=schema, files=files, row_based=row_based)
-        log.info("prepare data for bulk load done")
+        self.health_checkers[Op.bulk_insert].update(schema=schema, files=files, row_based=row_based)
+        log.info("prepare data for bulk insert done")
 
     def teardown(self):
         chaos_res = CusResource(kind=self._chaos_config['kind'],

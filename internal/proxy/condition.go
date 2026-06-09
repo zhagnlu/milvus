@@ -18,7 +18,8 @@ package proxy
 
 import (
 	"context"
-	"errors"
+
+	"github.com/cockroachdb/errors"
 )
 
 // Condition defines the interface of variable condition.
@@ -41,7 +42,7 @@ type TaskCondition struct {
 func (tc *TaskCondition) WaitToFinish() error {
 	select {
 	case <-tc.ctx.Done():
-		return errors.New("proxy TaskCondition context Done")
+		return errors.Wrap(tc.ctx.Err(), "proxy TaskCondition context Done")
 	case err := <-tc.done:
 		return err
 	}

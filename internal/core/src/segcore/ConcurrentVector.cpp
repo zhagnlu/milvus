@@ -11,6 +11,15 @@
 
 #include "segcore/ConcurrentVector.h"
 
+#include <algorithm>
+#include <cstdint>
+
+#include "common/Types.h"
+#include "common/Utils.h"
+#include "fmt/core.h"
+#include "pb/schema.pb.h"
+#include "simdjson/padded_string.h"
+
 namespace milvus::segcore {
 
 void
@@ -20,103 +29,159 @@ VectorBase::set_data_raw(ssize_t element_offset,
                          const FieldMeta& field_meta) {
     if (field_meta.is_vector()) {
         if (field_meta.get_data_type() == DataType::VECTOR_FLOAT) {
-            return set_data_raw(element_offset, data->vectors().float_vector().data().data(), element_count);
+            return set_data_raw(element_offset,
+                                VEC_FIELD_DATA(data, float).data(),
+                                element_count);
         } else if (field_meta.get_data_type() == DataType::VECTOR_BINARY) {
-            return set_data_raw(element_offset, data->vectors().binary_vector().data(), element_count);
+            return set_data_raw(
+                element_offset, VEC_FIELD_DATA(data, binary), element_count);
+        } else if (field_meta.get_data_type() == DataType::VECTOR_FLOAT16) {
+            return set_data_raw(
+                element_offset, VEC_FIELD_DATA(data, float16), element_count);
+        } else if (field_meta.get_data_type() == DataType::VECTOR_BFLOAT16) {
+            return set_data_raw(
+                element_offset, VEC_FIELD_DATA(data, bfloat16), element_count);
+        } else if (field_meta.get_data_type() ==
+                   DataType::VECTOR_SPARSE_U32_F32) {
+            return set_data_raw(
+                element_offset,
+                SparseBytesToRows(
+                    data->vectors().sparse_float_vector().contents())
+                    .get(),
+                element_count);
+        } else if (field_meta.get_data_type() == DataType::VECTOR_INT8) {
+            return set_data_raw(
+                element_offset, VEC_FIELD_DATA(data, int8), element_count);
+        } else if (field_meta.get_data_type() == DataType::VECTOR_ARRAY) {
+            auto& vector_array = data->vectors().vector_array().data();
+            std::vector<VectorArray> data_raw{};
+            if (field_meta.is_nullable() &&
+                data->valid_data_size() == element_count) {
+                ssize_t valid_count = 0;
+                for (ssize_t i = 0; i < element_count; ++i) {
+                    if (data->valid_data(i)) {
+                        ++valid_count;
+                    }
+                }
+                data_raw.reserve(valid_count);
+                if (vector_array.size() == element_count) {
+                    for (ssize_t i = 0; i < element_count; ++i) {
+                        if (data->valid_data(i)) {
+                            data_raw.emplace_back(VectorArray(vector_array[i]));
+                        }
+                    }
+                } else {
+                    AssertInfo(
+                        vector_array.size() == valid_count,
+                        "compact nullable VECTOR_ARRAY data size {} must "
+                        "match valid count {}",
+                        vector_array.size(),
+                        valid_count);
+                    for (auto& e : vector_array) {
+                        data_raw.emplace_back(VectorArray(e));
+                    }
+                }
+            } else {
+                AssertInfo(vector_array.size() == element_count,
+                           "VECTOR_ARRAY data size {} must match element "
+                           "count {} when not using compact nullable format",
+                           vector_array.size(),
+                           element_count);
+                data_raw.reserve(vector_array.size());
+                for (auto& e : vector_array) {
+                    data_raw.emplace_back(VectorArray(e));
+                }
+            }
+            return set_data_raw(element_offset, data_raw.data(), element_count);
         } else {
-            PanicInfo("unsupported");
+            ThrowInfo(DataTypeInvalid, "unsupported vector type");
         }
     }
 
     switch (field_meta.get_data_type()) {
         case DataType::BOOL: {
-            return set_data_raw(element_offset, data->scalars().bool_data().data().data(), element_count);
+            return set_data_raw(
+                element_offset, FIELD_DATA(data, bool).data(), element_count);
         }
         case DataType::INT8: {
-            auto src_data = data->scalars().int_data().data();
+            auto& src_data = FIELD_DATA(data, int);
             std::vector<int8_t> data_raw(src_data.size());
             std::copy_n(src_data.data(), src_data.size(), data_raw.data());
             return set_data_raw(element_offset, data_raw.data(), element_count);
         }
         case DataType::INT16: {
-            auto src_data = data->scalars().int_data().data();
+            auto& src_data = FIELD_DATA(data, int);
             std::vector<int16_t> data_raw(src_data.size());
             std::copy_n(src_data.data(), src_data.size(), data_raw.data());
             return set_data_raw(element_offset, data_raw.data(), element_count);
         }
         case DataType::INT32: {
-            return set_data_raw(element_offset, data->scalars().int_data().data().data(), element_count);
+            return set_data_raw(
+                element_offset, FIELD_DATA(data, int).data(), element_count);
         }
         case DataType::INT64: {
-            return set_data_raw(element_offset, data->scalars().long_data().data().data(), element_count);
+            return set_data_raw(
+                element_offset, FIELD_DATA(data, long).data(), element_count);
         }
         case DataType::FLOAT: {
-            return set_data_raw(element_offset, data->scalars().float_data().data().data(), element_count);
+            return set_data_raw(
+                element_offset, FIELD_DATA(data, float).data(), element_count);
         }
         case DataType::DOUBLE: {
-            return set_data_raw(element_offset, data->scalars().double_data().data().data(), element_count);
+            return set_data_raw(
+                element_offset, FIELD_DATA(data, double).data(), element_count);
         }
-        case DataType::VARCHAR: {
-            auto begin = data->scalars().string_data().data().begin();
-            auto end = data->scalars().string_data().data().end();
-            std::vector<std::string> data_raw(begin, end);
+        case DataType::TIMESTAMPTZ: {
+            return set_data_raw(element_offset,
+                                FIELD_DATA(data, timestamptz).data(),
+                                element_count);
+        }
+        case DataType::STRING:
+        case DataType::VARCHAR:
+        case DataType::TEXT: {
+            auto& field_data = FIELD_DATA(data, string);
+            std::vector<std::string> data_raw(field_data.begin(),
+                                              field_data.end());
+            return set_data_raw(element_offset, data_raw.data(), element_count);
+        }
+        case DataType::JSON: {
+            auto& json_data = FIELD_DATA(data, json);
+            std::vector<Json> data_raw{};
+            data_raw.reserve(json_data.size());
+            for (auto& json_bytes : json_data) {
+                data_raw.emplace_back(simdjson::padded_string(json_bytes));
+            }
+
+            return set_data_raw(element_offset, data_raw.data(), element_count);
+        }
+        case DataType::GEOMETRY: {
+            // get the geometry array of a column from proto message
+            auto& geometry_data = FIELD_DATA(data, geometry);
+            std::vector<std::string> data_raw{};
+            data_raw.reserve(geometry_data.size());
+            for (auto& geometry_bytes : geometry_data) {
+                //this geometry_bytes consider as wkt strings from milvus-proto
+                data_raw.emplace_back(
+                    std::string(geometry_bytes.data(), geometry_bytes.size()));
+            }
+            return set_data_raw(element_offset, data_raw.data(), element_count);
+        }
+        case DataType::ARRAY: {
+            auto& array_data = FIELD_DATA(data, array);
+            std::vector<Array> data_raw{};
+            data_raw.reserve(array_data.size());
+            for (auto& array_bytes : array_data) {
+                data_raw.emplace_back(Array(array_bytes));
+            }
+
             return set_data_raw(element_offset, data_raw.data(), element_count);
         }
         default: {
-            PanicInfo("unsupported");
+            ThrowInfo(DataTypeInvalid,
+                      fmt::format("unsupported datatype {}",
+                                  field_meta.get_data_type()));
         }
     }
 }
 
-void
-VectorBase::fill_chunk_data(ssize_t element_count, const DataArray* data, const FieldMeta& field_meta) {
-    if (field_meta.is_vector()) {
-        if (field_meta.get_data_type() == DataType::VECTOR_FLOAT) {
-            return fill_chunk_data(data->vectors().float_vector().data().data(), element_count);
-        } else if (field_meta.get_data_type() == DataType::VECTOR_BINARY) {
-            return fill_chunk_data(data->vectors().binary_vector().data(), element_count);
-        } else {
-            PanicInfo("unsupported");
-        }
-    }
-
-    switch (field_meta.get_data_type()) {
-        case DataType::BOOL: {
-            return fill_chunk_data(data->scalars().bool_data().data().data(), element_count);
-        }
-        case DataType::INT8: {
-            auto src_data = data->scalars().int_data().data();
-            std::vector<int8_t> data_raw(src_data.size());
-            std::copy_n(src_data.data(), src_data.size(), data_raw.data());
-            return fill_chunk_data(data_raw.data(), element_count);
-        }
-        case DataType::INT16: {
-            auto src_data = data->scalars().int_data().data();
-            std::vector<int16_t> data_raw(src_data.size());
-            std::copy_n(src_data.data(), src_data.size(), data_raw.data());
-            return fill_chunk_data(data_raw.data(), element_count);
-        }
-        case DataType::INT32: {
-            return fill_chunk_data(data->scalars().int_data().data().data(), element_count);
-        }
-        case DataType::INT64: {
-            return fill_chunk_data(data->scalars().long_data().data().data(), element_count);
-        }
-        case DataType::FLOAT: {
-            return fill_chunk_data(data->scalars().float_data().data().data(), element_count);
-        }
-        case DataType::DOUBLE: {
-            return fill_chunk_data(data->scalars().double_data().data().data(), element_count);
-        }
-        case DataType::VARCHAR: {
-            auto begin = data->scalars().string_data().data().begin();
-            auto end = data->scalars().string_data().data().end();
-            std::vector<std::string> data_raw(begin, end);
-            return fill_chunk_data(data_raw.data(), element_count);
-        }
-        default: {
-            PanicInfo("unsupported");
-        }
-    }
-}
 }  // namespace milvus::segcore

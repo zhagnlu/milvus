@@ -1,11 +1,28 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package httpserver
 
 import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang/protobuf/proto"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
 )
 
@@ -79,7 +96,6 @@ func (h *Handlers) RegisterRoutesTo(router gin.IRouter) {
 	router.PATCH("/credential", wrapHandler(h.handleUpdateCredential))
 	router.DELETE("/credential", wrapHandler(h.handleDeleteCredential))
 	router.GET("/credential/users", wrapHandler(h.handleListCredUsers))
-
 }
 
 func (h *Handlers) handleGetHealth(c *gin.Context) (interface{}, error) {
@@ -113,6 +129,7 @@ func (h *Handlers) handleCreateCollection(c *gin.Context) (interface{}, error) {
 		Schema:           schemaProto,
 		ShardsNum:        wrappedReq.ShardsNum,
 		ConsistencyLevel: wrappedReq.ConsistencyLevel,
+		Properties:       wrappedReq.Properties,
 	}
 	return h.proxy.CreateCollection(c, req)
 }
@@ -321,20 +338,11 @@ func (h *Handlers) handleInsert(c *gin.Context) (interface{}, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: parse body failed: %v", errBadRequest, err)
 	}
-	fieldData, err := convertFieldDataArray(wrappedReq.FieldsData)
+	req, err := wrappedReq.AsInsertRequest()
 	if err != nil {
-		return nil, fmt.Errorf("%w: convert field data failed: %v", errBadRequest, err)
+		return nil, fmt.Errorf("%w: convert body to pb failed: %v", errBadRequest, err)
 	}
-	req := milvuspb.InsertRequest{
-		Base:           wrappedReq.Base,
-		DbName:         wrappedReq.DbName,
-		CollectionName: wrappedReq.CollectionName,
-		PartitionName:  wrappedReq.PartitionName,
-		FieldsData:     fieldData,
-		HashKeys:       wrappedReq.HashKeys,
-		NumRows:        wrappedReq.NumRows,
-	}
-	return h.proxy.Insert(c, &req)
+	return h.proxy.Insert(c, req)
 }
 
 func (h *Handlers) handleDelete(c *gin.Context) (interface{}, error) {
@@ -366,9 +374,13 @@ func (h *Handlers) handleSearch(c *gin.Context) (interface{}, error) {
 		Nq:                 wrappedReq.Nq,
 	}
 	if len(wrappedReq.BinaryVectors) > 0 {
-		req.PlaceholderGroup = binaryVector2Bytes(wrappedReq.BinaryVectors)
+		req.SearchInput = &milvuspb.SearchRequest_PlaceholderGroup{
+			PlaceholderGroup: binaryVector2Bytes(wrappedReq.BinaryVectors),
+		}
 	} else {
-		req.PlaceholderGroup = vector2Bytes(wrappedReq.Vectors)
+		req.SearchInput = &milvuspb.SearchRequest_PlaceholderGroup{
+			PlaceholderGroup: vector2Bytes(wrappedReq.Vectors),
+		}
 	}
 	return h.proxy.Search(c, &req)
 }

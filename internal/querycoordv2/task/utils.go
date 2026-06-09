@@ -1,21 +1,56 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package task
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"time"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
-	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
-	. "github.com/milvus-io/milvus/internal/querycoordv2/params"
-	"github.com/milvus-io/milvus/internal/util/funcutil"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/samber/lo"
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
+	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+// idSource helper type for using id as task source
+type idSource int64
+
+func (s idSource) String() string {
+	return fmt.Sprintf("ID-%d", s)
+}
+
+func WrapIDSource(id int64) Source {
+	return idSource(id)
+}
 
 func Wait(ctx context.Context, timeout time.Duration, tasks ...Task) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -37,196 +72,436 @@ func Wait(ctx context.Context, timeout time.Duration, tasks ...Task) error {
 	return err
 }
 
+func SetPriority(priority Priority, tasks ...Task) {
+	for i := range tasks {
+		tasks[i].SetPriority(priority)
+	}
+}
+
+func SetReason(reason string, tasks ...Task) {
+	for i := range tasks {
+		tasks[i].SetReason(reason)
+	}
+}
+
 // GetTaskType returns the task's type,
 // for now, only 3 types;
 // - only 1 grow action -> Grow
 // - only 1 reduce action -> Reduce
 // - 1 grow action, and ends with 1 reduce action -> Move
 func GetTaskType(task Task) Type {
-	if len(task.Actions()) > 1 {
+	switch {
+	case len(task.Actions()) > 1:
 		return TaskTypeMove
-	} else if task.Actions()[0].Type() == ActionTypeGrow {
+	case task.Actions()[0].Type() == ActionTypeGrow:
 		return TaskTypeGrow
-	} else {
+	case task.Actions()[0].Type() == ActionTypeReduce:
 		return TaskTypeReduce
+	case task.Actions()[0].Type() == ActionTypeUpdate || task.Actions()[0].Type() == ActionTypeReopen:
+		return TaskTypeUpdate
+	case task.Actions()[0].Type() == ActionTypeStatsUpdate:
+		return TaskTypeStatsUpdate
+	case task.Actions()[0].Type() == ActionTypeDropIndex:
+		return TaskTypeDropIndex
 	}
+	return 0
+}
+
+func mergeCollectionProps(schemaProps []*commonpb.KeyValuePair, collectionProps []*commonpb.KeyValuePair) []*commonpb.KeyValuePair {
+	// Merge the collectionProps and schemaProps maps, giving priority to the values in schemaProps if there are duplicate keys.
+	props := make(map[string]string)
+	for _, p := range collectionProps {
+		props[p.GetKey()] = p.GetValue()
+	}
+	for _, p := range schemaProps {
+		props[p.GetKey()] = p.GetValue()
+	}
+	var ret []*commonpb.KeyValuePair
+	for k, v := range props {
+		ret = append(ret, &commonpb.KeyValuePair{
+			Key:   k,
+			Value: v,
+		})
+	}
+	return ret
 }
 
 func packLoadSegmentRequest(
 	task *SegmentTask,
 	action Action,
 	schema *schemapb.CollectionSchema,
+	collectionProperties []*commonpb.KeyValuePair,
 	loadMeta *querypb.LoadMetaInfo,
 	loadInfo *querypb.SegmentLoadInfo,
-	deltaPositions []*internalpb.MsgPosition,
+	indexInfo []*indexpb.IndexInfo,
 ) *querypb.LoadSegmentsRequest {
+	loadScope := querypb.LoadScope_Full
+	if action.Type() == ActionTypeUpdate {
+		loadScope = querypb.LoadScope_Index
+	}
+
+	if action.Type() == ActionTypeStatsUpdate {
+		loadScope = querypb.LoadScope_Stats
+	}
+
+	if action.Type() == ActionTypeReopen {
+		loadScope = querypb.LoadScope_Reopen
+	}
+
+	if task.Source() == utils.LeaderChecker {
+		loadScope = querypb.LoadScope_Delta
+	}
+
+	finalSchema := applyCollectionSettings(schema, collectionProperties)
+	applyIndexWarmupSetting(loadInfo, finalSchema, collectionProperties)
+
 	return &querypb.LoadSegmentsRequest{
-		Base: &commonpb.MsgBase{
-			MsgType: commonpb.MsgType_LoadSegments,
-			MsgID:   task.SourceID(),
-		},
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(commonpb.MsgType_LoadSegments),
+			commonpbutil.WithMsgID(task.ID()),
+		),
 		Infos:          []*querypb.SegmentLoadInfo{loadInfo},
-		Schema:         schema,
-		LoadMeta:       loadMeta,
+		Schema:         finalSchema, // assign it for compatibility of rolling upgrade from 2.2.x to 2.3
+		LoadMeta:       loadMeta,    // assign it for compatibility of rolling upgrade from 2.2.x to 2.3
 		CollectionID:   task.CollectionID(),
 		ReplicaID:      task.ReplicaID(),
-		DeltaPositions: deltaPositions,
+		DeltaPositions: []*msgpb.MsgPosition{loadInfo.GetDeltaPosition()}, // assign it for compatibility of rolling upgrade from 2.2.x to 2.3
 		DstNodeID:      action.Node(),
 		Version:        time.Now().UnixNano(),
 		NeedTransfer:   true,
+		IndexInfoList:  indexInfo,
+		LoadScope:      loadScope,
 	}
 }
 
-func packReleaseSegmentRequest(task *SegmentTask, action *SegmentAction, shard string) *querypb.ReleaseSegmentsRequest {
+func packReleaseSegmentRequest(task *SegmentTask, action *SegmentAction) *querypb.ReleaseSegmentsRequest {
 	return &querypb.ReleaseSegmentsRequest{
-		Base: &commonpb.MsgBase{
-			MsgType: commonpb.MsgType_ReleaseSegments,
-			MsgID:   task.SourceID(),
-		},
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(commonpb.MsgType_ReleaseSegments),
+			commonpbutil.WithMsgID(task.ID()),
+		),
 
 		NodeID:       action.Node(),
 		CollectionID: task.CollectionID(),
 		SegmentIDs:   []int64{task.SegmentID()},
-		Shard:        shard,
-		Scope:        action.Scope(),
+		Scope:        action.GetScope(),
+		Shard:        action.GetShard(),
 		NeedTransfer: false,
 	}
 }
 
-func packLoadMeta(loadType querypb.LoadType, collectionID int64, partitions ...int64) *querypb.LoadMetaInfo {
+func packLoadMeta(loadType querypb.LoadType, collectionInfo *milvuspb.DescribeCollectionResponse, resourceGroup string, loadFields []int64, partitions ...int64) *querypb.LoadMetaInfo {
 	return &querypb.LoadMetaInfo{
-		LoadType:     loadType,
-		CollectionID: collectionID,
-		PartitionIDs: partitions,
+		LoadType:      loadType,
+		CollectionID:  collectionInfo.GetCollectionID(),
+		PartitionIDs:  partitions,
+		DbName:        collectionInfo.GetDbName(),
+		ResourceGroup: resourceGroup,
+		LoadFields:    loadFields,
+		SchemaVersion: collectionInfo.GetUpdateTimestamp(),
 	}
 }
 
-func packSubDmChannelRequest(
+func packSubChannelRequest(
 	task *ChannelTask,
 	action Action,
 	schema *schemapb.CollectionSchema,
+	collectionProperties []*commonpb.KeyValuePair,
 	loadMeta *querypb.LoadMetaInfo,
 	channel *meta.DmChannel,
+	indexInfo []*indexpb.IndexInfo,
+	partitions []int64,
+	targetVersion int64,
 ) *querypb.WatchDmChannelsRequest {
+	finalSchema := applyCollectionSettings(schema, collectionProperties)
 	return &querypb.WatchDmChannelsRequest{
-		Base: &commonpb.MsgBase{
-			MsgType: commonpb.MsgType_WatchDmChannels,
-			MsgID:   task.SourceID(),
-		},
-		NodeID:       action.Node(),
-		CollectionID: task.CollectionID(),
-		Infos:        []*datapb.VchannelInfo{channel.VchannelInfo},
-		Schema:       schema,
-		LoadMeta:     loadMeta,
-		ReplicaID:    task.ReplicaID(),
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(commonpb.MsgType_WatchDmChannels),
+			commonpbutil.WithMsgID(task.ID()),
+		),
+		NodeID:        action.Node(),
+		CollectionID:  task.CollectionID(),
+		PartitionIDs:  partitions,
+		Infos:         []*datapb.VchannelInfo{channel.VchannelInfo},
+		Schema:        finalSchema, // assign it for compatibility of rolling upgrade from 2.2.x to 2.3
+		LoadMeta:      loadMeta,    // assign it for compatibility of rolling upgrade from 2.2.x to 2.3
+		ReplicaID:     task.ReplicaID(),
+		Version:       time.Now().UnixNano(),
+		IndexInfoList: indexInfo,
+		TargetVersion: targetVersion,
 	}
 }
 
-func fillSubDmChannelRequest(
+func fillSubChannelRequest(
 	ctx context.Context,
 	req *querypb.WatchDmChannelsRequest,
 	broker meta.Broker,
+	includeFlushed bool,
 ) error {
 	segmentIDs := typeutil.NewUniqueSet()
 	for _, vchannel := range req.GetInfos() {
-		segmentIDs.Insert(vchannel.GetFlushedSegmentIds()...)
+		if includeFlushed {
+			segmentIDs.Insert(vchannel.GetFlushedSegmentIds()...)
+		}
 		segmentIDs.Insert(vchannel.GetUnflushedSegmentIds()...)
-		segmentIDs.Insert(vchannel.GetDroppedSegmentIds()...)
+		segmentIDs.Insert(vchannel.GetLevelZeroSegmentIds()...)
 	}
 
 	if segmentIDs.Len() == 0 {
 		return nil
 	}
 
-	resp, err := broker.GetSegmentInfo(ctx, segmentIDs.Collect()...)
+	segmentInfos, err := broker.GetSegmentInfo(ctx, segmentIDs.Collect()...)
 	if err != nil {
 		return err
 	}
-	segmentInfos := make(map[int64]*datapb.SegmentInfo)
-	for _, info := range resp {
-		segmentInfos[info.GetID()] = info
-	}
-	req.SegmentInfos = segmentInfos
+
+	req.SegmentInfos = lo.SliceToMap(segmentInfos, func(info *datapb.SegmentInfo) (int64, *datapb.SegmentInfo) {
+		return info.GetID(), info
+	})
+
 	return nil
 }
 
 func packUnsubDmChannelRequest(task *ChannelTask, action Action) *querypb.UnsubDmChannelRequest {
 	return &querypb.UnsubDmChannelRequest{
-		Base: &commonpb.MsgBase{
-			MsgType: commonpb.MsgType_UnsubDmChannel,
-			MsgID:   task.SourceID(),
-		},
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(commonpb.MsgType_UnsubDmChannel),
+			commonpbutil.WithMsgID(task.ID()),
+		),
 		NodeID:       action.Node(),
 		CollectionID: task.CollectionID(),
 		ChannelName:  task.Channel(),
 	}
 }
 
-func getShardLeader(replicaMgr *meta.ReplicaManager, distMgr *meta.DistributionManager, collectionID, nodeID int64, channel string) (int64, bool) {
-	replica := replicaMgr.GetByCollectionAndNode(collectionID, nodeID)
-	if replica == nil {
-		return 0, false
-	}
-	return distMgr.GetShardLeader(replica, channel)
+// applyCollectionSettings applies collection-level mmap and warmup settings to all fields.
+// It combines applyCollectionMmapSetting and applyCollectionWarmupSetting into a single call.
+func applyCollectionSettings(schema *schemapb.CollectionSchema,
+	collectionProperties []*commonpb.KeyValuePair,
+) *schemapb.CollectionSchema {
+	// first clone the schema then apply some settings to it
+	schemaCloned := typeutil.Clone(schema)
+	schemaCloned.Properties = mergeCollectionProps(schemaCloned.Properties, collectionProperties)
+
+	schemaCloned = applyCollectionMmapSetting(schemaCloned, collectionProperties)
+	schemaCloned = applyCollectionWarmupSetting(schemaCloned, collectionProperties)
+	return schemaCloned
 }
 
-func getSegmentDeltaPositions(ctx context.Context, targetMgr *meta.TargetManager, broker meta.Broker, collectionID, partitionID int64, channel string) ([]*internalpb.MsgPosition, error) {
-	deltaChannelName, err := funcutil.ConvertChannelName(channel, Params.CommonCfg.RootCoordDml, Params.CommonCfg.RootCoordDelta)
-	if err != nil {
-		return nil, err
-	}
-
-	// vchannels, _, err := broker.GetRecoveryInfo(ctx, collectionID, partitionID)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	deltaChannels := make([]*datapb.VchannelInfo, 0)
-	for _, info := range targetMgr.GetDmChannelsByCollection(collectionID) {
-		deltaChannelInfo, err := generatDeltaChannelInfo(info.VchannelInfo)
-		if err != nil {
-			return nil, err
+func applyCollectionMmapSetting(schema *schemapb.CollectionSchema,
+	collectionProperties []*commonpb.KeyValuePair,
+) *schemapb.CollectionSchema {
+	// field mmap enabled if collection-level mmap enabled or the field mmap enabled
+	collectionMmapEnabled, exist := common.IsMmapDataEnabled(collectionProperties...)
+	for _, field := range schema.GetFields() {
+		if exist &&
+			// field-level mmap setting has higher priority than collection-level mmap setting, skip if field-level mmap enabled
+			!common.FieldHasMmapKey(schema, field.GetFieldID()) {
+			field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+				Key:   common.MmapEnabledKey,
+				Value: strconv.FormatBool(collectionMmapEnabled),
+			})
 		}
-		if deltaChannelInfo.ChannelName == deltaChannelName {
-			deltaChannels = append(deltaChannels, deltaChannelInfo)
+	}
+	for _, structField := range schema.GetStructArrayFields() {
+		structTypeParams := structField.GetTypeParams()
+		structMmapEnabled, structExist := common.IsMmapDataEnabled(structTypeParams...)
+
+		// If struct field itself doesn't have mmap setting, inherit from collection
+		if !structExist && exist &&
+			!common.FieldHasMmapKey(schema, structField.GetFieldID()) {
+			structField.TypeParams = append(structField.TypeParams, &commonpb.KeyValuePair{
+				Key:   common.MmapEnabledKey,
+				Value: strconv.FormatBool(collectionMmapEnabled),
+			})
+			// Update struct's mmap state since we just set it
+			structMmapEnabled = collectionMmapEnabled
+			structExist = true
+		}
+
+		// Apply mmap setting to fields inside struct
+		for _, field := range structField.GetFields() {
+			// Skip if field already has mmap setting
+			if common.FieldHasMmapKey(schema, field.GetFieldID()) {
+				continue
+			}
+
+			// Priority: struct field setting > collection setting
+			if structExist {
+				field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+					Key:   common.MmapEnabledKey,
+					Value: strconv.FormatBool(structMmapEnabled),
+				})
+			} else if exist {
+				field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+					Key:   common.MmapEnabledKey,
+					Value: strconv.FormatBool(collectionMmapEnabled),
+				})
+			}
 		}
 	}
-	deltaChannels = mergeWatchDeltaChannelInfo(deltaChannels)
-
-	return lo.Map(deltaChannels, func(channel *datapb.VchannelInfo, _ int) *internalpb.MsgPosition {
-		return channel.GetSeekPosition()
-	}), nil
+	return schema
 }
 
-func generatDeltaChannelInfo(info *datapb.VchannelInfo) (*datapb.VchannelInfo, error) {
-	deltaChannelName, err := funcutil.ConvertChannelName(info.ChannelName, Params.CommonCfg.RootCoordDml, Params.CommonCfg.RootCoordDelta)
-	if err != nil {
-		return nil, err
+// autoWarmupForNonPKIsolationCollection checks if autoWarmupForNonPKIsolationCollection should be applied for a collection.
+// Returns true when the AutoWarmupForNonPKIsolationCollection config is enabled AND the collection
+// does NOT have partition key isolation.
+func autoWarmupForNonPKIsolationCollection(collectionProperties []*commonpb.KeyValuePair) bool {
+	if !paramtable.Get().QueryCoordCfg.AutoWarmupForNonPKIsolationCollection.GetAsBool() {
+		return false
 	}
-	deltaChannel := proto.Clone(info).(*datapb.VchannelInfo)
-	deltaChannel.ChannelName = deltaChannelName
-	deltaChannel.UnflushedSegmentIds = nil
-	deltaChannel.FlushedSegmentIds = nil
-	deltaChannel.DroppedSegmentIds = nil
-	return deltaChannel, nil
+	isPKI, isError := common.IsPartitionKeyIsolationKvEnabled(collectionProperties...)
+	if isError != nil {
+		log.Warn("failed to parse partition key isolation, autowarmup is disabled", zap.Error(isError))
+		return false
+	}
+	if !isPKI {
+		log.Info("collection is not partition key isolated and autowarmup is enabled, force scalar field/index and vector index warmup to sync")
+	}
+	return !isPKI
 }
 
-func mergeWatchDeltaChannelInfo(infos []*datapb.VchannelInfo) []*datapb.VchannelInfo {
-	minPositions := make(map[string]int)
-	for index, info := range infos {
-		_, ok := minPositions[info.ChannelName]
+// applyCollectionWarmupSetting applies collection-level warmup setting to all fields
+// and propagates struct-level warmup to nested fields.
+// Priority: field-level > struct-level > collection-level > autoWarmupForNonPKIsolationCollection (scalar only)
+// Collection-level granular keys: warmup.scalarField, warmup.vectorField
+func applyCollectionWarmupSetting(schema *schemapb.CollectionSchema,
+	collectionProperties []*commonpb.KeyValuePair,
+) *schemapb.CollectionSchema {
+	// Get collection-level granular warmup policies
+	scalarFieldWarmup, scalarFieldExist := common.GetWarmupPolicyByKey(common.WarmupScalarFieldKey, collectionProperties...)
+	vectorFieldWarmup, vectorFieldExist := common.GetWarmupPolicyByKey(common.WarmupVectorFieldKey, collectionProperties...)
+	autoWarmup := autoWarmupForNonPKIsolationCollection(collectionProperties)
+
+	// Apply collection-level warmup to regular fields
+	for _, field := range schema.GetFields() {
+		// field-level warmup setting has higher priority, skip if field already has warmup setting
+		if common.FieldHasWarmupKey(schema, field.GetFieldID()) {
+			continue
+		}
+
+		isVector := typeutil.IsVectorType(field.GetDataType())
+		if isVector && vectorFieldExist {
+			field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+				Key:   common.WarmupKey,
+				Value: vectorFieldWarmup,
+			})
+		} else if !isVector && scalarFieldExist {
+			field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+				Key:   common.WarmupKey,
+				Value: scalarFieldWarmup,
+			})
+		} else if autoWarmup && !isVector {
+			// autoWarmupForNonPKIsolationCollection fallback: force sync warmup for scalar fields (not vector fields)
+			// vector fields are excluded from autowarmup due to its large size
+			field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+				Key:   common.WarmupKey,
+				Value: common.WarmupSync,
+			})
+		}
+	}
+
+	// Apply warmup to struct array fields and their nested fields
+	for _, structField := range schema.GetStructArrayFields() {
+		// Get struct field's warmup setting
+		structFieldWarmup, structHasWarmup := common.GetWarmupPolicy(structField.GetTypeParams()...)
+
+		// Apply warmup setting to fields inside struct
+		for _, field := range structField.GetFields() {
+			// Skip if field already has warmup setting
+			if common.FieldHasWarmupKey(schema, field.GetFieldID()) {
+				continue
+			}
+
+			// Priority: struct field setting > collection setting > autoWarmupForNonPKIsolationCollection
+			if structHasWarmup {
+				field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+					Key:   common.WarmupKey,
+					Value: structFieldWarmup,
+				})
+			} else {
+				isVector := typeutil.IsVectorType(field.GetDataType())
+				if isVector && vectorFieldExist {
+					field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+						Key:   common.WarmupKey,
+						Value: vectorFieldWarmup,
+					})
+				} else if !isVector && scalarFieldExist {
+					field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+						Key:   common.WarmupKey,
+						Value: scalarFieldWarmup,
+					})
+				} else if autoWarmup && !isVector {
+					// autoWarmupForNonPKIsolationCollection fallback for struct nested scalar fields
+					// vector fields are excluded from autowarmup due to its large size
+					field.TypeParams = append(field.TypeParams, &commonpb.KeyValuePair{
+						Key:   common.WarmupKey,
+						Value: common.WarmupSync,
+					})
+				}
+			}
+		}
+	}
+	return schema
+}
+
+// applyIndexWarmupSetting applies collection-level index warmup setting to segment index params
+// Index params warmup setting has higher priority than collection-level
+// Priority: index-level > collection-level > autoWarmupForNonPKIsolationCollection (all indexes)
+// Collection-level granular keys: warmup.scalarIndex, warmup.vectorIndex
+func applyIndexWarmupSetting(loadInfo *querypb.SegmentLoadInfo, schema *schemapb.CollectionSchema, collectionProperties []*commonpb.KeyValuePair) {
+	// Get collection-level granular warmup policies for indexes
+	scalarIndexWarmup, scalarIndexExist := common.GetWarmupPolicyByKey(common.WarmupScalarIndexKey, collectionProperties...)
+	vectorIndexWarmup, vectorIndexExist := common.GetWarmupPolicyByKey(common.WarmupVectorIndexKey, collectionProperties...)
+	autoWarmup := autoWarmupForNonPKIsolationCollection(collectionProperties)
+
+	if !scalarIndexExist && !vectorIndexExist && !autoWarmup {
+		return
+	}
+
+	// Build fieldID to field schema map for quick lookup
+	fieldMap := make(map[int64]*schemapb.FieldSchema)
+	for _, field := range schema.GetFields() {
+		fieldMap[field.GetFieldID()] = field
+	}
+	// Include nested fields from struct arrays (struct array fields themselves don't support indexes)
+	for _, structField := range schema.GetStructArrayFields() {
+		for _, field := range structField.GetFields() {
+			fieldMap[field.GetFieldID()] = field
+		}
+	}
+
+	for _, indexInfo := range loadInfo.GetIndexInfos() {
+		// Check if index params already has warmup setting
+		_, exist := common.GetWarmupPolicy(indexInfo.IndexParams...)
+		if exist {
+			continue
+		}
+
+		field, ok := fieldMap[indexInfo.GetFieldID()]
 		if !ok {
-			minPositions[info.ChannelName] = index
+			continue
 		}
-		minTimeStampIndex := minPositions[info.ChannelName]
-		if info.SeekPosition.GetTimestamp() < infos[minTimeStampIndex].SeekPosition.GetTimestamp() {
-			minPositions[info.ChannelName] = index
-		}
-	}
-	var result []*datapb.VchannelInfo
-	for _, index := range minPositions {
-		result = append(result, infos[index])
-	}
 
-	return result
+		isVector := typeutil.IsVectorType(field.GetDataType())
+		if isVector && vectorIndexExist {
+			indexInfo.IndexParams = append(indexInfo.IndexParams, &commonpb.KeyValuePair{
+				Key:   common.WarmupKey,
+				Value: vectorIndexWarmup,
+			})
+		} else if !isVector && scalarIndexExist {
+			indexInfo.IndexParams = append(indexInfo.IndexParams, &commonpb.KeyValuePair{
+				Key:   common.WarmupKey,
+				Value: scalarIndexWarmup,
+			})
+		} else if autoWarmup {
+			// autoWarmupForNonPKIsolationCollection fallback: force sync warmup for ALL indexes (scalar and vector)
+			// here vector indexes are included in autowarmup bcz they are critical for search performance
+			indexInfo.IndexParams = append(indexInfo.IndexParams, &commonpb.KeyValuePair{
+				Key:   common.WarmupKey,
+				Value: common.WarmupSync,
+			})
+		}
+	}
 }

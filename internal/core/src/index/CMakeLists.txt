@@ -9,24 +9,6 @@
 # is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
 # or implied. See the License for the specific language governing permissions and limitations under the License
 
-aux_source_directory( ${MILVUS_ENGINE_SRC}/index INDEX_FILES )
-
-add_library( milvus_index SHARED ${INDEX_FILES} )
-
-# TODO: support compile marisa on windows.
-set(PLATFORM_LIBS )
-if ( LINUX OR APPLE )
-    set(PLATFORM_LIBS marisa)
-endif()
-if (MSYS)
-    set(PLATFORM_LIBS -Wl,--allow-multiple-definition)
-endif ()
-
-target_link_libraries(milvus_index
-        milvus_proto
-        milvus_exceptions
-        knowhere
-        ${PLATFORM_LIBS}
-        )
-
-install(TARGETS milvus_index DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+add_source_at_current_directory_recursively()
+add_library(milvus_index OBJECT ${SOURCE_FILES})
+target_link_libraries(milvus_index PUBLIC milvus_conan_deps)

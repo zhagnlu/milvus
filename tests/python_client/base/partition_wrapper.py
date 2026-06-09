@@ -9,7 +9,7 @@ from utils.api_request import api_request
 from common.common_func import param_info
 
 
-TIMEOUT = 20
+TIMEOUT = 180
 
 
 class ApiPartitionWrapper:
@@ -39,8 +39,16 @@ class ApiPartitionWrapper:
         return self.partition.is_empty if self.partition else None
 
     @property
+    def is_empty_without_flush(self):
+        return self.partition.is_empty if self.partition else None
+
+    @property
     def num_entities(self):
         self.flush()
+        return self.partition.num_entities if self.partition else None
+
+    @property
+    def num_entities_without_flush(self):
         return self.partition.num_entities if self.partition else None
 
     def drop(self, check_task=None, check_items=None, **kwargs):
@@ -129,6 +137,17 @@ class ApiPartitionWrapper:
         res, succ = api_request([self.partition.delete, expr], **kwargs)
         check_result = ResponseChecker(res, func_name, check_task,
                                        check_items, is_succ=succ, expr=expr,
+                                       **kwargs).run()
+        return res, check_result
+
+    def upsert(self, data, check_task=None, check_items=None, **kwargs):
+        timeout = kwargs.get("timeout", TIMEOUT)
+        kwargs.update({"timeout": timeout})
+
+        func_name = sys._getframe().f_code.co_name
+        res, succ = api_request([self.partition.upsert, data], **kwargs)
+        check_result = ResponseChecker(res, func_name, check_task,
+                                       check_items, is_succ=succ, data=data,
                                        **kwargs).run()
         return res, check_result
 

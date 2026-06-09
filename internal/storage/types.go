@@ -12,15 +12,40 @@
 package storage
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"time"
 
 	"golang.org/x/exp/mmap"
 )
 
+type StatsLogType int64
+
+const (
+	DefaultStatsType StatsLogType = iota + 0
+
+	// CompundStatsType log save multiple stats
+	// and bloom filters to one file
+	CompoundStatsType
+)
+
+func (s StatsLogType) LogIdx() string {
+	return fmt.Sprintf("%d", s)
+}
+
 type FileReader interface {
 	io.Reader
 	io.Closer
+	io.ReaderAt
+	io.Seeker
+	Size() (int64, error)
+}
+
+// ChunkObjectInfo is to store object info.
+type ChunkObjectInfo struct {
+	FilePath   string
+	ModifyTime time.Time
 }
 
 // ChunkManager is to manager chunks.
@@ -29,33 +54,51 @@ type ChunkManager interface {
 	// RootPath returns current root path.
 	RootPath() string
 	// Path returns path of @filePath.
-	Path(filePath string) (string, error)
+	Path(ctx context.Context, filePath string) (string, error)
 	// Size returns path of @filePath.
-	Size(filePath string) (int64, error)
+	Size(ctx context.Context, filePath string) (int64, error)
 	// Write writes @content to @filePath.
-	Write(filePath string, content []byte) error
+	Write(ctx context.Context, filePath string, content []byte) error
 	// MultiWrite writes multi @content to @filePath.
-	MultiWrite(contents map[string][]byte) error
+	MultiWrite(ctx context.Context, contents map[string][]byte) error
 	// Exist returns true if @filePath exists.
-	Exist(filePath string) (bool, error)
+	Exist(ctx context.Context, filePath string) (bool, error)
 	// Read reads @filePath and returns content.
-	Read(filePath string) ([]byte, error)
+	Read(ctx context.Context, filePath string) ([]byte, error)
 	// Reader return a reader for @filePath
-	Reader(filePath string) (FileReader, error)
+	Reader(ctx context.Context, filePath string) (FileReader, error)
 	// MultiRead reads @filePath and returns content.
-	MultiRead(filePaths []string) ([][]byte, error)
-	ListWithPrefix(prefix string, recursive bool) ([]string, []time.Time, error)
-	// ReadWithPrefix reads files with same @prefix and returns contents.
-	ReadWithPrefix(prefix string) ([]string, [][]byte, error)
-	Mmap(filePath string) (*mmap.ReaderAt, error)
+	MultiRead(ctx context.Context, filePaths []string) ([][]byte, error)
+	// WalkWithPrefix list files with same @prefix and call @walkFunc for each file.
+	// 1. walkFunc return false or reach the last object, WalkWithPrefix will stop and return nil.
+	// 2. underlying walking failed or context canceled, WalkWithPrefix will stop and return a error.
+	WalkWithPrefix(ctx context.Context, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) error
+	Mmap(ctx context.Context, filePath string) (*mmap.ReaderAt, error)
 	// ReadAt reads @filePath by offset @off, content stored in @p, return @n as the number of bytes read.
 	// if all bytes are read, @err is io.EOF.
 	// return other error if read failed.
-	ReadAt(filePath string, off int64, length int64) (p []byte, err error)
+	ReadAt(ctx context.Context, filePath string, off int64, length int64) (p []byte, err error)
 	// Remove delete @filePath.
-	Remove(filePath string) error
+	Remove(ctx context.Context, filePath string) error
 	// MultiRemove delete @filePaths.
-	MultiRemove(filePaths []string) error
+	MultiRemove(ctx context.Context, filePaths []string) error
 	// RemoveWithPrefix remove files with same @prefix.
-	RemoveWithPrefix(prefix string) error
+	RemoveWithPrefix(ctx context.Context, prefix string) error
+	// Copy copies @srcFilePath to @dstFilePath.
+	Copy(ctx context.Context, srcFilePath string, dstFilePath string) error
+}
+
+// ListAllChunkWithPrefix is a helper function to list all objects with same @prefix by using `ListWithPrefix`.
+// `ListWithPrefix` is more efficient way to call if you don't need all chunk at same time.
+func ListAllChunkWithPrefix(ctx context.Context, manager ChunkManager, prefix string, recursive bool) ([]string, []time.Time, error) {
+	var dirs []string
+	var mods []time.Time
+	if err := manager.WalkWithPrefix(ctx, prefix, recursive, func(chunkInfo *ChunkObjectInfo) bool {
+		dirs = append(dirs, chunkInfo.FilePath)
+		mods = append(mods, chunkInfo.ModifyTime)
+		return true
+	}); err != nil {
+		return nil, nil, err
+	}
+	return dirs, mods, nil
 }

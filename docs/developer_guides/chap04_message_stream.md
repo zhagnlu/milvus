@@ -7,7 +7,7 @@
 ```go
 type Client interface {
 	CreateChannels(req CreateChannelRequest) (CreateChannelResponse, error)
-	DestoryChannels(req DestoryChannelRequest) error
+	DestroyChannels(req DestroyChannelRequest) error
 	DescribeChannels(req DescribeChannelRequest) (DescribeChannelResponse, error)
 }
 ```
@@ -32,10 +32,10 @@ type CreateChannelResponse struct {
 }
 ```
 
-- _DestoryChannels_
+- _DestroyChannels_
 
 ```go
-type DestoryChannelRequest struct {
+type DestroyChannelRequest struct {
 	ChannelNames []string
 }
 ```
@@ -216,7 +216,6 @@ type Factory interface {
 	Init(params *paramtable.ComponentParam) error
 	NewMsgStream(ctx context.Context) (MsgStream, error)
 	NewTtMsgStream(ctx context.Context) (MsgStream, error)
-	NewQueryMsgStream(ctx context.Context) (MsgStream, error)
 }
 
 // Pulsar

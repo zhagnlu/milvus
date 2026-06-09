@@ -1,193 +1,231 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package balance
 
 import (
+	"context"
+	"fmt"
+	"math"
 	"sort"
 
+	"github.com/samber/lo"
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/internal/querycoordv2/assign"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
+// RowCountBasedBalancer implements a row count based load balancing strategy.
+// It balances segments across nodes by considering the total row count on each node,
+// attempting to equalize the row count distribution. This is more accurate than
+// round-robin balancing as it accounts for actual data volume rather than just segment count.
 type RowCountBasedBalancer struct {
-	RoundRobinBalancer
-	nodeManager *session.NodeManager
-	dist        *meta.DistributionManager
-	meta        *meta.Meta
+	BalanceReplicaHelper
+	scheduler    task.Scheduler
+	dist         *meta.DistributionManager
+	targetMgr    meta.TargetManagerInterface
+	assignPolicy assign.AssignPolicy
 }
 
-func (b *RowCountBasedBalancer) AssignSegment(segments []*meta.Segment, nodes []int64) []SegmentAssignPlan {
-	if len(nodes) == 0 {
+// GetAssignPolicy returns the assign policy used by this balancer.
+func (b *RowCountBasedBalancer) GetAssignPolicy() assign.AssignPolicy {
+	return b.assignPolicy
+}
+
+// BalanceReplica balances segments and channels across nodes within a replica based on row count.
+// It first attempts to balance channels if AutoBalanceChannel is enabled, then balances segments
+// if no channel plans were generated.
+func (b *RowCountBasedBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
+	log := log.Ctx(context.TODO()).WithRateGroup("qcv2.RowCountBasedBalancer", 1, 60).With(
+		zap.Int64("collectionID", replica.GetCollectionID()),
+		zap.Int64("replicaID", replica.GetID()),
+		zap.String("resourceGroup", replica.GetResourceGroup()),
+	)
+	br := NewBalanceReport()
+	defer func() {
+		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
+			log.WithRateGroup(fmt.Sprintf("scorebasedbalance-noplan-%d", replica.GetID()), 1, 60).
+				RatedDebug(60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
+		} else {
+			log.Info("balance plan generated", zap.Stringers("report details", br.records))
+		}
+	}()
+
+	if paramtable.Get().QueryCoordCfg.AutoBalanceChannel.GetAsBool() {
+		channelPlans = b.balanceChannels(ctx, br, replica)
+	}
+	if len(channelPlans) == 0 {
+		segmentPlans = b.balanceSegments(ctx, br, replica)
+	}
+	return
+}
+
+// balanceChannels generates channel balance plans for a replica.
+// It requires at least 2 RW nodes to perform balancing.
+func (b *RowCountBasedBalancer) balanceChannels(ctx context.Context, br *balanceReport, replica *meta.Replica) []assign.ChannelAssignPlan {
+	rwNodes := b.GetRWNodesForChannels(replica)
+	if len(rwNodes) < 2 {
+		br.AddRecord(StrRecord("no enough rwNodes to balance channels"))
 		return nil
 	}
-	nodeItems := b.convertToNodeItems(nodes)
-	queue := newPriorityQueue()
-	for _, item := range nodeItems {
-		queue.push(item)
-	}
 
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].GetNumOfRows() > segments[j].GetNumOfRows()
-	})
-
-	plans := make([]SegmentAssignPlan, 0, len(segments))
-	for _, s := range segments {
-		// pick the node with the least row count and allocate to it.
-		ni := queue.pop().(*nodeItem)
-		plan := SegmentAssignPlan{
-			From:    -1,
-			To:      ni.nodeID,
-			Segment: s,
-		}
-		plans = append(plans, plan)
-		// change node's priority and push back
-		p := ni.getPriority()
-		ni.setPriority(p + int(s.GetNumOfRows()))
-		queue.push(ni)
-	}
-	return plans
+	return b.genChannelPlan(ctx, br, replica, rwNodes)
 }
 
-func (b *RowCountBasedBalancer) convertToNodeItems(nodeIDs []int64) []*nodeItem {
-	ret := make([]*nodeItem, 0, len(nodeIDs))
-	for _, node := range nodeIDs {
-		segments := b.dist.SegmentDistManager.GetByNode(node)
-		rowcnt := 0
-		for _, s := range segments {
-			rowcnt += int(s.GetNumOfRows())
-		}
-		// more row count, less priority
-		nodeItem := newNodeItem(rowcnt, node)
-		ret = append(ret, &nodeItem)
+// balanceSegments generates segment balance plans for a replica.
+// It requires at least 2 RW nodes to perform balancing.
+func (b *RowCountBasedBalancer) balanceSegments(ctx context.Context, br *balanceReport, replica *meta.Replica) []assign.SegmentAssignPlan {
+	rwNodes := replica.GetRWNodes()
+	if len(rwNodes) < 2 {
+		br.AddRecord(StrRecord("no enough rwNodes to balance segments"))
+		return nil
 	}
-	return ret
+	return b.genSegmentPlan(ctx, replica, rwNodes)
 }
 
-func (b *RowCountBasedBalancer) Balance() ([]SegmentAssignPlan, []ChannelAssignPlan) {
-	ids := b.meta.CollectionManager.GetAll()
-
-	segmentPlans, channelPlans := make([]SegmentAssignPlan, 0), make([]ChannelAssignPlan, 0)
-	for _, cid := range ids {
-		replicas := b.meta.ReplicaManager.GetByCollection(cid)
-		for _, replica := range replicas {
-			splans, cplans := b.balanceReplica(replica)
-			segmentPlans = append(segmentPlans, splans...)
-			channelPlans = append(channelPlans, cplans...)
-		}
-	}
-	return segmentPlans, channelPlans
-}
-
-func (b *RowCountBasedBalancer) balanceReplica(replica *meta.Replica) ([]SegmentAssignPlan, []ChannelAssignPlan) {
-	nodes := replica.Nodes.Collect()
-	if len(nodes) == 0 {
-		return nil, nil
-	}
-	nodesRowCnt := make(map[int64]int)
-	nodesSegments := make(map[int64][]*meta.Segment)
-	totalCnt := 0
-	for _, nid := range nodes {
-		segments := b.dist.SegmentDistManager.GetByCollectionAndNode(replica.GetCollectionID(), nid)
-		cnt := 0
-		for _, s := range segments {
-			cnt += int(s.GetNumOfRows())
-		}
-		nodesRowCnt[nid] = cnt
-		nodesSegments[nid] = segments
-		totalCnt += cnt
-	}
-
-	average := totalCnt / len(nodes)
-	neededRowCnt := 0
-	for _, rowcnt := range nodesRowCnt {
-		if rowcnt < average {
-			neededRowCnt += average - rowcnt
-		}
-	}
-
-	if neededRowCnt == 0 {
-		return nil, nil
-	}
-
+// genSegmentPlan generates segment balance plans based on row count per node.
+// It identifies nodes with row count above average and moves segments from them
+// to nodes with row count below average.
+func (b *RowCountBasedBalancer) genSegmentPlan(ctx context.Context, replica *meta.Replica, rwNodes []int64) []assign.SegmentAssignPlan {
 	segmentsToMove := make([]*meta.Segment, 0)
 
-	// select segments to be moved
-outer:
-	for nodeID, rowcnt := range nodesRowCnt {
-		if rowcnt <= average {
-			continue
+	nodeRowCount := make(map[int64]int, 0)
+	segmentDist := make(map[int64][]*meta.Segment)
+	totalRowCount := 0
+	for _, node := range rwNodes {
+		dist := b.dist.SegmentDistManager.GetByFilter(meta.WithCollectionID(replica.GetCollectionID()), meta.WithNodeID(node))
+		segments := lo.Filter(dist, func(segment *meta.Segment, _ int) bool {
+			return b.targetMgr.CanSegmentBeMoved(ctx, segment.GetCollectionID(), segment.GetID())
+		})
+		rowCount := 0
+		for _, s := range segments {
+			rowCount += int(s.GetNumOfRows())
 		}
-		segments := nodesSegments[nodeID]
+		totalRowCount += rowCount
+		segmentDist[node] = segments
+		nodeRowCount[node] = rowCount
+	}
+
+	if totalRowCount == 0 {
+		return nil
+	}
+
+	// find nodes with less row count than average
+	average := totalRowCount / len(rwNodes)
+	nodesWithLessRow := make([]int64, 0)
+	for node, segments := range segmentDist {
 		sort.Slice(segments, func(i, j int) bool {
-			return segments[i].GetNumOfRows() > segments[j].GetNumOfRows()
+			return segments[i].GetNumOfRows() < segments[j].GetNumOfRows()
 		})
 
-		for _, s := range segments {
-			if rowcnt-int(s.GetNumOfRows()) < average {
-				continue
-			}
-			rowcnt -= int(s.GetNumOfRows())
-			segmentsToMove = append(segmentsToMove, s)
-			neededRowCnt -= int(s.GetNumOfRows())
-			if neededRowCnt <= 0 {
-				break outer
-			}
-		}
-	}
-
-	sort.Slice(segmentsToMove, func(i, j int) bool {
-		return segmentsToMove[i].GetNumOfRows() < segmentsToMove[j].GetNumOfRows()
-	})
-
-	// allocate segments to those nodes with row cnt less than average
-	queue := newPriorityQueue()
-	for nodeID, rowcnt := range nodesRowCnt {
-		if rowcnt >= average {
+		leftRowCount := nodeRowCount[node]
+		if leftRowCount < average {
+			nodesWithLessRow = append(nodesWithLessRow, node)
 			continue
 		}
-		item := newNodeItem(rowcnt, nodeID)
-		queue.push(&item)
+
+		for _, s := range segments {
+			leftRowCount -= int(s.GetNumOfRows())
+			if leftRowCount < average {
+				break
+			}
+			segmentsToMove = append(segmentsToMove, s)
+		}
 	}
 
-	plans := make([]SegmentAssignPlan, 0)
-	for _, s := range segmentsToMove {
-		node := queue.pop().(*nodeItem)
-		plan := SegmentAssignPlan{
-			ReplicaID: replica.GetID(),
-			From:      s.Node,
-			To:        node.nodeID,
-			Segment:   s,
-		}
-		plans = append(plans, plan)
-		node.setPriority(node.getPriority() + int(s.GetNumOfRows()))
-		queue.push(node)
+	segmentsToMove = lo.Filter(segmentsToMove, func(s *meta.Segment, _ int) bool {
+		// if the segment are redundant, skip it's balance for now
+		return len(b.dist.SegmentDistManager.GetByFilter(meta.WithReplica(replica), meta.WithSegmentID(s.GetID()))) == 1
+	})
+
+	if len(nodesWithLessRow) == 0 || len(segmentsToMove) == 0 {
+		return nil
 	}
-	return plans, nil
+
+	segmentPlans := b.assignPolicy.AssignSegment(ctx, replica.GetCollectionID(), segmentsToMove, nodesWithLessRow, false)
+	for i := range segmentPlans {
+		segmentPlans[i].From = segmentPlans[i].Segment.Node
+		segmentPlans[i].Replica = replica
+	}
+
+	return segmentPlans
 }
 
+// genChannelPlan generates channel balance plans based on channel count per node.
+// It distributes channels evenly across RW nodes.
+func (b *RowCountBasedBalancer) genChannelPlan(ctx context.Context, br *balanceReport, replica *meta.Replica, rwNodes []int64) []assign.ChannelAssignPlan {
+	channelPlans := make([]assign.ChannelAssignPlan, 0)
+	if len(rwNodes) > 1 {
+		// start to balance channels on all available nodes
+		channelDist := b.dist.ChannelDistManager.GetByFilter(meta.WithReplica2Channel(replica))
+		if len(channelDist) == 0 {
+			return nil
+		}
+		average := int(math.Ceil(float64(len(channelDist)) / float64(len(rwNodes))))
+
+		// find nodes with less channel count than average
+		nodeWithLessChannel := make([]int64, 0)
+		channelsToMove := make([]*meta.DmChannel, 0)
+		for _, node := range rwNodes {
+			channels := b.dist.ChannelDistManager.GetByFilter(meta.WithCollectionID2Channel(replica.GetCollectionID()), meta.WithNodeID2Channel(node))
+			channels = sortIfChannelAtWALLocated(channels)
+
+			if len(channels) <= average {
+				nodeWithLessChannel = append(nodeWithLessChannel, node)
+				continue
+			}
+
+			channelsToMove = append(channelsToMove, channels[average:]...)
+		}
+
+		if len(nodeWithLessChannel) == 0 || len(channelsToMove) == 0 {
+			return nil
+		}
+
+		channelPlans := b.assignPolicy.AssignChannel(ctx, replica.GetCollectionID(), channelsToMove, nodeWithLessChannel, false)
+		for i := range channelPlans {
+			channelPlans[i].From = channelPlans[i].Channel.Node
+			channelPlans[i].Replica = replica
+			br.AddRecord(StrRecordf("add channel plan %s", channelPlans[i]))
+		}
+
+		return channelPlans
+	}
+	return channelPlans
+}
+
+// NewRowCountBasedBalancer creates a new RowCountBasedBalancer instance.
+// It uses the RowCount assign policy from the global factory.
 func NewRowCountBasedBalancer(
 	scheduler task.Scheduler,
 	nodeManager *session.NodeManager,
 	dist *meta.DistributionManager,
-	meta *meta.Meta,
+	targetMgr meta.TargetManagerInterface,
 ) *RowCountBasedBalancer {
+	policy := assign.GetGlobalAssignPolicyFactory().GetPolicy(assign.PolicyTypeRowCount)
 	return &RowCountBasedBalancer{
-		RoundRobinBalancer: *NewRoundRobinBalancer(scheduler, nodeManager),
-		nodeManager:        nodeManager,
-		dist:               dist,
-		meta:               meta,
-	}
-}
-
-type nodeItem struct {
-	baseItem
-	nodeID int64
-}
-
-func newNodeItem(priority int, nodeID int64) nodeItem {
-	return nodeItem{
-		baseItem: baseItem{
-			priority: priority,
-		},
-		nodeID: nodeID,
+		BalanceReplicaHelper: BalanceReplicaHelper{nodeManager: nodeManager},
+		scheduler:            scheduler,
+		dist:                 dist,
+		targetMgr:            targetMgr,
+		assignPolicy:         policy,
 	}
 }

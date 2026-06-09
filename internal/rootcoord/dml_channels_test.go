@@ -19,23 +19,23 @@ package rootcoord
 import (
 	"container/heap"
 	"context"
-	"errors"
 	"math/rand"
 	"sync"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
-	"github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper"
-	"github.com/milvus-io/milvus/internal/util/dependency"
-	"github.com/milvus-io/milvus/internal/util/funcutil"
-
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/pkg/v3/mq/common"
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func TestDmlMsgStream(t *testing.T) {
 	t.Run("RefCnt", func(t *testing.T) {
-
 		dms := &dmlMsgStream{refcnt: 0}
 		assert.Equal(t, int64(0), dms.RefCnt())
 		assert.Equal(t, int64(0), dms.Used())
@@ -129,17 +129,19 @@ func TestDmlChannels(t *testing.T) {
 	defer cancel()
 
 	factory := dependency.NewDefaultFactory(true)
-	Params.Init()
 
 	dml := newDmlChannels(ctx, factory, dmlChanPrefix, totalDmlChannelNum)
 	chanNames := dml.listChannels()
 	assert.Equal(t, 0, len(chanNames))
 
 	randStr := funcutil.RandomString(8)
-	assert.Panics(t, func() { dml.addChannels(randStr) })
-	assert.Panics(t, func() { dml.broadcast([]string{randStr}, nil) })
-	assert.Panics(t, func() { dml.broadcastMark([]string{randStr}, nil) })
-	assert.Panics(t, func() { dml.removeChannels(randStr) })
+	dml.addChannels(randStr)
+	assert.Error(t, dml.broadcast([]string{randStr}, nil))
+	{
+		_, err := dml.broadcastMark([]string{randStr}, nil)
+		assert.Error(t, err)
+	}
+	dml.removeChannels(randStr)
 
 	chans0 := dml.getChannelNames(2)
 	dml.addChannels(chans0...)
@@ -149,11 +151,21 @@ func TestDmlChannels(t *testing.T) {
 	dml.addChannels(chans1...)
 	assert.Equal(t, 2, dml.getChannelNum())
 
+	chans2 := dml.getChannelNames(totalDmlChannelNum + 1)
+	assert.Nil(t, chans2)
+
 	dml.removeChannels(chans1...)
 	assert.Equal(t, 2, dml.getChannelNum())
 
 	dml.removeChannels(chans0...)
 	assert.Equal(t, 0, dml.getChannelNum())
+
+	paramtable.Get().Save(Params.CommonCfg.PreCreatedTopicEnabled.Key, "true")
+	paramtable.Get().Save(Params.CommonCfg.TopicNames.Key, "topic1,topic2")
+	defer paramtable.Get().Reset(Params.CommonCfg.PreCreatedTopicEnabled.Key)
+	defer paramtable.Get().Reset(Params.CommonCfg.TopicNames.Key)
+
+	newDmlChannels(ctx, factory, dmlChanPrefix, totalDmlChannelNum)
 }
 
 func TestDmChannelsFailure(t *testing.T) {
@@ -184,6 +196,65 @@ func TestDmChannelsFailure(t *testing.T) {
 	wg.Wait()
 }
 
+func TestGetNeedChanNum(t *testing.T) {
+	paramtable.Get().Save(Params.CommonCfg.PreCreatedTopicEnabled.Key, "true")
+	defer paramtable.Get().Reset(Params.CommonCfg.PreCreatedTopicEnabled.Key)
+	chans := map[UniqueID][]string{}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	t.Run("topic were empty", func(t *testing.T) {
+		defer wg.Done()
+		paramtable.Get().Save(Params.CommonCfg.TopicNames.Key, "")
+		defer paramtable.Get().Reset(Params.CommonCfg.TopicNames.Key)
+		assert.Panics(t, func() {
+			getNeedChanNum(10, chans)
+		})
+	})
+
+	wg.Add(1)
+	t.Run("duplicated topics", func(t *testing.T) {
+		defer wg.Done()
+		paramtable.Get().Save(Params.CommonCfg.TopicNames.Key, "topic1,topic1")
+		defer paramtable.Get().Reset(Params.CommonCfg.TopicNames.Key)
+		assert.Panics(t, func() {
+			getNeedChanNum(10, chans)
+		})
+	})
+
+	wg.Add(1)
+	t.Run("invalid channel channel that not in the list", func(t *testing.T) {
+		defer wg.Done()
+		paramtable.Get().Save(Params.CommonCfg.TopicNames.Key, "topic1,topic2")
+		defer paramtable.Get().Reset(Params.CommonCfg.TopicNames.Key)
+		chans[UniqueID(100)] = []string{"rootcoord-dml_0"}
+		assert.Panics(t, func() {
+			getNeedChanNum(10, chans)
+		})
+	})
+
+	wg.Add(1)
+	t.Run("normal case when pre-created topic", func(t *testing.T) {
+		defer wg.Done()
+		paramtable.Get().Save(Params.CommonCfg.TopicNames.Key, "topic1,topic2")
+		defer paramtable.Get().Reset(Params.CommonCfg.TopicNames.Key)
+		chans[UniqueID(100)] = []string{"topic1"}
+		assert.Equal(t, getNeedChanNum(10, chans), 0)
+	})
+
+	wg.Add(1)
+	t.Run("normal case", func(t *testing.T) {
+		defer wg.Done()
+		paramtable.Get().Save(Params.CommonCfg.PreCreatedTopicEnabled.Key, "false")
+		paramtable.Get().Save(Params.CommonCfg.RootCoordDml.Key, "rootcoord-dml")
+		defer paramtable.Get().Reset(Params.CommonCfg.RootCoordDml.Key)
+		chans[UniqueID(100)] = []string{"rootcoord-dml_99"}
+		assert.Equal(t, getNeedChanNum(10, chans), 100)
+	})
+
+	wg.Wait()
+}
+
 // FailMessageStreamFactory mock MessageStreamFactory failure
 type FailMessageStreamFactory struct {
 	msgstream.Factory
@@ -206,35 +277,27 @@ type FailMsgStream struct {
 	errBroadcast bool
 }
 
-func (ms *FailMsgStream) Start()                                       {}
-func (ms *FailMsgStream) Close()                                       {}
-func (ms *FailMsgStream) Chan() <-chan *msgstream.MsgPack              { return nil }
-func (ms *FailMsgStream) AsProducer(channels []string)                 {}
-func (ms *FailMsgStream) AsConsumer(channels []string, subName string) {}
-func (ms *FailMsgStream) AsReader(channels []string, subName string)   {}
-func (ms *FailMsgStream) AsConsumerWithPosition(channels []string, subName string, position mqwrapper.SubscriptionInitialPosition) {
-}
-func (ms *FailMsgStream) SetRepackFunc(repackFunc msgstream.RepackFunc)                   {}
-func (ms *FailMsgStream) ComputeProduceChannelIndexes(tsMsgs []msgstream.TsMsg) [][]int32 { return nil }
-func (ms *FailMsgStream) GetProduceChannels() []string                                    { return nil }
-func (ms *FailMsgStream) Produce(*msgstream.MsgPack) error                                { return nil }
-func (ms *FailMsgStream) ProduceMark(*msgstream.MsgPack) (map[string][]msgstream.MessageID, error) {
-	return nil, nil
-}
-func (ms *FailMsgStream) Broadcast(*msgstream.MsgPack) error {
-	if ms.errBroadcast {
-		return errors.New("broadcast error")
-	}
+func (ms *FailMsgStream) Close()                                                {}
+func (ms *FailMsgStream) Chan() <-chan *msgstream.ConsumeMsgPack                { return nil }
+func (ms *FailMsgStream) GetUnmarshalDispatcher() msgstream.UnmarshalDispatcher { return nil }
+func (ms *FailMsgStream) AsProducer(ctx context.Context, channels []string)     {}
+func (ms *FailMsgStream) AsReader(channels []string, subName string)            {}
+func (ms *FailMsgStream) AsConsumer(ctx context.Context, channels []string, subName string, position common.SubscriptionInitialPosition) error {
 	return nil
 }
-func (ms *FailMsgStream) BroadcastMark(*msgstream.MsgPack) (map[string][]msgstream.MessageID, error) {
+func (ms *FailMsgStream) SetRepackFunc(repackFunc msgstream.RepackFunc)     {}
+func (ms *FailMsgStream) GetProduceChannels() []string                      { return nil }
+func (ms *FailMsgStream) Produce(context.Context, *msgstream.MsgPack) error { return nil }
+func (ms *FailMsgStream) Broadcast(context.Context, *msgstream.MsgPack) (map[string][]msgstream.MessageID, error) {
 	if ms.errBroadcast {
-		return nil, errors.New("broadcastMark error")
+		return nil, errors.New("broadcast error")
 	}
 	return nil, nil
 }
-func (ms *FailMsgStream) Consume() *msgstream.MsgPack                { return nil }
-func (ms *FailMsgStream) Seek(offset []*msgstream.MsgPosition) error { return nil }
+func (ms *FailMsgStream) Consume() *msgstream.MsgPack { return nil }
+func (ms *FailMsgStream) Seek(ctx context.Context, msgPositions []*msgstream.MsgPosition, includeCurrentMsg bool) error {
+	return nil
+}
 
 func (ms *FailMsgStream) GetLatestMsgID(channel string) (msgstream.MessageID, error) {
 	return nil, nil

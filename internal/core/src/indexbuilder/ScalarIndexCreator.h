@@ -11,46 +11,60 @@
 
 #pragma once
 
-#include "indexbuilder/IndexCreatorBase.h"
-#include "pb/index_cgo_msg.pb.h"
-#include <string>
+#include <stdint.h>
 #include <memory>
-#include <common/CDataType.h>
+#include <string>
+
+#include "common/Types.h"
+#include "common/protobuf_utils.h"
 #include "index/Index.h"
-#include "index/ScalarIndex.h"
+#include "index/IndexStats.h"
+#include "indexbuilder/IndexCreatorBase.h"
+#include "storage/FileManager.h"
 
 namespace milvus::indexbuilder {
 
 class ScalarIndexCreator : public IndexCreatorBase {
  public:
-    ScalarIndexCreator(CDataType dtype, const char* type_params, const char* index_params);
+    ScalarIndexCreator(DataType data_type,
+                       Config& config,
+                       const storage::FileManagerContext& file_manager_context);
 
     void
-    Build(const knowhere::DatasetPtr& dataset) override;
+    Build(const milvus::DatasetPtr& dataset,
+          const bool* valid_data = nullptr,
+          const int64_t valid_data_len = 0) override;
 
-    knowhere::BinarySet
+    void
+    Build() override;
+
+    milvus::BinarySet
     Serialize() override;
 
     void
-    Load(const knowhere::BinarySet&) override;
+    Load(const milvus::BinarySet&) override;
+
+    index::IndexStatsPtr
+    Upload() override;
 
  private:
     std::string
     index_type();
 
  private:
-    scalar::IndexBasePtr index_ = nullptr;
-    proto::indexcgo::TypeParams type_params_;
-    proto::indexcgo::IndexParams index_params_;
-    knowhere::Config config_;
-    CDataType dtype_;
+    index::IndexBasePtr index_ = nullptr;
+    Config config_;
+    DataType dtype_;
+    IndexType index_type_;
 };
 
 using ScalarIndexCreatorPtr = std::unique_ptr<ScalarIndexCreator>;
 
 inline ScalarIndexCreatorPtr
-CreateScalarIndex(CDataType dtype, const char* type_params, const char* index_params) {
-    return std::make_unique<ScalarIndexCreator>(dtype, type_params, index_params);
+CreateScalarIndex(DataType dtype,
+                  Config& config,
+                  const storage::FileManagerContext& file_manager_context) {
+    return std::make_unique<ScalarIndexCreator>(
+        dtype, config, file_manager_context);
 }
-
 }  // namespace milvus::indexbuilder

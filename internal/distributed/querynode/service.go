@@ -18,38 +18,43 @@ package grpcquerynode
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	ot "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
-	qn "github.com/milvus-io/milvus/internal/querynode"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	mix "github.com/milvus-io/milvus/internal/distributed/mixcoord/client"
+	"github.com/milvus-io/milvus/internal/distributed/utils"
+	"github.com/milvus-io/milvus/internal/flushcommon/broker"
+	qn "github.com/milvus-io/milvus/internal/querynodev2"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/util/componentutil"
 	"github.com/milvus-io/milvus/internal/util/dependency"
-	"github.com/milvus-io/milvus/internal/util/etcd"
-	"github.com/milvus-io/milvus/internal/util/funcutil"
-	"github.com/milvus-io/milvus/internal/util/logutil"
-	"github.com/milvus-io/milvus/internal/util/paramtable"
-	"github.com/milvus-io/milvus/internal/util/retry"
-	"github.com/milvus-io/milvus/internal/util/trace"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/tracer"
+	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/interceptor"
+	"github.com/milvus-io/milvus/pkg/v3/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/netutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/retry"
+	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
-
-var Params paramtable.GrpcServerConfig
 
 // UniqueID is an alias for type typeutil.UniqueID, used as a unique identifier for the request.
 type UniqueID = typeutil.UniqueID
@@ -57,20 +62,49 @@ type UniqueID = typeutil.UniqueID
 // Server is the grpc server of QueryNode.
 type Server struct {
 	querynode   types.QueryNodeComponent
-	wg          sync.WaitGroup
+	grpcWG      sync.WaitGroup
 	ctx         context.Context
 	cancel      context.CancelFunc
 	grpcErrChan chan error
 
+	serverID atomic.Int64
+
 	grpcServer *grpc.Server
+	listener   *netutil.NetListener
 
-	etcdCli *clientv3.Client
+	etcdCli  *clientv3.Client
+	mixCoord *syncutil.Future[types.MixCoordClient]
+}
 
-	closer io.Closer
+// lazyBinlogSaver implements segments.BinlogSaver with lazy initialization.
+// It waits for MixCoordClient to be ready on first SaveBinlogPaths call.
+type lazyBinlogSaver struct {
+	mixCoordFuture *syncutil.Future[types.MixCoordClient]
+	mu             sync.Mutex
+	broker         broker.Broker
+}
+
+func (s *lazyBinlogSaver) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPathsRequest) error {
+	s.mu.Lock()
+	if s.broker == nil {
+		client, err := s.mixCoordFuture.GetWithContext(ctx)
+		if err != nil {
+			s.mu.Unlock()
+			return errors.Wrap(err, "failed to get MixCoordClient for SaveBinlogPaths")
+		}
+		s.broker = broker.NewCoordBroker(client, paramtable.GetNodeID())
+	}
+	b := s.broker
+	s.mu.Unlock()
+	return b.SaveBinlogPaths(ctx, req)
 }
 
 func (s *Server) GetStatistics(ctx context.Context, request *querypb.GetStatisticsRequest) (*internalpb.GetStatisticsResponse, error) {
 	return s.querynode.GetStatistics(ctx, request)
+}
+
+func (s *Server) GetQueryNode() types.QueryNodeComponent {
+	return s.querynode
 }
 
 // NewServer create a new QueryNode grpc server.
@@ -82,57 +116,104 @@ func NewServer(ctx context.Context, factory dependency.Factory) (*Server, error)
 		cancel:      cancel,
 		querynode:   qn.NewQueryNode(ctx, factory),
 		grpcErrChan: make(chan error),
+		mixCoord:    syncutil.NewFuture[types.MixCoordClient](),
 	}
 	return s, nil
 }
 
+func (s *Server) Prepare() error {
+	listener, err := netutil.NewListener(
+		netutil.OptIP(paramtable.Get().QueryNodeGrpcServerCfg.IP),
+		netutil.OptHighPriorityToUsePort(paramtable.Get().QueryNodeGrpcServerCfg.Port.GetAsInt()),
+	)
+	if err != nil {
+		log.Ctx(s.ctx).Warn("QueryNode fail to create net listener", zap.Error(err))
+		return err
+	}
+	s.listener = listener
+	log.Ctx(s.ctx).Info("QueryNode listen on", zap.String("address", listener.Addr().String()), zap.Int("port", listener.Port()))
+	paramtable.Get().Save(
+		paramtable.Get().QueryNodeGrpcServerCfg.Port.Key,
+		strconv.FormatInt(int64(listener.Port()), 10))
+	return nil
+}
+
 // init initializes QueryNode's grpc service.
 func (s *Server) init() error {
-	Params.InitOnce(typeutil.QueryNodeRole)
+	etcdConfig := &paramtable.Get().EtcdCfg
+	log := log.Ctx(s.ctx)
+	log.Debug("QueryNode", zap.Int("port", s.listener.Port()))
 
-	if !funcutil.CheckPortAvailable(Params.Port) {
-		Params.Port = funcutil.GetAvailablePort()
-		log.Warn("QueryNode get available port when init", zap.Int("Port", Params.Port))
-	}
-
-	qn.Params.InitOnce()
-	qn.Params.QueryNodeCfg.QueryNodeIP = Params.IP
-	qn.Params.QueryNodeCfg.QueryNodePort = int64(Params.Port)
-	//qn.Params.QueryNodeID = Params.QueryNodeID
-
-	closer := trace.InitTracing(fmt.Sprintf("query_node ip: %s, port: %d", Params.IP, Params.Port))
-	s.closer = closer
-
-	log.Debug("QueryNode", zap.Int("port", Params.Port))
-
-	etcdCli, err := etcd.GetEtcdClient(&Params.EtcdCfg)
+	etcdCli, err := etcd.CreateEtcdClient(
+		etcdConfig.UseEmbedEtcd.GetAsBool(),
+		etcdConfig.EtcdEnableAuth.GetAsBool(),
+		etcdConfig.EtcdAuthUserName.GetValue(),
+		etcdConfig.EtcdAuthPassword.GetValue(),
+		etcdConfig.EtcdUseSSL.GetAsBool(),
+		etcdConfig.Endpoints.GetAsStrings(),
+		etcdConfig.EtcdTLSCert.GetValue(),
+		etcdConfig.EtcdTLSKey.GetValue(),
+		etcdConfig.EtcdTLSCACert.GetValue(),
+		etcdConfig.EtcdTLSMinVersion.GetValue(),
+		etcdConfig.ClientOptions()...)
 	if err != nil {
 		log.Debug("QueryNode connect to etcd failed", zap.Error(err))
 		return err
 	}
 	s.etcdCli = etcdCli
 	s.SetEtcdClient(etcdCli)
+	s.querynode.SetAddress(s.listener.Address())
 	log.Debug("QueryNode connect to etcd successfully")
-	s.wg.Add(1)
-	go s.startGrpcLoop(Params.Port)
+	s.grpcWG.Add(1)
+	go s.startGrpcLoop()
 	// wait for grpc server loop start
 	err = <-s.grpcErrChan
 	if err != nil {
 		return err
 	}
 
-	s.querynode.UpdateStateCode(internalpb.StateCode_Initializing)
-	log.Debug("QueryNode", zap.Any("State", internalpb.StateCode_Initializing))
+	s.querynode.UpdateStateCode(commonpb.StateCode_Initializing)
+	log.Debug("QueryNode", zap.Any("State", commonpb.StateCode_Initializing))
 	if err := s.querynode.Init(); err != nil {
 		log.Error("QueryNode init error: ", zap.Error(err))
 		return err
+	}
+	s.serverID.Store(s.querynode.GetNodeID())
+
+	// initialize MixCoord client asynchronously and set BinlogSaver on QueryNode
+	s.initMixCoord()
+	if qnImpl, ok := s.querynode.(*qn.QueryNode); ok {
+		qnImpl.SetBinlogSaver(&lazyBinlogSaver{mixCoordFuture: s.mixCoord})
 	}
 
 	return nil
 }
 
+func (s *Server) initMixCoord() {
+	log := log.Ctx(s.ctx)
+	go func() {
+		retry.Do(s.ctx, func() error {
+			log.Info("QueryNode connect to mixCoord...")
+			mixCoord, err := mix.NewClient(s.ctx)
+			if err != nil {
+				return errors.Wrap(err, "QueryNode try to new mixCoord client failed")
+			}
+
+			log.Info("QueryNode try to wait for mixCoord ready")
+			err = componentutil.WaitForComponentHealthy(s.ctx, mixCoord, "mixCoord", 1000000, time.Millisecond*200)
+			if err != nil {
+				return errors.Wrap(err, "QueryNode wait for mixCoord ready failed")
+			}
+			log.Info("QueryNode mixCoord client ready")
+			s.mixCoord.Set(mixCoord)
+			return nil
+		}, retry.AttemptAlways())
+	}()
+}
+
 // start starts QueryNode's grpc service.
 func (s *Server) start() error {
+	log := log.Ctx(s.ctx)
 	if err := s.querynode.Start(); err != nil {
 		log.Error("QueryNode start failed", zap.Error(err))
 		return err
@@ -145,99 +226,107 @@ func (s *Server) start() error {
 }
 
 // startGrpcLoop starts the grpc loop of QueryNode component.
-func (s *Server) startGrpcLoop(grpcPort int) {
-	defer s.wg.Done()
-	var kaep = keepalive.EnforcementPolicy{
+func (s *Server) startGrpcLoop() {
+	defer s.grpcWG.Done()
+	Params := &paramtable.Get().QueryNodeGrpcServerCfg
+	kaep := keepalive.EnforcementPolicy{
 		MinTime:             5 * time.Second, // If a client pings more than once every 5 seconds, terminate the connection
 		PermitWithoutStream: true,            // Allow pings even when there are no active streams
 	}
 
-	var kasp = keepalive.ServerParameters{
+	kasp := keepalive.ServerParameters{
 		Time:    60 * time.Second, // Ping the client if it is idle for 60 seconds to ensure the connection is still active
 		Timeout: 10 * time.Second, // Wait 10 second for the ping ack before assuming the connection is dead
 	}
-	var lis net.Listener
-	var err error
-	err = retry.Do(s.ctx, func() error {
-		addr := ":" + strconv.Itoa(grpcPort)
-		lis, err = net.Listen("tcp", addr)
-		if err == nil {
-			qn.Params.QueryNodeCfg.QueryNodePort = int64(lis.Addr().(*net.TCPAddr).Port)
-		} else {
-			// set port=0 to get next available port
-			grpcPort = 0
-		}
-		return err
-	}, retry.Attempts(10))
-	if err != nil {
-		log.Error("QueryNode GrpcServer:failed to listen", zap.Error(err))
-		s.grpcErrChan <- err
-		return
-	}
 
-	opts := trace.GetInterceptorOpts()
-	s.grpcServer = grpc.NewServer(
+	grpcOpts := []grpc.ServerOption{
 		grpc.KeepaliveEnforcementPolicy(kaep),
 		grpc.KeepaliveParams(kasp),
-		grpc.MaxRecvMsgSize(Params.ServerMaxRecvSize),
-		grpc.MaxSendMsgSize(Params.ServerMaxSendSize),
+		grpc.MaxRecvMsgSize(Params.ServerMaxRecvSize.GetAsInt()),
+		grpc.MaxSendMsgSize(Params.ServerMaxSendSize.GetAsInt()),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-			ot.UnaryServerInterceptor(opts...),
-			logutil.UnaryTraceLoggerInterceptor)),
+			// otelgrpc.UnaryServerInterceptor(opts...),
+			logutil.UnaryTraceLoggerInterceptor,
+			interceptor.ClusterValidationUnaryServerInterceptor(),
+			interceptor.ServerIDValidationUnaryServerInterceptor(func() int64 {
+				if s.serverID.Load() == 0 {
+					s.serverID.Store(paramtable.GetNodeID())
+				}
+				return s.serverID.Load()
+			}),
+		)),
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
-			ot.StreamServerInterceptor(opts...),
-			logutil.StreamTraceLoggerInterceptor)))
+			// otelgrpc.StreamServerInterceptor(opts...),
+			logutil.StreamTraceLoggerInterceptor,
+			interceptor.ClusterValidationStreamServerInterceptor(),
+			interceptor.ServerIDValidationStreamServerInterceptor(func() int64 {
+				if s.serverID.Load() == 0 {
+					s.serverID.Store(paramtable.GetNodeID())
+				}
+				return s.serverID.Load()
+			}),
+		)),
+		grpc.StatsHandler(tracer.GetDynamicOtelGrpcServerStatsHandler()),
+	}
+
+	grpcOpts = append(grpcOpts, utils.EnableInternalTLS("QueryNode"))
+	s.grpcServer = grpc.NewServer(grpcOpts...)
 	querypb.RegisterQueryNodeServer(s.grpcServer, s)
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 
 	go funcutil.CheckGrpcReady(ctx, s.grpcErrChan)
-	if err := s.grpcServer.Serve(lis); err != nil {
-		log.Debug("QueryNode Start Grpc Failed!!!!")
+	if err := s.grpcServer.Serve(s.listener); err != nil {
+		log.Ctx(s.ctx).Debug("QueryNode Start Grpc Failed!!!!")
 		s.grpcErrChan <- err
 	}
-
 }
 
 // Run initializes and starts QueryNode's grpc service.
 func (s *Server) Run() error {
-
 	if err := s.init(); err != nil {
 		return err
 	}
-	log.Debug("QueryNode init done ...")
+	log.Ctx(s.ctx).Debug("QueryNode init done ...")
 
 	if err := s.start(); err != nil {
 		return err
 	}
-	log.Debug("QueryNode start done ...")
+	log.Ctx(s.ctx).Debug("QueryNode start done ...")
 	return nil
 }
 
 // Stop stops QueryNode's grpc service.
-func (s *Server) Stop() error {
-	log.Debug("QueryNode stop", zap.String("Address", Params.GetAddress()))
-	if s.closer != nil {
-		if err := s.closer.Close(); err != nil {
-			return err
-		}
+func (s *Server) Stop() (err error) {
+	logger := log.Ctx(s.ctx)
+	if s.listener != nil {
+		logger = logger.With(zap.String("address", s.listener.Address()))
+	}
+	logger.Info("QueryNode stopping")
+	defer func() {
+		logger.Info("QueryNode stopped", zap.Error(err))
+	}()
+
+	logger.Info("internal server[querynode] start to stop")
+	err = s.querynode.Stop()
+	if err != nil {
+		logger.Error("failed to close querynode", zap.Error(err))
+		return err
 	}
 	if s.etcdCli != nil {
 		defer s.etcdCli.Close()
 	}
 
-	s.cancel()
 	if s.grpcServer != nil {
-		log.Debug("Graceful stop grpc server...")
-		s.grpcServer.GracefulStop()
+		utils.GracefulStopGRPCServer(s.grpcServer)
 	}
+	s.grpcWG.Wait()
 
-	err := s.querynode.Stop()
-	if err != nil {
-		return err
+	s.cancel()
+	if s.listener != nil {
+		s.listener.Close()
 	}
-	s.wg.Wait()
 	return nil
 }
 
@@ -248,18 +337,18 @@ func (s *Server) SetEtcdClient(etcdCli *clientv3.Client) {
 
 // GetTimeTickChannel gets the time tick channel of QueryNode.
 func (s *Server) GetTimeTickChannel(ctx context.Context, req *internalpb.GetTimeTickChannelRequest) (*milvuspb.StringResponse, error) {
-	return s.querynode.GetTimeTickChannel(ctx)
+	return s.querynode.GetTimeTickChannel(ctx, req)
 }
 
 // GetStatisticsChannel gets the statistics channel of QueryNode.
 func (s *Server) GetStatisticsChannel(ctx context.Context, req *internalpb.GetStatisticsChannelRequest) (*milvuspb.StringResponse, error) {
-	return s.querynode.GetStatisticsChannel(ctx)
+	return s.querynode.GetStatisticsChannel(ctx, req)
 }
 
 // GetComponentStates gets the component states of QueryNode.
-func (s *Server) GetComponentStates(ctx context.Context, req *internalpb.GetComponentStatesRequest) (*internalpb.ComponentStates, error) {
+func (s *Server) GetComponentStates(ctx context.Context, req *milvuspb.GetComponentStatesRequest) (*milvuspb.ComponentStates, error) {
 	// ignore ctx and in
-	return s.querynode.GetComponentStates(ctx)
+	return s.querynode.GetComponentStates(ctx, req)
 }
 
 // WatchDmChannels watches the channels about data manipulation.
@@ -284,6 +373,11 @@ func (s *Server) ReleaseCollection(ctx context.Context, req *querypb.ReleaseColl
 	return s.querynode.ReleaseCollection(ctx, req)
 }
 
+// LoadPartitions updates partitions meta info in QueryNode.
+func (s *Server) LoadPartitions(ctx context.Context, req *querypb.LoadPartitionsRequest) (*commonpb.Status, error) {
+	return s.querynode.LoadPartitions(ctx, req)
+}
+
 // ReleasePartitions releases the data of the specified partitions in QueryNode.
 func (s *Server) ReleasePartitions(ctx context.Context, req *querypb.ReleasePartitionsRequest) (*commonpb.Status, error) {
 	// ignore ctx
@@ -306,9 +400,25 @@ func (s *Server) Search(ctx context.Context, req *querypb.SearchRequest) (*inter
 	return s.querynode.Search(ctx, req)
 }
 
+func (s *Server) SearchSegments(ctx context.Context, req *querypb.SearchRequest) (*internalpb.SearchResults, error) {
+	return s.querynode.SearchSegments(ctx, req)
+}
+
 // Query performs query of streaming/historical replica on QueryNode.
 func (s *Server) Query(ctx context.Context, req *querypb.QueryRequest) (*internalpb.RetrieveResults, error) {
 	return s.querynode.Query(ctx, req)
+}
+
+func (s *Server) QueryStream(req *querypb.QueryRequest, srv querypb.QueryNode_QueryStreamServer) error {
+	return s.querynode.QueryStream(req, srv)
+}
+
+func (s *Server) QueryStreamSegments(req *querypb.QueryRequest, srv querypb.QueryNode_QueryStreamSegmentsServer) error {
+	return s.querynode.QueryStreamSegments(req, srv)
+}
+
+func (s *Server) QuerySegments(ctx context.Context, req *querypb.QueryRequest) (*internalpb.RetrieveResults, error) {
+	return s.querynode.QuerySegments(ctx, req)
 }
 
 // SyncReplicaSegments syncs replica segment information to shard leader
@@ -333,4 +443,51 @@ func (s *Server) GetDataDistribution(ctx context.Context, req *querypb.GetDataDi
 
 func (s *Server) SyncDistribution(ctx context.Context, req *querypb.SyncDistributionRequest) (*commonpb.Status, error) {
 	return s.querynode.SyncDistribution(ctx, req)
+}
+
+// Delete is used to forward delete message between delegator and workers.
+func (s *Server) Delete(ctx context.Context, req *querypb.DeleteRequest) (*commonpb.Status, error) {
+	return s.querynode.Delete(ctx, req)
+}
+
+// DeleteBatch is the API to apply same delete data into multiple segments.
+// it's basically same as `Delete` but cost less memory pressure.
+func (s *Server) DeleteBatch(ctx context.Context, req *querypb.DeleteBatchRequest) (*querypb.DeleteBatchResponse, error) {
+	return s.querynode.DeleteBatch(ctx, req)
+}
+
+func (s *Server) UpdateSchema(ctx context.Context, req *querypb.UpdateSchemaRequest) (*commonpb.Status, error) {
+	return s.querynode.UpdateSchema(ctx, req)
+}
+
+func (s *Server) RunAnalyzer(ctx context.Context, req *querypb.RunAnalyzerRequest) (*milvuspb.RunAnalyzerResponse, error) {
+	return s.querynode.RunAnalyzer(ctx, req)
+}
+
+func (s *Server) DropIndex(ctx context.Context, req *querypb.DropIndexRequest) (*commonpb.Status, error) {
+	return s.querynode.DropIndex(ctx, req)
+}
+
+func (s *Server) UpdateIndex(ctx context.Context, req *querypb.UpdateIndexRequest) (*commonpb.Status, error) {
+	return s.querynode.UpdateIndex(ctx, req)
+}
+
+func (s *Server) ValidateAnalyzer(ctx context.Context, req *querypb.ValidateAnalyzerRequest) (*querypb.ValidateAnalyzerResponse, error) {
+	return s.querynode.ValidateAnalyzer(ctx, req)
+}
+
+func (s *Server) GetHighlight(ctx context.Context, req *querypb.GetHighlightRequest) (*querypb.GetHighlightResponse, error) {
+	return s.querynode.GetHighlight(ctx, req)
+}
+
+func (s *Server) SyncFileResource(ctx context.Context, req *internalpb.SyncFileResourceRequest) (*commonpb.Status, error) {
+	return s.querynode.SyncFileResource(ctx, req)
+}
+
+func (s *Server) ClearReadTaskQueue(ctx context.Context, req *internalpb.ClearReadTaskQueueRequest) (*internalpb.ClearReadTaskQueueResponse, error) {
+	return s.querynode.ClearReadTaskQueue(ctx, req)
+}
+
+func (s *Server) ComputePhraseMatchSlop(ctx context.Context, req *querypb.ComputePhraseMatchSlopRequest) (*querypb.ComputePhraseMatchSlopResponse, error) {
+	return s.querynode.ComputePhraseMatchSlop(ctx, req)
 }

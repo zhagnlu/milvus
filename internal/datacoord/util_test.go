@@ -18,15 +18,17 @@ package datacoord
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/internal/util/tsoutil"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 )
 
 type UtilSuite struct {
@@ -109,84 +111,11 @@ func (suite *UtilSuite) TestVerifyResponse() {
 	for _, c := range cases {
 		r := VerifyResponse(c.resp, c.err)
 		if c.equalValue {
-			suite.EqualValues(c.expected, r)
+			suite.Contains(r.Error(), c.expected.Error())
 		} else {
 			suite.Equal(c.expected, r)
 		}
 	}
-}
-
-func (suite *UtilSuite) TestGetCompactTime() {
-	Params.Init()
-	Params.CommonCfg.RetentionDuration = 43200 // 5 days
-
-	tFixed := time.Date(2021, 11, 15, 0, 0, 0, 0, time.Local)
-	tBefore := tFixed.Add(-time.Duration(Params.CommonCfg.RetentionDuration) * time.Second)
-
-	type args struct {
-		allocator allocator
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    *compactTime
-		wantErr bool
-	}{
-		{
-			"test get timetravel",
-			args{&fixedTSOAllocator{fixedTime: tFixed}},
-			&compactTime{tsoutil.ComposeTS(tBefore.UnixNano()/int64(time.Millisecond), 0), 0},
-			false,
-		},
-	}
-	for _, tt := range tests {
-		suite.Run(tt.name, func() {
-			got, err := GetCompactTime(context.TODO(), tt.args.allocator)
-			suite.Equal(tt.wantErr, err != nil)
-			suite.EqualValues(tt.want, got)
-		})
-	}
-}
-
-func (suite *UtilSuite) TestIsParentDropped() {
-	meta := &meta{
-		segments: &SegmentsInfo{
-			segments: map[int64]*SegmentInfo{
-				1: {
-					SegmentInfo: &datapb.SegmentInfo{
-						ID:    1,
-						State: commonpb.SegmentState_Flushed,
-					},
-				},
-				3: {
-					SegmentInfo: &datapb.SegmentInfo{
-						ID:             3,
-						CompactionFrom: []int64{1},
-						State:          commonpb.SegmentState_Flushed,
-					},
-				},
-				5: {
-					SegmentInfo: &datapb.SegmentInfo{
-						ID:             5,
-						CompactionFrom: []int64{1, 2},
-						State:          commonpb.SegmentState_Flushed,
-					},
-				},
-				7: {
-					SegmentInfo: &datapb.SegmentInfo{
-						ID:             7,
-						CompactionFrom: []int64{2, 4},
-						State:          commonpb.SegmentState_Flushed,
-					},
-				},
-			},
-		},
-	}
-
-	suite.True(IsParentDropped(meta, meta.GetSegment(1)))
-	suite.False(IsParentDropped(meta, meta.GetSegment(3)))
-	suite.False(IsParentDropped(meta, meta.GetSegment(5)))
-	suite.True(IsParentDropped(meta, meta.GetSegment(7)))
 }
 
 func TestUtil(t *testing.T) {
@@ -197,10 +126,169 @@ type fixedTSOAllocator struct {
 	fixedTime time.Time
 }
 
-func (f *fixedTSOAllocator) allocTimestamp(_ context.Context) (Timestamp, error) {
+func (f *fixedTSOAllocator) AllocTimestamp(_ context.Context) (Timestamp, error) {
 	return tsoutil.ComposeTS(f.fixedTime.UnixNano()/int64(time.Millisecond), 0), nil
 }
 
-func (f *fixedTSOAllocator) allocID(_ context.Context) (UniqueID, error) {
+func (f *fixedTSOAllocator) AllocID(_ context.Context) (UniqueID, error) {
 	panic("not implemented") // TODO: Implement
+}
+
+func (f *fixedTSOAllocator) AllocN(_ context.Context, _ int64) (UniqueID, UniqueID, error) {
+	panic("not implemented") // TODO: Implement
+}
+
+func (suite *UtilSuite) TestGetZeroTime() {
+	n := 10
+	for i := 0; i < n; i++ {
+		timeGot := getZeroTime()
+		suite.True(timeGot.IsZero())
+	}
+}
+
+func (suite *UtilSuite) TestGetCollectionAutoCompactionEnabled() {
+	properties := map[string]string{
+		common.CollectionAutoCompactionKey: "true",
+	}
+
+	enabled, err := getCollectionAutoCompactionEnabled(properties)
+	suite.NoError(err)
+	suite.True(enabled)
+
+	properties = map[string]string{
+		common.CollectionAutoCompactionKey: "bad_value",
+	}
+
+	_, err = getCollectionAutoCompactionEnabled(properties)
+	suite.Error(err)
+
+	enabled, err = getCollectionAutoCompactionEnabled(map[string]string{})
+	suite.NoError(err)
+	suite.Equal(Params.DataCoordCfg.EnableAutoCompaction.GetAsBool(), enabled)
+}
+
+func (suite *UtilSuite) TestCalculateL0SegmentSize() {
+	logsize := int64(100)
+	fields := []*datapb.FieldBinlog{{
+		FieldID: 102,
+		Binlogs: []*datapb.Binlog{{LogSize: logsize, MemorySize: logsize}},
+	}}
+
+	suite.Equal(calculateL0SegmentSize(fields), float64(logsize))
+}
+
+func (suite *UtilSuite) TestFilterDuplicateFieldBinlogs() {
+	suite.Run("empty existing returns new unchanged", func() {
+		newLogs := []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogID: 1}, {LogID: 2}},
+		}}
+		result := filterDuplicateFieldBinlogs(nil, newLogs)
+		suite.Equal(newLogs, result)
+	})
+
+	suite.Run("empty new returns empty", func() {
+		existing := []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogID: 1}},
+		}}
+		result := filterDuplicateFieldBinlogs(existing, nil)
+		suite.Empty(result)
+	})
+
+	suite.Run("partial overlap same field", func() {
+		existing := []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogID: 1}, {LogID: 2}},
+		}}
+		newLogs := []*datapb.FieldBinlog{{
+			FieldID:     102,
+			ChildFields: []int64{102, 103},
+			Format:      "parquet",
+			Binlogs:     []*datapb.Binlog{{LogID: 2}, {LogID: 3}}, // 2 dup, 3 new
+		}}
+		result := filterDuplicateFieldBinlogs(existing, newLogs)
+		suite.Equal(1, len(result))
+		suite.Equal(int64(102), result[0].FieldID)
+		suite.ElementsMatch([]int64{102, 103}, result[0].GetChildFields())
+		suite.Equal("parquet", result[0].GetFormat())
+		suite.Equal(1, len(result[0].Binlogs))
+		suite.Equal(int64(3), result[0].Binlogs[0].LogID)
+	})
+
+	suite.Run("full overlap returns empty", func() {
+		existing := []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogID: 1}, {LogID: 2}},
+		}}
+		newLogs := []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogID: 1}, {LogID: 2}},
+		}}
+		result := filterDuplicateFieldBinlogs(existing, newLogs)
+		suite.Empty(result)
+	})
+
+	suite.Run("different fieldIDs no filtering", func() {
+		existing := []*datapb.FieldBinlog{{
+			FieldID: 102,
+			Binlogs: []*datapb.Binlog{{LogID: 1}},
+		}}
+		newLogs := []*datapb.FieldBinlog{{
+			FieldID: 103,
+			Binlogs: []*datapb.Binlog{{LogID: 1}}, // same logID but different field
+		}}
+		result := filterDuplicateFieldBinlogs(existing, newLogs)
+		suite.Equal(1, len(result))
+		suite.Equal(int64(103), result[0].FieldID)
+		suite.Equal(1, len(result[0].Binlogs))
+	})
+
+	suite.Run("mixed fields partial overlap", func() {
+		existing := []*datapb.FieldBinlog{
+			{FieldID: 102, Binlogs: []*datapb.Binlog{{LogID: 1}}},
+			{FieldID: 103, Binlogs: []*datapb.Binlog{{LogID: 5}}},
+		}
+		newLogs := []*datapb.FieldBinlog{
+			{FieldID: 102, Binlogs: []*datapb.Binlog{{LogID: 1}, {LogID: 2}}}, // 1 dup, 2 new
+			{FieldID: 104, Binlogs: []*datapb.Binlog{{LogID: 10}}},            // completely new field
+		}
+		result := filterDuplicateFieldBinlogs(existing, newLogs)
+		suite.Equal(2, len(result))
+		// find fieldID 102 in result
+		var fb102, fb104 *datapb.FieldBinlog
+		for _, fb := range result {
+			if fb.FieldID == 102 {
+				fb102 = fb
+			}
+			if fb.FieldID == 104 {
+				fb104 = fb
+			}
+		}
+		suite.NotNil(fb102)
+		suite.Equal(1, len(fb102.Binlogs))
+		suite.Equal(int64(2), fb102.Binlogs[0].LogID)
+		suite.NotNil(fb104)
+		suite.Equal(1, len(fb104.Binlogs))
+	})
+}
+
+func (suite *UtilSuite) TestMergeFieldBinlogsPreservesColumnGroupMetadata() {
+	current := []*datapb.FieldBinlog{{
+		FieldID: 102,
+		Binlogs: []*datapb.Binlog{{LogID: 1}},
+	}}
+	newLogs := []*datapb.FieldBinlog{{
+		FieldID:     102,
+		ChildFields: []int64{102, 103},
+		Format:      "parquet",
+		Binlogs:     []*datapb.Binlog{{LogID: 2}},
+	}}
+
+	result := mergeFieldBinlogs(current, newLogs)
+
+	suite.Len(result, 1)
+	suite.Equal([]int64{102, 103}, result[0].GetChildFields())
+	suite.Equal("parquet", result[0].GetFormat())
+	suite.Len(result[0].GetBinlogs(), 2)
 }

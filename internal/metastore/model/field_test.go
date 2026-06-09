@@ -3,10 +3,10 @@ package model
 import (
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 )
 
 var (
@@ -70,22 +70,51 @@ func TestCheckFieldsEqual(t *testing.T) {
 		{
 			// length not match.
 			args: args{
-				fieldsA: []*Field{{Name: "f1"}},
+				fieldsA: []*Field{{FieldID: 1, Name: "f1"}},
 				fieldsB: []*Field{},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				fieldsA: []*Field{{Name: "f1"}},
-				fieldsB: []*Field{{Name: "f2"}},
+				fieldsA: []*Field{{FieldID: 1, Name: "f1"}},
+				fieldsB: []*Field{{FieldID: 2, Name: "f2"}},
 			},
 			want: false,
 		},
 		{
 			args: args{
-				fieldsA: []*Field{{Name: "f1"}, {Name: "f2"}},
-				fieldsB: []*Field{{Name: "f1"}, {Name: "f2"}},
+				fieldsA: []*Field{{FieldID: 1, Name: "f1"}, {FieldID: 2, Name: "f2"}},
+				fieldsB: []*Field{{FieldID: 1, Name: "f1"}, {FieldID: 2, Name: "f2"}},
+			},
+			want: true,
+		},
+		{
+			args: args{
+				fieldsA: []*Field{{FieldID: 1, Name: "f1", TypeParams: []*commonpb.KeyValuePair{
+					{Key: "dim", Value: "128"},
+				}}},
+				fieldsB: []*Field{{FieldID: 1, Name: "f1", TypeParams: []*commonpb.KeyValuePair{
+					{Key: "dim", Value: "256"},
+				}}},
+			},
+			want: false,
+		},
+		{
+			args: args{
+				fieldsA: []*Field{{FieldID: 1, Name: "f1", TypeParams: []*commonpb.KeyValuePair{
+					{Key: "max_length", Value: "65536"},
+				}}},
+				fieldsB: []*Field{{FieldID: 1, Name: "f1", TypeParams: []*commonpb.KeyValuePair{
+					{Key: "max_length", Value: "32768"},
+				}}},
+			},
+			want: false,
+		},
+		{
+			args: args{
+				fieldsA: []*Field{{FieldID: 1, Name: "f1"}, {FieldID: 2, Name: "f2"}},
+				fieldsB: []*Field{{FieldID: 2, Name: "f2"}, {FieldID: 1, Name: "f1"}},
 			},
 			want: true,
 		},

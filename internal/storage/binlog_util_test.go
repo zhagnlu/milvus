@@ -3,13 +3,10 @@ package storage
 import (
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/common"
-
 	"github.com/stretchr/testify/assert"
 )
 
 func TestParseSegmentIDByBinlog(t *testing.T) {
-
 	type testCase struct {
 		name             string
 		input            string
@@ -54,8 +51,21 @@ func TestParseSegmentIDByBinlog(t *testing.T) {
 		},
 		{
 			name:        "file name doesn't exists",
-			input:       "tenant1/files/delta_log/609/610/457/793",
+			input:       "tenant1/files/inert_log/609/610/457/793",
 			rootPath:    "tenant1/files",
+			expectError: true,
+		},
+		{
+			name:        "valid delta_log key",
+			input:       "file/delta_log/436300346003230019/436300346003230020/436300346003230115/436300346003230216",
+			rootPath:    "file",
+			expectError: false,
+			expectID:    436300346003230115,
+		},
+		{
+			name:        "invalid delta_log key",
+			input:       "file/delta_log/436300346003230019/436300346003230020/436300346003230115",
+			rootPath:    "file",
 			expectError: true,
 		},
 	}
@@ -65,9 +75,6 @@ func TestParseSegmentIDByBinlog(t *testing.T) {
 			id, err := ParseSegmentIDByBinlog(tc.rootPath, tc.input)
 			if tc.expectError {
 				assert.Error(t, err)
-				if tc.isIgnorableError {
-					assert.True(t, common.IsIgnorableError(err))
-				}
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tc.expectID, id)

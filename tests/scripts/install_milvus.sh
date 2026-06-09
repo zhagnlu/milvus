@@ -23,7 +23,7 @@
 set -x
 
 
-MILVUS_HELM_REPO="${MILVUS_HELM_REPO:-https://milvus-io.github.io/milvus-helm/}"
+MILVUS_HELM_REPO="${MILVUS_HELM_REPO:-https://zilliztech.github.io/milvus-helm/}"
 MILVUS_HELM_RELEASE_NAME="${MILVUS_HELM_RELEASE_NAME:-milvus-testing}"
 MILVUS_CLUSTER_ENABLED="${MILVUS_CLUSTER_ENABLED:-false}"
 MILVUS_IMAGE_REPO="${MILVUS_IMAGE_REPO:-milvusdb/milvus}"
@@ -56,9 +56,9 @@ fi
 
 
 # Use helm repo to install milvus charts 
-helm repo add milvus ${MILVUS_HELM_REPO}
+helm repo add zilliztech ${MILVUS_HELM_REPO}
 helm repo update
-MILVUS_HELM_CHART_PATH="milvus/milvus"
+MILVUS_HELM_CHART_PATH="zilliztech/milvus"
 
 # Create namespace when it does not exist
 kubectl create namespace "${MILVUS_HELM_NAMESPACE}" > /dev/null 2>&1 || true
@@ -100,8 +100,8 @@ restart_pods=$(kubectl get pods -n ${MILVUS_HELM_NAMESPACE} | grep "${MILVUS_HEL
 
 for restart_pod in ${restart_pods}
 do 
-  reason=$(kubectl get pod ${restart_pod} -n milvus-ci -o json | jq .status.containerStatuses[0].lastState.terminated.reason )
-  restart_count=$(kubectl get pod ${restart_pod} -n milvus-ci -o json | jq .status.containerStatuses[0].restartCount )
+  reason=$(kubectl get pod ${restart_pod} -n ${MILVUS_HELM_NAMESPACE} -o json | jq .status.containerStatuses[0].lastState.terminated.reason )
+  restart_count=$(kubectl get pod ${restart_pod} -n ${MILVUS_HELM_NAMESPACE} -o json | jq .status.containerStatuses[0].restartCount )
   echo "${restart_pod} restarts ${restart_count}, last terminateed reason is ${reason}"
 done
 
@@ -115,4 +115,9 @@ if [[ ${exitcode} -ne 0 ]];then
 fi
 
 kubectl get pvc -n ${MILVUS_HELM_NAMESPACE} |  grep "${MILVUS_HELM_RELEASE_NAME}-" | awk '{$3=null;print $0}'
+if [[ -n ${SHOW_MILVUS_CONFIGMAP} ]]; then 
+  echo "-----------------milvus config --------------------"
+  kubectl get configmap ${MILVUS_HELM_RELEASE_NAME}-milvus -n ${MILVUS_HELM_NAMESPACE} -o jsonpath="{$.data}"
+  
+fi 
 exit ${exitcode}

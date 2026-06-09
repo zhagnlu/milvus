@@ -3,10 +3,11 @@ from time import sleep
 from collections import defaultdict
 from pymilvus import connections
 from chaos.checker import (InsertChecker,
-                           FlushChecker, 
+                           UpsertChecker,
+                           FlushChecker,
                            SearchChecker,
                            QueryChecker,
-                           IndexChecker,
+                           IndexCreateChecker,
                            DeleteChecker,
                            Op)
 from utils.util_log import test_log as log
@@ -55,26 +56,40 @@ class TestOperations(TestBase):
         yield request.param
 
     @pytest.fixture(scope="function", autouse=True)
-    def connection(self, host, port, user, password):
-        if user and password:
-            # log.info(f"connect to {host}:{port} with user {user} and password {password}")
-            connections.connect('default', host=host, port=port, user=user, password=password, secure=True)
+    def connection(self, host, port, user, password, uri, token):
+        # Prioritize uri and token for connection
+        if uri:
+            actual_uri = uri
         else:
-            connections.connect('default', host=host, port=port)
+            actual_uri = f"http://{host}:{port}"
+
+        if token:
+            actual_token = token
+        else:
+            actual_token = f"{user}:{password}" if user and password else None
+
+        if actual_token:
+            connections.connect('default', uri=actual_uri, token=actual_token)
+        else:
+            connections.connect('default', uri=actual_uri)
+
         if connections.has_connection("default") is False:
             raise Exception("no connections")
-        log.info("connect to milvus successfully")
+        log.info(f"connect to milvus successfully, uri: {actual_uri}")
         self.host = host
         self.port = port
         self.user = user
-        self.password = password        
+        self.password = password
+        self.uri = actual_uri
+        self.token = actual_token
 
     def init_health_checkers(self, collection_name=None):
         c_name = collection_name
         checkers = {
             Op.insert: InsertChecker(collection_name=c_name),
+            Op.upsert: UpsertChecker(collection_name=c_name),
             Op.flush: FlushChecker(collection_name=c_name),
-            Op.index: IndexChecker(collection_name=c_name),
+            Op.index: IndexCreateChecker(collection_name=c_name),
             Op.search: SearchChecker(collection_name=c_name),
             Op.query: QueryChecker(collection_name=c_name),
             Op.delete: DeleteChecker(collection_name=c_name),
@@ -82,7 +97,7 @@ class TestOperations(TestBase):
         self.health_checkers = checkers
 
     @pytest.mark.tags(CaseLabel.L3)
-    def test_operations(self,collection_name):
+    def test_operations(self, collection_name, request_duration):
         # start the monitor threads to check the milvus ops
         log.info("*********************Test Start**********************")
         log.info(connections.get_connection_addr('default'))
@@ -90,10 +105,14 @@ class TestOperations(TestBase):
         self.init_health_checkers(collection_name=c_name)
         cc.start_monitor_threads(self.health_checkers)
         log.info("*********************Request Load Start**********************")
-        # wait 200s for the load request to be finished
+        # wait request_duration for the load request to be finished
+        request_duration = request_duration.replace("h", "*3600+").replace("m", "*60+").replace("s", "")
+        if request_duration[-1] == "+":
+            request_duration = request_duration[:-1]
+        request_duration = eval(request_duration)
         for i in range(10):
-            sleep(20)
-            for k,v in self.health_checkers.items():
+            sleep(request_duration//10)
+            for k, v in self.health_checkers.items():
                 v.check_result()
         log.info("******assert after chaos deleted: ")
         assert_statistic(self.health_checkers)

@@ -16,31 +16,35 @@
 
 cmake_minimum_required( VERSION 3.18 )
 
-# To debug memory issues, you can comment out these below two lines.
-# Also, they are identical to that you define these environments:
-# CFLAGS="-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address"
-# CXXFLAGS="-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address"
-# LDFLAGS="-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address"
-
-# add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
-# add_link_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
-
 if ( APPLE )
     set( CMAKE_CROSSCOMPILING TRUE )
     set( RUN_HAVE_GNU_POSIX_REGEX 0 )
-    set( CMAKE_C_COMPILER "/usr/local/opt/llvm/bin/clang" )
-    set( CMAKE_CXX_COMPILER "/usr/local/opt/llvm/bin/clang++" )
 endif ()
 
 add_definitions(-DELPP_THREAD_SAFE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 message( STATUS "Building using CMake version: ${CMAKE_VERSION}" )
 
+if ( BUILD_UNIT_TEST STREQUAL "ON" )
+    add_definitions(-DWITHOUT_GO_LOGGING)
+endif()
+
+if ( MILVUS_GPU_VERSION )
+    add_definitions(-DMILVUS_GPU_VERSION)
+endif ()
+
+if ( USE_DYNAMIC_SIMD )
+    add_definitions(-DUSE_DYNAMIC_SIMD)
+endif()
+
+if (USE_OPENDAL)
+    add_definitions(-DUSE_OPENDAL)
+endif()
+
 project(core)
 include(CheckCXXCompilerFlag)
 if ( APPLE )
     message(STATUS "==============Darwin Environment==============")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I/usr/local/opt/llvm/include -I/usr/local/include -I/usr/local/opt/libomp/include -L/usr/local/opt/libomp/lib")
 elseif (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     message(STATUS "==============Linux Environment===============")
     set(LINUX TRUE)
@@ -50,16 +54,52 @@ else ()
     message(FATAL_ERROR "Unsupported platform!" )
 endif ()
 
+# Use -g1 (minimal debug info) for Release to speed up compile & link;
+# full -g for Debug/RelWithDebInfo where detailed debugging matters.
+if (CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g1")
+else ()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+endif ()
+
+# Use pipes between compiler stages instead of temp files (faster I/O)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pipe")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe")
+
+# Enable hardware popcnt for all compilation units on x86_64.
+# PopCountHelper in bitset/detail/popcount.h is header-only; without this flag,
+# __builtin_popcountll falls back to __popcountdi2 software emulation.
+if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "x86_64")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mpopcnt")
+endif()
+
 if (CMAKE_COMPILER_IS_GNUCC)
     if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 11.99)
         # ignore deprecated declarations for gcc>=12
         # TODO: this workaround may removed when protobuf upgraded
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=deprecated-declarations")
     endif ()
+    if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 12.99)
+        # gcc>=13 removed implicit includes for <cstdint>, <cstdlib>, <algorithm> etc.
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include cstdint -include cstdlib -include algorithm")
+    endif ()
 endif ()
 
 set( CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake" )
 include( Utils )
+
+# ---- Split DWARF (Linux only) ----
+# Moves debug info into .dwo files, dramatically reducing .o file sizes
+# and link time. Requires GCC 4.8+ or Clang 3.7+.
+if (LINUX AND NOT USE_ASAN STREQUAL "ON")
+    check_cxx_compiler_flag("-gsplit-dwarf" HAS_SPLIT_DWARF)
+    if (HAS_SPLIT_DWARF)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -gsplit-dwarf")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -gsplit-dwarf")
+        message(STATUS "Using -gsplit-dwarf for faster linking")
+    endif ()
+endif ()
+
 
 # **************************** Build time, type and code version ****************************
 get_current_time( BUILD_TIME )
@@ -79,8 +119,24 @@ set( CMAKE_EXPORT_COMPILE_COMMANDS ON )
 # **************************** Project ****************************
 project( milvus VERSION "${MILVUS_VERSION}" )
 
-set( CMAKE_CXX_STANDARD 17 )
+# Unity (jumbo) build: merge multiple .cpp files per target into fewer
+# translation units, dramatically reducing redundant header parsing.
+if ( MILVUS_UNITY_BUILD )
+    set( CMAKE_UNITY_BUILD ON )
+    # ~8 sources per unity chunk is a good balance between speed and memory.
+    set( CMAKE_UNITY_BUILD_BATCH_SIZE 8 )
+    message( STATUS "Unity build enabled (batch size ${CMAKE_UNITY_BUILD_BATCH_SIZE})" )
+endif ()
+
+set( CMAKE_CXX_STANDARD 20 )
 set( CMAKE_CXX_STANDARD_REQUIRED on )
+
+# Use std::shared_ptr/std::string_view etc. instead of opentelemetry::nostd::
+# equivalents.  This MUST be consistent across every translation unit that
+# includes OTel headers; a mismatch causes an ODR violation / ABI break
+# because nostd::shared_ptr has a completely different memory layout (32-byte
+# PlacementBuffer) compared to std::shared_ptr (16 bytes).
+add_compile_definitions( OPENTELEMETRY_STL_VERSION=2017 )
 
 set( MILVUS_SOURCE_DIR      ${PROJECT_SOURCE_DIR} )
 set( MILVUS_BINARY_DIR      ${PROJECT_BINARY_DIR} )
@@ -91,8 +147,64 @@ set( MILVUS_THIRDPARTY_SRC  ${PROJECT_SOURCE_DIR}/thirdparty )
 # self-installed dynamic libraries will be correctly linked by excutable
 set( CMAKE_INSTALL_RPATH "/usr/lib" "${CMAKE_INSTALL_PREFIX}/lib" "${CMAKE_INSTALL_PREFIX}/lib64" )
 set( CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE )
+# FetchContent-built shared libs (libbson, libbsoncxx, etc.) are placed in
+# ${CMAKE_BINARY_DIR}/lib. The linker needs -rpath-link to resolve transitive
+# shared library dependencies (e.g. libbsoncxx.so -> libbson-1.0.so) when
+# linking test binaries.
+set( CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib" )
 
 # **************************** Dependencies ****************************
+# Conan 2: CMakeToolchain sets CMAKE_PREFIX_PATH via toolchain file
+# CMakeDeps generates <pkg>-config.cmake files for find_package()
+list( APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR}/conan )
+
+find_package(Protobuf REQUIRED)
+find_package(Boost REQUIRED)
+find_package(glog REQUIRED)
+find_package(folly REQUIRED)
+find_package(RocksDB REQUIRED)
+find_package(Arrow REQUIRED)
+find_package(gRPC REQUIRED)
+find_package(opentelemetry-cpp REQUIRED)
+find_package(google-cloud-cpp REQUIRED)
+find_package(prometheus-cpp REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(nlohmann_json REQUIRED)
+find_package(fmt REQUIRED)
+find_package(re2 REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(CURL REQUIRED)
+find_package(ZLIB REQUIRED)
+find_package(lz4 REQUIRED)
+find_package(zstd REQUIRED)
+find_package(Snappy REQUIRED)
+find_package(roaring REQUIRED)
+find_package(marisa REQUIRED)
+find_package(geos REQUIRED)
+find_package(ICU REQUIRED COMPONENTS uc)
+find_package(xxHash REQUIRED)
+find_package(TBB REQUIRED)
+find_package(libsodium REQUIRED)
+find_package(double-conversion REQUIRED)
+find_package(gflags REQUIRED)
+find_package(xsimd REQUIRED)
+find_package(unordered_dense REQUIRED)
+find_package(absl REQUIRED)
+find_package(RapidJSON REQUIRED)
+find_package(simde REQUIRED)
+find_package(milvus-common REQUIRED)
+if (LINUX)
+    find_package(OpenBLAS CONFIG REQUIRED)
+endif()
+find_package(LibLZMA REQUIRED)
+find_package(RdKafka REQUIRED)
+find_package(GTest REQUIRED)
+find_package(benchmark REQUIRED)
+find_package(googleapis REQUIRED)
+find_package(libavrocpp REQUIRED)
+find_package(AWSSDK REQUIRED)
+find_package(Azure REQUIRED)
+
 include( CTest )
 include( BuildUtils )
 include( DefineOptions )
@@ -101,7 +213,9 @@ using_ccache_if_defined(MILVUS_USE_CCACHE)
 include( ExternalProject )
 include( GNUInstallDirs )
 include( FetchContent )
+
 include_directories( thirdparty )
+
 set( FETCHCONTENT_BASE_DIR ${MILVUS_BINARY_DIR}/3rdparty_download )
 set( FETCHCONTENT_QUIET OFF )
 include( ThirdPartyPackages )
@@ -110,13 +224,24 @@ include( ThirdPartyPackages )
 message( STATUS "Building Milvus CPU version" )
 
 if (LINUX OR MSYS)
-append_flags( CMAKE_CXX_FLAGS
-              FLAGS
-              "-fPIC"
-              "-DELPP_THREAD_SAFE"
-              "-fopenmp"
-              "-Werror"
-              )
+    append_flags( CMAKE_CXX_FLAGS
+                  FLAGS
+                  "-fPIC"
+                  "-DELPP_THREAD_SAFE"
+                  "-fopenmp"
+                  "-Wno-error"
+                  "-Wno-all"
+                  )
+    if (USE_ASAN STREQUAL "ON")
+        message( STATUS "Building Milvus Core Using AddressSanitizer")
+        add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
+        add_link_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
+    endif()
+    if (CMAKE_BUILD_TYPE STREQUAL "Release")
+        append_flags( CMAKE_CXX_FLAGS
+                "-O3"
+                )
+    endif()
 endif ()
 
 if ( APPLE )
@@ -125,16 +250,30 @@ if ( APPLE )
             "-fPIC"
             "-DELPP_THREAD_SAFE"
             "-fopenmp"
-            "-Wno-error"
-            "-Wsign-compare"
-            "-Wall"
             "-pedantic"
-            "-Wno-unused-command-line-argument"
-            "-Wextra"
-            "-Wno-unused-parameter"
-            "-Wno-deprecated"
+            "-Wall"
+            "-D_DARWIN_C_SOURCE"
+            "-Wno-gnu-zero-variadic-macro-arguments"
+            "-Wno-variadic-macros"
+            "-Wno-reorder-ctor"
+            "-Wno-c++11-narrowing"
             "-DBOOST_STACKTRACE_GNU_SOURCE_NOT_REQUIRED=1"
             )
+    # Fix for macOS 14+ (Sonoma) linker requiring SG_READ_ONLY flag
+    # Disable fixup chains to avoid __DATA_CONST segment issues with third-party libraries
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-no_fixup_chains")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-no_fixup_chains")
+
+    # Folly's Exception.cpp references __cxa_increment/decrement_exception_refcount
+    # from libc++abi, which lives in <llvm-root>/lib/c++/ and is not on the default
+    # linker search path. Derive the path from CMAKE_CXX_COMPILER.
+    get_filename_component(_CXX_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(_LLVM_ROOT "${_CXX_BIN_DIR}" DIRECTORY)
+    set(_LLVM_CXXABI_DIR "${_LLVM_ROOT}/lib/c++")
+    if(EXISTS "${_LLVM_CXXABI_DIR}/libc++abi.dylib")
+        link_directories("${_LLVM_CXXABI_DIR}")
+        link_libraries(c++abi)
+    endif()
 endif ()
 
 # **************************** Coding style check tools ****************************
@@ -173,6 +312,17 @@ add_custom_target(lint
 
 find_program( CPPLINT_BIN NAMES cpplint cpplint.py HINTS ${BUILD_SUPPORT_DIR} )
 message( STATUS "Found cpplint executable at ${CPPLINT_BIN}" )
+
+# Use the first Python installation on PATH, not the newest one
+set(Python3_FIND_STRATEGY "LOCATION")
+# On Windows, use registry last, not first
+set(Python3_FIND_REGISTRY "LAST")
+# On macOS, use framework last, not first
+set(Python3_FIND_FRAMEWORK "LAST")
+find_package(Python3)
+set(PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+
+message( STATUS "Found Python at ${PYTHON_EXECUTABLE}")
 
 #
 # "make clang-format" and "make check-clang-format" targets
@@ -232,7 +382,22 @@ if ( BUILD_UNIT_TEST STREQUAL "ON" AND BUILD_COVERAGE STREQUAL "ON" )
                         "-fprofile-arcs"
                         "-ftest-coverage"
                         )
+    # Also add coverage flags to linker (required on macOS with Clang)
+    append_flags( CMAKE_EXE_LINKER_FLAGS
+                  FLAGS
+                        "--coverage"
+                        )
+    append_flags( CMAKE_SHARED_LINKER_FLAGS
+                  FLAGS
+                        "--coverage"
+                        )
 endif ()
+
+if ( BUILD_DISK_ANN STREQUAL "ON" )
+    ADD_DEFINITIONS(-DBUILD_DISK_ANN=${BUILD_DISK_ANN})
+endif ()
+
+ADD_DEFINITIONS(-DBOOST_GEOMETRY_INDEX_DETAIL_EXPERIMENTAL)
 
 # Warning: add_subdirectory(src) must be after append_flags("-ftest-coverage"),
 # otherwise cpp code coverage tool will miss src folder
@@ -243,6 +408,7 @@ add_subdirectory( src )
 if ( BUILD_UNIT_TEST STREQUAL "ON" )
     append_flags( CMAKE_CXX_FLAGS FLAGS "-DELPP_DISABLE_LOGS")
     add_subdirectory(unittest)
+    add_subdirectory(benchmark)
 endif ()
 
 add_custom_target( Clean-All COMMAND ${CMAKE_BUILD_TOOL} clean )
@@ -261,9 +427,21 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/segcore/
         FILES_MATCHING PATTERN "*_c.h"
 )
 
+# Install exec/expression/function
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/exec/expression/function/
+        DESTINATION include/exec/expression/function
+        FILES_MATCHING PATTERN "*_c.h"
+)
+
 # Install indexbuilder
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/indexbuilder/
         DESTINATION include/indexbuilder
+        FILES_MATCHING PATTERN "*_c.h"
+)
+
+# Install clustering
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/clustering/
+        DESTINATION include/clustering
         FILES_MATCHING PATTERN "*_c.h"
 )
 
@@ -271,4 +449,25 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/indexbuilder/
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/common/
         DESTINATION include/common
         FILES_MATCHING PATTERN "*_c.h"
+)
+# cgo consumers need milvus-common headers in the core output include path.
+foreach(MILVUS_COMMON_INCLUDE_DIR IN LISTS milvus-common_INCLUDE_DIRS)
+    install(DIRECTORY ${MILVUS_COMMON_INCLUDE_DIR}/
+            DESTINATION include
+    )
+endforeach()
+
+# Install monitor
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/monitor/
+        DESTINATION include/monitor
+        FILES_MATCHING PATTERN "*_c.h"
+)
+
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/futures/
+        DESTINATION include/futures
+        FILES_MATCHING PATTERN "*.h"
+)
+
+install(DIRECTORY ${CMAKE_BINARY_DIR}/lib/
+        DESTINATION ${CMAKE_INSTALL_FULL_LIBDIR}
 )

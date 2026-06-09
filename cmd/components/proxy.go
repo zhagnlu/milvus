@@ -18,13 +18,18 @@ package components
 
 import (
 	"context"
+	"time"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/util/dependency"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	grpcproxy "github.com/milvus-io/milvus/internal/distributed/proxy"
+	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // Proxy implements Proxy grpc server
@@ -45,25 +50,36 @@ func NewProxy(ctx context.Context, factory dependency.Factory) (*Proxy, error) {
 	return n, nil
 }
 
+func (n *Proxy) Prepare() error {
+	indexparamcheck.ValidateParamTable()
+	return n.svr.Prepare()
+}
+
 // Run starts service
 func (n *Proxy) Run() error {
 	if err := n.svr.Run(); err != nil {
-		log.Warn("failed to start Proxy", zap.Error(err))
+		log.Ctx(context.TODO()).Error("Proxy starts error", zap.Error(err))
 		return err
 	}
-	log.Info("Proxy successfully started")
+	log.Ctx(context.TODO()).Info("Proxy successfully started")
 	return nil
 }
 
 // Stop terminates service
 func (n *Proxy) Stop() error {
-	if err := n.svr.Stop(); err != nil {
-		return err
-	}
-	return nil
+	timeout := paramtable.Get().ProxyCfg.GracefulStopTimeout.GetAsDuration(time.Second)
+	return exitWhenStopTimeout(n.svr.Stop, timeout)
 }
 
 // GetComponentStates returns Proxy's states
-func (n *Proxy) GetComponentStates(ctx context.Context, request *internalpb.GetComponentStatesRequest) (*internalpb.ComponentStates, error) {
-	return n.svr.GetComponentStates(ctx, request)
+func (n *Proxy) Health(ctx context.Context) commonpb.StateCode {
+	resp, err := n.svr.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
+	if err != nil {
+		return commonpb.StateCode_Abnormal
+	}
+	return resp.State.GetStateCode()
+}
+
+func (n *Proxy) GetName() string {
+	return typeutil.ProxyRole
 }

@@ -20,14 +20,21 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
-	"github.com/milvus-io/milvus/internal/metrics"
-
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
+	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
+	"github.com/milvus-io/milvus/internal/util/streamingutil"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	"github.com/milvus-io/milvus/pkg/v3/mq/common"
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 type dmlMsgStream struct {
@@ -135,56 +142,138 @@ type dmlChannels struct {
 	namePrefix string
 	capacity   int64
 	// pool maintains channelName => dmlMsgStream mapping, stable
-	pool sync.Map
-	// mut protects channlsHeap only
+	pool *typeutil.ConcurrentMap[string, *dmlMsgStream]
+	// mut protects channelsHeap only
 	mut sync.Mutex
 	// channelsHeap is the heap to pop next dms for use
 	channelsHeap channelsHeap
 }
 
-func newDmlChannels(ctx context.Context, factory msgstream.Factory, chanNamePrefix string, chanNum int64) *dmlChannels {
+func newDmlChannels(initCtx context.Context, factory msgstream.Factory, chanNamePrefixDefault string, chanNumDefault int64) *dmlChannels {
+	log.Ctx(initCtx).Info("new DmlChannels",
+		zap.String("chanNamePrefixDefault", chanNamePrefixDefault),
+		zap.Int64("chanNumDefault", chanNumDefault))
+	params := &paramtable.Get().CommonCfg
+	var (
+		chanNamePrefix string
+		chanNum        int64
+		names          []string
+	)
+
+	// if topic created, use the existed topic
+	if params.PreCreatedTopicEnabled.GetAsBool() {
+		chanNamePrefix = ""
+		chanNum = int64(len(params.TopicNames.GetAsStrings()))
+		names = params.TopicNames.GetAsStrings()
+	} else {
+		chanNamePrefix = chanNamePrefixDefault
+		chanNum = chanNumDefault
+		names = genChannelNames(chanNamePrefix, chanNum)
+	}
+
 	d := &dmlChannels{
-		ctx:          ctx,
+		ctx:          context.TODO(),
 		factory:      factory,
 		namePrefix:   chanNamePrefix,
 		capacity:     chanNum,
 		channelsHeap: make([]*dmlMsgStream, 0, chanNum),
+		pool:         typeutil.NewConcurrentMap[string, *dmlMsgStream](),
 	}
 
-	for i := int64(0); i < chanNum; i++ {
-		name := genChannelName(d.namePrefix, i)
-		ms, err := factory.NewMsgStream(ctx)
-		if err != nil {
-			log.Error("Failed to add msgstream", zap.String("name", name), zap.Error(err))
-			panic("Failed to add msgstream")
+	for i, name := range names {
+		var ms msgstream.MsgStream
+		if !streamingutil.IsStreamingServiceEnabled() {
+			ms = d.newMsgstream(initCtx, factory, name)
+		} else {
+			notifier := snmanager.NewStreamingReadyNotifier()
+			if err := snmanager.StaticStreamingNodeManager.RegisterStreamingEnabledListener(initCtx, notifier); err != nil {
+				panic(err)
+			}
+			logger := log.Ctx(initCtx).With(zap.String("pchannel", name))
+			if !notifier.IsReady() {
+				logger.Info("streaming service is not enabled, create a msgstream to use")
+				ms = d.newMsgstream(initCtx, factory, name)
+				go func() {
+					defer notifier.Release()
+					<-notifier.Ready()
+					// release the msgstream.
+					logger.Info("streaming service is enabled, release the msgstream...")
+					ms.Close()
+					logger.Info("streaming service is enabled, release the msgstream done")
+				}()
+			} else {
+				logger.Info("streaming service has been enabled, msgstream should not be created")
+				notifier.Release()
+			}
 		}
-		ms.AsProducer([]string{name})
-
 		dms := &dmlMsgStream{
 			ms:     ms,
 			refcnt: 0,
 			used:   0,
-			idx:    i,
-			pos:    int(i),
+			idx:    int64(i),
+			pos:    i,
 		}
-		d.pool.Store(name, dms)
+		d.pool.Insert(name, dms)
 		d.channelsHeap = append(d.channelsHeap, dms)
 	}
 
 	heap.Init(&d.channelsHeap)
-	log.Debug("init dml channels", zap.Int64("num", chanNum))
+
+	log.Ctx(initCtx).Info("init dml channels", zap.String("prefix", chanNamePrefix), zap.Int64("num", chanNum))
+
 	metrics.RootCoordNumOfDMLChannel.Add(float64(chanNum))
 	metrics.RootCoordNumOfMsgStream.Add(float64(chanNum))
 
 	return d
 }
 
+func (d *dmlChannels) newMsgstream(initCtx context.Context, factory msgstream.Factory, name string) msgstream.MsgStream {
+	var err error
+	ms, err := factory.NewMsgStream(initCtx)
+	if err != nil {
+		log.Ctx(initCtx).Error("Failed to add msgstream",
+			zap.String("name", name),
+			zap.Error(err))
+		panic("Failed to add msgstream")
+	}
+
+	if paramtable.Get().CommonCfg.PreCreatedTopicEnabled.GetAsBool() {
+		d.checkPreCreatedTopic(initCtx, factory, name)
+	}
+
+	ms.AsProducer(initCtx, []string{name})
+	return ms
+}
+
+func (d *dmlChannels) checkPreCreatedTopic(ctx context.Context, factory msgstream.Factory, name string) {
+	tmpMs, err := factory.NewMsgStream(ctx)
+	if err != nil {
+		panic(fmt.Sprintf("failed to add msgstream, name:%s, err:%v", name, err))
+	}
+	defer tmpMs.Close()
+
+	subName := fmt.Sprintf("pre-created-topic-check-%s", name)
+	err = tmpMs.AsConsumer(ctx, []string{name}, subName, common.SubscriptionPositionUnknown)
+	if err != nil {
+		panic(fmt.Sprintf("failed to add consumer, name:%s, err:%v", name, err))
+	}
+
+	// check if topic is existed
+	// kafka and rmq will err if the topic does not yet exist, pulsar will not
+	// allow topics is not empty, for the reason that when restart or upgrade, the topic is not empty
+	// if there are any message that not belong to milvus, will skip it
+	err = tmpMs.CheckTopicValid(name)
+	if err != nil {
+		panic(fmt.Sprintf("created topic is invalid, name:%s, err:%v", name, err))
+	}
+}
+
 func (d *dmlChannels) getChannelNames(count int) []string {
+	d.mut.Lock()
+	defer d.mut.Unlock()
 	if count > len(d.channelsHeap) {
 		return nil
 	}
-	d.mut.Lock()
-	defer d.mut.Unlock()
 	// get next count items from heap
 	items := make([]*dmlMsgStream, 0, count)
 	result := make([]string, 0, count)
@@ -192,7 +281,7 @@ func (d *dmlChannels) getChannelNames(count int) []string {
 		item := heap.Pop(&d.channelsHeap).(*dmlMsgStream)
 		item.BookUsage()
 		items = append(items, item)
-		result = append(result, genChannelName(d.namePrefix, item.idx))
+		result = append(result, getChannelName(d.namePrefix, item.idx))
 	}
 
 	for _, item := range items {
@@ -206,10 +295,9 @@ func (d *dmlChannels) listChannels() []string {
 	var chanNames []string
 
 	d.pool.Range(
-		func(k, v interface{}) bool {
-			dms := v.(*dmlMsgStream)
+		func(channel string, dms *dmlMsgStream) bool {
 			if dms.RefCnt() > 0 {
-				chanNames = append(chanNames, genChannelName(d.namePrefix, dms.idx))
+				chanNames = append(chanNames, getChannelName(d.namePrefix, dms.idx))
 			}
 			return true
 		})
@@ -220,19 +308,26 @@ func (d *dmlChannels) getChannelNum() int {
 	return len(d.listChannels())
 }
 
+func (d *dmlChannels) getMsgStreamByName(chanName string) (*dmlMsgStream, error) {
+	dms, ok := d.pool.Get(chanName)
+	if !ok {
+		log.Ctx(d.ctx).Error("invalid channelName", zap.String("chanName", chanName))
+		return nil, errors.Newf("invalid channel name: %s", chanName)
+	}
+	return dms, nil
+}
+
 func (d *dmlChannels) broadcast(chanNames []string, pack *msgstream.MsgPack) error {
 	for _, chanName := range chanNames {
-		v, ok := d.pool.Load(chanName)
-		if !ok {
-			log.Error("invalid channel name", zap.String("chanName", chanName))
-			panic("invalid channel name: " + chanName)
+		dms, err := d.getMsgStreamByName(chanName)
+		if err != nil {
+			return err
 		}
-		dms := v.(*dmlMsgStream)
 
 		dms.mutex.RLock()
 		if dms.refcnt > 0 {
-			if err := dms.ms.Broadcast(pack); err != nil {
-				log.Error("Broadcast failed", zap.Error(err), zap.String("chanName", chanName))
+			if _, err := dms.ms.Broadcast(d.ctx, pack); err != nil {
+				log.Ctx(d.ctx).Error("Broadcast failed", zap.Error(err), zap.String("chanName", chanName))
 				dms.mutex.RUnlock()
 				return err
 			}
@@ -245,18 +340,16 @@ func (d *dmlChannels) broadcast(chanNames []string, pack *msgstream.MsgPack) err
 func (d *dmlChannels) broadcastMark(chanNames []string, pack *msgstream.MsgPack) (map[string][]byte, error) {
 	result := make(map[string][]byte)
 	for _, chanName := range chanNames {
-		v, ok := d.pool.Load(chanName)
-		if !ok {
-			log.Error("invalid channel name", zap.String("chanName", chanName))
-			panic("invalid channel name: " + chanName)
+		dms, err := d.getMsgStreamByName(chanName)
+		if err != nil {
+			return result, err
 		}
-		dms := v.(*dmlMsgStream)
 
 		dms.mutex.RLock()
 		if dms.refcnt > 0 {
-			ids, err := dms.ms.BroadcastMark(pack)
+			ids, err := dms.ms.Broadcast(d.ctx, pack)
 			if err != nil {
-				log.Error("BroadcastMark failed", zap.Error(err), zap.String("chanName", chanName))
+				log.Ctx(d.ctx).Error("BroadcastMark failed", zap.Error(err), zap.String("chanName", chanName))
 				dms.mutex.RUnlock()
 				return result, err
 			}
@@ -266,6 +359,9 @@ func (d *dmlChannels) broadcastMark(chanNames []string, pack *msgstream.MsgPack)
 					result[cn] = id.Serialize()
 				}
 			}
+		} else {
+			dms.mutex.RUnlock()
+			return nil, errors.Newf("channel not in use: %s", chanName)
 		}
 		dms.mutex.RUnlock()
 	}
@@ -274,12 +370,10 @@ func (d *dmlChannels) broadcastMark(chanNames []string, pack *msgstream.MsgPack)
 
 func (d *dmlChannels) addChannels(names ...string) {
 	for _, name := range names {
-		v, ok := d.pool.Load(name)
-		if !ok {
-			log.Error("invalid channel name", zap.String("chanName", name))
-			panic("invalid channel name: " + name)
+		dms, err := d.getMsgStreamByName(name)
+		if err != nil {
+			continue
 		}
-		dms := v.(*dmlMsgStream)
 
 		d.mut.Lock()
 		dms.IncRefcnt()
@@ -290,12 +384,10 @@ func (d *dmlChannels) addChannels(names ...string) {
 
 func (d *dmlChannels) removeChannels(names ...string) {
 	for _, name := range names {
-		v, ok := d.pool.Load(name)
-		if !ok {
-			log.Error("invalid channel name", zap.String("chanName", name))
-			panic("invalid channel name: " + name)
+		dms, err := d.getMsgStreamByName(name)
+		if err != nil {
+			continue
 		}
-		dms := v.(*dmlMsgStream)
 
 		d.mut.Lock()
 		dms.DecRefCnt()
@@ -304,6 +396,79 @@ func (d *dmlChannels) removeChannels(names ...string) {
 	}
 }
 
-func genChannelName(prefix string, idx int64) string {
+func getChannelName(prefix string, idx int64) string {
+	params := &paramtable.Get().CommonCfg
+	if params.PreCreatedTopicEnabled.GetAsBool() {
+		return params.TopicNames.GetAsStrings()[idx]
+	}
 	return fmt.Sprintf("%s_%d", prefix, idx)
+}
+
+func genChannelNames(prefix string, num int64) []string {
+	var results []string
+	for idx := int64(0); idx < num; idx++ {
+		result := fmt.Sprintf("%s_%d", prefix, idx)
+		results = append(results, result)
+	}
+	return results
+}
+
+func parseChannelNameIndex(channelName string) int {
+	index := strings.LastIndex(channelName, "_")
+	if index < 0 {
+		log.Ctx(context.TODO()).Error("invalid channelName", zap.String("chanName", channelName))
+		panic("invalid channel name: " + channelName)
+	}
+	index, err := strconv.Atoi(channelName[index+1:])
+	if err != nil {
+		log.Ctx(context.TODO()).Error("invalid channelName", zap.String("chanName", channelName), zap.Error(err))
+		panic("invalid channel name: " + channelName)
+	}
+	return index
+}
+
+func getNeedChanNum(setNum int, chanMap map[typeutil.UniqueID][]string) int {
+	// find the largest number of current channel usage
+	maxChanUsed := 0
+	isPreCreatedTopicEnabled := paramtable.Get().CommonCfg.PreCreatedTopicEnabled.GetAsBool()
+	chanNameSet := typeutil.NewSet[string]()
+
+	if isPreCreatedTopicEnabled {
+		// can only use the topic in the list when preCreatedTopicEnabled
+		topics := paramtable.Get().CommonCfg.TopicNames.GetAsStrings()
+
+		if len(topics) == 0 {
+			panic("no topic were specified when pre-created")
+		}
+		for _, topic := range topics {
+			if len(topic) == 0 {
+				panic("topic were empty")
+			}
+			if chanNameSet.Contain(topic) {
+				log.Ctx(context.TODO()).Error("duplicate topics are pre-created", zap.String("topic", topic))
+				panic("duplicate topic: " + topic)
+			}
+			chanNameSet.Insert(topic)
+		}
+
+		for _, chanNames := range chanMap {
+			for _, chanName := range chanNames {
+				if !chanNameSet.Contain(chanName) {
+					log.Ctx(context.TODO()).Error("invalid channel that is not in the list when pre-created topic", zap.String("chanName", chanName))
+					panic("invalid chanName: " + chanName)
+				}
+			}
+		}
+	} else {
+		maxChanUsed = setNum
+		for _, chanNames := range chanMap {
+			for _, chanName := range chanNames {
+				index := parseChannelNameIndex(chanName)
+				if maxChanUsed < index+1 {
+					maxChanUsed = index + 1
+				}
+			}
+		}
+	}
+	return maxChanUsed
 }

@@ -1,14 +1,15 @@
-//go:build linux
-// +build linux
-
 package indexcgowrapper
 
 import (
 	"strconv"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/util/metric"
 )
 
 const (
@@ -17,18 +18,11 @@ const (
 	IndexFaissIVFFlat    = "IVF_FLAT"
 	IndexFaissIVFPQ      = "IVF_PQ"
 	IndexFaissIVFSQ8     = "IVF_SQ8"
+	IndexScaNN           = "SCANN"
 	IndexFaissBinIDMap   = "BIN_FLAT"
 	IndexFaissBinIVFFlat = "BIN_IVF_FLAT"
 
-	IndexHNSW  = "HNSW"
-	IndexANNOY = "ANNOY"
-
-	// metric type
-	L2       = "L2"
-	IP       = "IP"
-	hamming  = "HAMMING"
-	Jaccard  = "JACCARD"
-	tanimoto = "TANIMOTO"
+	IndexHNSW = "HNSW"
 
 	dim            = 8
 	nlist          = 100
@@ -49,28 +43,60 @@ type vecTestCase struct {
 
 func generateFloatVectorTestCases() []vecTestCase {
 	return []vecTestCase{
-		{IndexFaissIDMap, L2, false, schemapb.DataType_FloatVector},
-		{IndexFaissIDMap, IP, false, schemapb.DataType_FloatVector},
-		{IndexFaissIVFFlat, L2, false, schemapb.DataType_FloatVector},
-		{IndexFaissIVFFlat, IP, false, schemapb.DataType_FloatVector},
-		{IndexFaissIVFPQ, L2, false, schemapb.DataType_FloatVector},
-		{IndexFaissIVFPQ, IP, false, schemapb.DataType_FloatVector},
-		{IndexFaissIVFSQ8, L2, false, schemapb.DataType_FloatVector},
-		{IndexFaissIVFSQ8, IP, false, schemapb.DataType_FloatVector},
-		{IndexHNSW, L2, false, schemapb.DataType_FloatVector},
-		{IndexHNSW, IP, false, schemapb.DataType_FloatVector},
-		{IndexANNOY, L2, false, schemapb.DataType_FloatVector},
-		{IndexANNOY, IP, false, schemapb.DataType_FloatVector},
+		{IndexFaissIDMap, metric.L2, false, schemapb.DataType_FloatVector},
+		{IndexFaissIDMap, metric.IP, false, schemapb.DataType_FloatVector},
+		{IndexFaissIVFFlat, metric.L2, false, schemapb.DataType_FloatVector},
+		{IndexFaissIVFFlat, metric.IP, false, schemapb.DataType_FloatVector},
+		{IndexFaissIVFPQ, metric.L2, false, schemapb.DataType_FloatVector},
+		{IndexFaissIVFPQ, metric.IP, false, schemapb.DataType_FloatVector},
+		{IndexFaissIVFSQ8, metric.L2, false, schemapb.DataType_FloatVector},
+		{IndexFaissIVFSQ8, metric.IP, false, schemapb.DataType_FloatVector},
+		{IndexScaNN, metric.L2, false, schemapb.DataType_FloatVector},
+		{IndexScaNN, metric.IP, false, schemapb.DataType_FloatVector},
+		{IndexHNSW, metric.L2, false, schemapb.DataType_FloatVector},
+		{IndexHNSW, metric.IP, false, schemapb.DataType_FloatVector},
 	}
 }
 
 func generateBinaryVectorTestCases() []vecTestCase {
 	return []vecTestCase{
-		{IndexFaissBinIVFFlat, Jaccard, true, schemapb.DataType_BinaryVector},
-		{IndexFaissBinIVFFlat, hamming, true, schemapb.DataType_BinaryVector},
-		{IndexFaissBinIVFFlat, tanimoto, true, schemapb.DataType_BinaryVector},
-		{IndexFaissBinIDMap, Jaccard, true, schemapb.DataType_BinaryVector},
-		{IndexFaissBinIDMap, hamming, true, schemapb.DataType_BinaryVector},
+		{IndexFaissBinIVFFlat, metric.JACCARD, true, schemapb.DataType_BinaryVector},
+		{IndexFaissBinIVFFlat, metric.HAMMING, true, schemapb.DataType_BinaryVector},
+		{IndexFaissBinIDMap, metric.JACCARD, true, schemapb.DataType_BinaryVector},
+		{IndexFaissBinIDMap, metric.HAMMING, true, schemapb.DataType_BinaryVector},
+	}
+}
+
+func generateFloat16VectorTestCases() []vecTestCase {
+	return []vecTestCase{
+		{IndexFaissIDMap, metric.L2, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIDMap, metric.IP, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIVFFlat, metric.L2, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIVFFlat, metric.IP, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIVFPQ, metric.L2, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIVFPQ, metric.IP, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIVFSQ8, metric.L2, false, schemapb.DataType_Float16Vector},
+		{IndexFaissIVFSQ8, metric.IP, false, schemapb.DataType_Float16Vector},
+	}
+}
+
+func generateBFloat16VectorTestCases() []vecTestCase {
+	return []vecTestCase{
+		{IndexFaissIDMap, metric.L2, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIDMap, metric.IP, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIVFFlat, metric.L2, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIVFFlat, metric.IP, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIVFPQ, metric.L2, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIVFPQ, metric.IP, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIVFSQ8, metric.L2, false, schemapb.DataType_BFloat16Vector},
+		{IndexFaissIVFSQ8, metric.IP, false, schemapb.DataType_BFloat16Vector},
+	}
+}
+
+func generateInt8VectorTestCases() []vecTestCase {
+	return []vecTestCase{
+		{IndexHNSW, metric.L2, false, schemapb.DataType_Int8Vector},
+		{IndexHNSW, metric.IP, false, schemapb.DataType_Int8Vector},
 	}
 }
 
@@ -81,44 +107,39 @@ func generateTestCases() []vecTestCase {
 func generateParams(indexType, metricType string) (map[string]string, map[string]string) {
 	typeParams := make(map[string]string)
 	indexParams := make(map[string]string)
-	indexParams["index_type"] = indexType
-	indexParams["metric_type"] = metricType
-	if indexType == IndexFaissIDMap { // float vector
-		indexParams["dim"] = strconv.Itoa(dim)
-		indexParams["SLICE_SIZE"] = strconv.Itoa(sliceSize)
-	} else if indexType == IndexFaissIVFFlat {
-		indexParams["dim"] = strconv.Itoa(dim)
+	indexParams[common.IndexTypeKey] = indexType
+	indexParams[common.MetricTypeKey] = metricType
+	switch indexType {
+	case IndexFaissIDMap: // float vector
+		indexParams[common.DimKey] = strconv.Itoa(dim)
+	case IndexFaissIVFFlat:
+		indexParams[common.DimKey] = strconv.Itoa(dim)
 		indexParams["nlist"] = strconv.Itoa(nlist)
-	} else if indexType == IndexFaissIVFPQ {
-		indexParams["dim"] = strconv.Itoa(dim)
+	case IndexFaissIVFPQ:
+		indexParams[common.DimKey] = strconv.Itoa(dim)
 		indexParams["nlist"] = strconv.Itoa(nlist)
 		indexParams["m"] = strconv.Itoa(m)
 		indexParams["nbits"] = strconv.Itoa(nbits)
-		indexParams["SLICE_SIZE"] = strconv.Itoa(sliceSize)
-	} else if indexType == IndexFaissIVFSQ8 {
-		indexParams["dim"] = strconv.Itoa(dim)
+	case IndexFaissIVFSQ8:
+		indexParams[common.DimKey] = strconv.Itoa(dim)
 		indexParams["nlist"] = strconv.Itoa(nlist)
 		indexParams["nbits"] = strconv.Itoa(nbits)
-		indexParams["SLICE_SIZE"] = strconv.Itoa(sliceSize)
-	} else if indexType == IndexHNSW {
-		indexParams["dim"] = strconv.Itoa(dim)
+	case IndexScaNN:
+		indexParams[common.DimKey] = strconv.Itoa(dim)
+		indexParams["nlist"] = strconv.Itoa(nlist)
+	case IndexHNSW:
+		indexParams[common.DimKey] = strconv.Itoa(dim)
 		indexParams["M"] = strconv.Itoa(16)
 		indexParams["efConstruction"] = strconv.Itoa(efConstruction)
 		indexParams["ef"] = strconv.Itoa(ef)
-	} else if indexType == IndexANNOY {
-		indexParams["dim"] = strconv.Itoa(dim)
-		indexParams["n_trees"] = strconv.Itoa(4)
-		indexParams["search_k"] = strconv.Itoa(100)
-		indexParams["SLICE_SIZE"] = strconv.Itoa(sliceSize)
-	} else if indexType == IndexFaissBinIVFFlat { // binary vector
-		indexParams["dim"] = strconv.Itoa(dim)
+	case IndexFaissBinIVFFlat: // binary vector
+		indexParams[common.DimKey] = strconv.Itoa(dim)
 		indexParams["nlist"] = strconv.Itoa(nlist)
 		indexParams["m"] = strconv.Itoa(m)
 		indexParams["nbits"] = strconv.Itoa(nbits)
-		indexParams["SLICE_SIZE"] = strconv.Itoa(sliceSize)
-	} else if indexType == IndexFaissBinIDMap {
-		indexParams["dim"] = strconv.Itoa(dim)
-	} else {
+	case IndexFaissBinIDMap:
+		indexParams[common.DimKey] = strconv.Itoa(dim)
+	default:
 		panic("")
 	}
 
@@ -155,6 +176,40 @@ func TestCIndex_BuildFloatVecIndex(t *testing.T) {
 	}
 }
 
+func TestCIndex_BuildFloat16VecIndex(t *testing.T) {
+	for _, c := range generateFloat16VectorTestCases() {
+		typeParams, indexParams := generateParams(c.indexType, c.metricType)
+
+		index, err := NewCgoIndex(c.dtype, typeParams, indexParams)
+		assert.Equal(t, err, nil)
+		assert.NotEqual(t, index, nil)
+
+		vectors := generateFloat16Vectors(nb, dim)
+		err = index.Build(GenFloat16VecDataset(vectors))
+		assert.Equal(t, err, nil)
+
+		err = index.Delete()
+		assert.Equal(t, err, nil)
+	}
+}
+
+func TestCIndex_BuildBFloat16VecIndex(t *testing.T) {
+	for _, c := range generateBFloat16VectorTestCases() {
+		typeParams, indexParams := generateParams(c.indexType, c.metricType)
+
+		index, err := NewCgoIndex(c.dtype, typeParams, indexParams)
+		assert.Equal(t, err, nil)
+		assert.NotEqual(t, index, nil)
+
+		vectors := generateBFloat16Vectors(nb, dim)
+		err = index.Build(GenBFloat16VecDataset(vectors))
+		assert.Equal(t, err, nil)
+
+		err = index.Delete()
+		assert.Equal(t, err, nil)
+	}
+}
+
 func TestCIndex_BuildBinaryVecIndex(t *testing.T) {
 	for _, c := range generateBinaryVectorTestCases() {
 		typeParams, indexParams := generateParams(c.indexType, c.metricType)
@@ -169,6 +224,122 @@ func TestCIndex_BuildBinaryVecIndex(t *testing.T) {
 
 		err = index.Delete()
 		assert.Equal(t, err, nil)
+	}
+}
+
+func TestCIndex_BuildInt8VecIndex(t *testing.T) {
+	for _, c := range generateInt8VectorTestCases() {
+		typeParams, indexParams := generateParams(c.indexType, c.metricType)
+
+		index, err := NewCgoIndex(c.dtype, typeParams, indexParams)
+		assert.Equal(t, err, nil)
+		assert.NotEqual(t, index, nil)
+
+		vectors := generateInt8Vectors(nb, dim)
+		err = index.Build(GenInt8VecDataset(vectors))
+		assert.Equal(t, err, nil)
+
+		err = index.Delete()
+		assert.Equal(t, err, nil)
+	}
+}
+
+func TestCIndex_BuildAllNullNullableVectorsDoesNotPanic(t *testing.T) {
+	type testCase struct {
+		name   string
+		dtype  schemapb.DataType
+		raw    any
+		params func() (map[string]string, map[string]string)
+	}
+
+	cases := []testCase{
+		{
+			name:  "float",
+			dtype: schemapb.DataType_FloatVector,
+			raw:   []float32{},
+			params: func() (map[string]string, map[string]string) {
+				return generateParams(IndexFaissIDMap, metric.L2)
+			},
+		},
+		{
+			name:  "binary",
+			dtype: schemapb.DataType_BinaryVector,
+			raw:   []byte{},
+			params: func() (map[string]string, map[string]string) {
+				return generateParams(IndexFaissBinIDMap, metric.JACCARD)
+			},
+		},
+		{
+			name:  "float16",
+			dtype: schemapb.DataType_Float16Vector,
+			raw:   []byte{},
+			params: func() (map[string]string, map[string]string) {
+				return generateParams(IndexFaissIDMap, metric.L2)
+			},
+		},
+		{
+			name:  "bfloat16",
+			dtype: schemapb.DataType_BFloat16Vector,
+			raw:   []byte{},
+			params: func() (map[string]string, map[string]string) {
+				return generateParams(IndexFaissIDMap, metric.L2)
+			},
+		},
+		{
+			name:  "int8",
+			dtype: schemapb.DataType_Int8Vector,
+			raw:   []int8{},
+			params: func() (map[string]string, map[string]string) {
+				return generateParams(IndexHNSW, metric.L2)
+			},
+		},
+		{
+			name:  "sparse",
+			dtype: schemapb.DataType_SparseFloatVector,
+			raw:   []byte{},
+			params: func() (map[string]string, map[string]string) {
+				return map[string]string{}, map[string]string{
+					common.IndexTypeKey:  "SPARSE_INVERTED_INDEX",
+					common.MetricTypeKey: metric.IP,
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typeParams, indexParams := tc.params()
+			index, err := NewCgoIndex(tc.dtype, typeParams, indexParams)
+			require.NoError(t, err)
+			require.NotNil(t, index)
+			defer func() {
+				require.NoError(t, index.Delete())
+			}()
+
+			dataset := &Dataset{
+				DType: tc.dtype,
+				Data: map[string]any{
+					keyRawArr:   tc.raw,
+					keyValidArr: []bool{false, false, false},
+				},
+			}
+			require.NotPanics(t, func() {
+				err = index.Build(dataset)
+			})
+			require.NoError(t, err)
+
+			blobs, err := index.Serialize()
+			require.NoError(t, err)
+			require.NotEmpty(t, blobs)
+
+			copyIndex, err := NewCgoIndex(tc.dtype, typeParams, indexParams)
+			require.NoError(t, err)
+			require.NotNil(t, copyIndex)
+			defer func() {
+				require.NoError(t, copyIndex.Delete())
+			}()
+			require.NoError(t, copyIndex.Load(blobs))
+		})
 	}
 }
 
@@ -198,9 +369,10 @@ func TestCIndex_Codec(t *testing.T) {
 		assert.Equal(t, err, nil)
 		err = copyIndex.Load(blobs)
 		assert.Equal(t, err, nil)
-		copyBlobs, err := copyIndex.Serialize()
-		assert.Equal(t, err, nil)
-		assert.Equal(t, len(blobs), len(copyBlobs))
+		// IVF_FLAT_NM index don't support load and serialize
+		// copyBlobs, err := copyIndex.Serialize()
+		// assert.Equal(t, err, nil)
+		// assert.Equal(t, len(blobs), len(copyBlobs))
 		// TODO: check key, value and more
 
 		err = index.Delete()
@@ -224,34 +396,44 @@ func TestCIndex_Delete(t *testing.T) {
 }
 
 func TestCIndex_Error(t *testing.T) {
-	indexPtr, err := NewCgoIndex(schemapb.DataType_FloatVector, nil, nil)
-	assert.Nil(t, err)
+	indexParams := make(map[string]string)
+	indexParams[common.IndexTypeKey] = "IVF_FLAT"
+	indexParams[common.MetricTypeKey] = "L2"
+	indexPtr, err := NewCgoIndex(schemapb.DataType_FloatVector, nil, indexParams)
+	assert.NoError(t, err)
 
 	t.Run("Serialize error", func(t *testing.T) {
 		blobs, err := indexPtr.Serialize()
-		assert.NotNil(t, err)
+		assert.Error(t, err)
 		assert.Nil(t, blobs)
 	})
 
 	t.Run("Load error", func(t *testing.T) {
-		blobs := []*Blob{{
-			Key:   "test",
-			Value: []byte("value"),
-		},
+		blobs := []*Blob{
+			{
+				Key:   "test",
+				Value: []byte("value"),
+			},
 		}
 		err = indexPtr.Load(blobs)
-		assert.NotNil(t, err)
+		assert.Error(t, err)
 	})
 
 	t.Run("BuildFloatVecIndexWithoutIds error", func(t *testing.T) {
 		floatVectors := []float32{1.1, 2.2, 3.3}
 		err = indexPtr.Build(GenFloatVecDataset(floatVectors))
-		assert.NotNil(t, err)
+		assert.Error(t, err)
 	})
 
 	t.Run("BuildBinaryVecIndexWithoutIds error", func(t *testing.T) {
 		binaryVectors := []byte("binaryVectors")
 		err = indexPtr.Build(GenBinaryVecDataset(binaryVectors))
-		assert.NotNil(t, err)
+		assert.Error(t, err)
+	})
+
+	t.Run("BuildInt8VecIndexWithoutIds error", func(t *testing.T) {
+		int8Vectors := []int8{11, 22, 33, 44}
+		err = indexPtr.Build(GenInt8VecDataset(int8Vectors))
+		assert.Error(t, err)
 	})
 }

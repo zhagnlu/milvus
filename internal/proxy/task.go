@@ -18,79 +18,131 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
+	"time"
 
-	"github.com/milvus-io/milvus/internal/proto/indexpb"
-
-	"github.com/golang/protobuf/proto"
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/milvus/internal/common"
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/metrics"
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/types"
-
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-	"github.com/milvus-io/milvus/internal/proto/planpb"
-	"github.com/milvus-io/milvus/internal/proto/querypb"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
-
-	"github.com/milvus-io/milvus/internal/util/funcutil"
-	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
-	"github.com/milvus-io/milvus/internal/util/timerecord"
-	"github.com/milvus-io/milvus/internal/util/trace"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/retry"
+	"github.com/milvus-io/milvus/pkg/v3/util/timestamptz"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 const (
-	AnnsFieldKey    = "anns_field"
-	TopKKey         = "topk"
-	MetricTypeKey   = "metric_type"
-	SearchParamsKey = "params"
-	RoundDecimalKey = "round_decimal"
-	OffsetKey       = "offset"
-	LimitKey        = "limit"
+	SumScorer string = "sum"
+	MaxScorer string = "max"
+	AvgScorer string = "avg"
+)
 
-	InsertTaskName                  = "InsertTask"
-	CreateCollectionTaskName        = "CreateCollectionTask"
-	DropCollectionTaskName          = "DropCollectionTask"
-	SearchTaskName                  = "SearchTask"
-	RetrieveTaskName                = "RetrieveTask"
-	QueryTaskName                   = "QueryTask"
-	HasCollectionTaskName           = "HasCollectionTask"
-	DescribeCollectionTaskName      = "DescribeCollectionTask"
-	GetCollectionStatisticsTaskName = "GetCollectionStatisticsTask"
-	GetPartitionStatisticsTaskName  = "GetPartitionStatisticsTask"
-	ShowCollectionTaskName          = "ShowCollectionTask"
-	CreatePartitionTaskName         = "CreatePartitionTask"
-	DropPartitionTaskName           = "DropPartitionTask"
-	HasPartitionTaskName            = "HasPartitionTask"
-	ShowPartitionTaskName           = "ShowPartitionTask"
-	CreateIndexTaskName             = "CreateIndexTask"
-	DescribeIndexTaskName           = "DescribeIndexTask"
-	DropIndexTaskName               = "DropIndexTask"
-	GetIndexStateTaskName           = "GetIndexStateTask"
-	GetIndexBuildProgressTaskName   = "GetIndexBuildProgressTask"
-	FlushTaskName                   = "FlushTask"
-	LoadCollectionTaskName          = "LoadCollectionTask"
-	ReleaseCollectionTaskName       = "ReleaseCollectionTask"
-	LoadPartitionTaskName           = "LoadPartitionsTask"
-	ReleasePartitionTaskName        = "ReleasePartitionsTask"
-	deleteTaskName                  = "DeleteTask"
-	CreateAliasTaskName             = "CreateAliasTask"
-	DropAliasTaskName               = "DropAliasTask"
-	AlterAliasTaskName              = "AlterAliasTask"
+const (
+	IgnoreGrowingKey     = "ignore_growing"
+	ReduceStopForBestKey = "reduce_stop_for_best"
+	IteratorField        = "iterator"
+	CollectionID         = "collection_id"
+	GroupByFieldKey      = "group_by_field"
+	GroupSizeKey         = "group_size"
+	StrictGroupSize      = "strict_group_size"
+	JSONPath             = "json_path"
+	JSONType             = "json_type"
+	StrictCastKey        = "strict_cast"
+	RankGroupScorer      = "rank_group_scorer"
+	AnnsFieldKey         = "anns_field"
+	AnalyzerKey          = "analyzer_name"
+	TopKKey              = "topk"
+	NQKey                = "nq"
+	MetricTypeKey        = common.MetricTypeKey
+	ParamsKey            = common.ParamsKey
+	ExprParamsKey        = "expr_params"
+	RoundDecimalKey      = "round_decimal"
+	OffsetKey            = "offset"
+	LimitKey             = "limit"
+	// key for timestamptz translation
+	TimefieldsKey = "time_fields"
+
+	SearchIterV2Key        = "search_iter_v2"
+	SearchIterBatchSizeKey = "search_iter_batch_size"
+	SearchIterLastBoundKey = "search_iter_last_bound"
+	SearchIterIdKey        = "search_iter_id"
+	QueryIterLastPKKey     = "query_iter_last_pk"
+	QueryIterLastOffsetKey = "query_iter_last_element_offset"
+	GroupByFieldsKey       = "group_by_fields"
+	OrderByFieldsKey       = "order_by_fields"
+	PipelineTraceKey       = "pipeline_trace"
+
+	InsertTaskName                = "InsertTask"
+	CreateCollectionTaskName      = "CreateCollectionTask"
+	DropCollectionTaskName        = "DropCollectionTask"
+	TruncateCollectionTaskName    = "TruncateCollectionTask"
+	HasCollectionTaskName         = "HasCollectionTask"
+	DescribeCollectionTaskName    = "DescribeCollectionTask"
+	ShowCollectionTaskName        = "ShowCollectionTask"
+	CreatePartitionTaskName       = "CreatePartitionTask"
+	DropPartitionTaskName         = "DropPartitionTask"
+	HasPartitionTaskName          = "HasPartitionTask"
+	ShowPartitionTaskName         = "ShowPartitionTask"
+	FlushTaskName                 = "FlushTask"
+	FlushAllTaskName              = "FlushAllTask"
+	LoadCollectionTaskName        = "LoadCollectionTask"
+	ReleaseCollectionTaskName     = "ReleaseCollectionTask"
+	LoadPartitionTaskName         = "LoadPartitionsTask"
+	ReleasePartitionTaskName      = "ReleasePartitionsTask"
+	DeleteTaskName                = "DeleteTask"
+	CreateAliasTaskName           = "CreateAliasTask"
+	DropAliasTaskName             = "DropAliasTask"
+	AlterAliasTaskName            = "AlterAliasTask"
+	DescribeAliasTaskName         = "DescribeAliasTask"
+	ListAliasesTaskName           = "ListAliasesTask"
+	AlterCollectionTaskName       = "AlterCollectionTask"
+	AlterCollectionFieldTaskName  = "AlterCollectionFieldTask"
+	AddCollectionFunctionTask     = "AddCollectionFunctionTask"
+	AlterCollectionFunctionTask   = "AlterCollectionFunctionTask"
+	DropCollectionFunctionTask    = "DropCollectionFunctionTask"
+	UpsertTaskName                = "UpsertTask"
+	CreateResourceGroupTaskName   = "CreateResourceGroupTask"
+	UpdateResourceGroupsTaskName  = "UpdateResourceGroupsTask"
+	DropResourceGroupTaskName     = "DropResourceGroupTask"
+	TransferNodeTaskName          = "TransferNodeTask"
+	TransferReplicaTaskName       = "TransferReplicaTask"
+	ListResourceGroupsTaskName    = "ListResourceGroupsTask"
+	DescribeResourceGroupTaskName = "DescribeResourceGroupTask"
+	RunAnalyzerTaskName           = "RunAnalyzer"
+	HighlightTaskName             = "Highlight"
+
+	CreateDatabaseTaskName   = "CreateCollectionTask"
+	DropDatabaseTaskName     = "DropDatabaseTaskName"
+	ListDatabaseTaskName     = "ListDatabaseTaskName"
+	AlterDatabaseTaskName    = "AlterDatabaseTaskName"
+	DescribeDatabaseTaskName = "DescribeDatabaseTaskName"
+
+	AddFieldTaskName              = "AddFieldTaskName"
+	AddStructFieldTaskName        = "AddStructFieldTaskName"
+	AlterCollectionSchemaTaskName = "AlterCollectionSchemaTaskName"
 
 	// minFloat32 minimum float.
 	minFloat32 = -1 * float32(math.MaxFloat32)
+
+	RankTypeKey      = "strategy"
+	RRFParamsKey     = "k"
+	WeightsParamsKey = "weights"
+	NormScoreKey     = "norm_score"
 )
 
 type task interface {
@@ -108,525 +160,1682 @@ type task interface {
 	PostExecute(ctx context.Context) error
 	WaitToFinish() error
 	Notify(err error)
+	CanSkipAllocTimestamp() bool
+	SetOnEnqueueTime()
+	GetDurationInQueue() time.Duration
+	IsSubTask() bool
+	SetExecutingTime()
+	GetDurationInExecuting() time.Duration
+}
+
+type baseTask struct {
+	onEnqueueTime time.Time
+	executingTime time.Time
+}
+
+func (bt *baseTask) CanSkipAllocTimestamp() bool {
+	return false
+}
+
+func (bt *baseTask) SetOnEnqueueTime() {
+	bt.onEnqueueTime = time.Now()
+}
+
+func (bt *baseTask) GetDurationInQueue() time.Duration {
+	return time.Since(bt.onEnqueueTime)
+}
+
+func (bt *baseTask) IsSubTask() bool {
+	return false
+}
+
+func (bt *baseTask) SetExecutingTime() {
+	bt.executingTime = time.Now()
+}
+
+func (bt *baseTask) GetDurationInExecuting() time.Duration {
+	return time.Since(bt.executingTime)
 }
 
 type dmlTask interface {
 	task
-	getChannels() ([]pChan, error)
-	getPChanStats() (map[pChan]pChanStatistics, error)
+	setChannels() error
+	getChannels() []pChan
 }
 
 type BaseInsertTask = msgstream.InsertMsg
 
-type createCollectionTask struct {
-	Condition
-	*milvuspb.CreateCollectionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
-	schema    *schemapb.CollectionSchema
-}
-
-func (cct *createCollectionTask) TraceCtx() context.Context {
-	return cct.ctx
-}
-
-func (cct *createCollectionTask) ID() UniqueID {
-	return cct.Base.MsgID
-}
-
-func (cct *createCollectionTask) SetID(uid UniqueID) {
-	cct.Base.MsgID = uid
-}
-
-func (cct *createCollectionTask) Name() string {
-	return CreateCollectionTaskName
-}
-
-func (cct *createCollectionTask) Type() commonpb.MsgType {
-	return cct.Base.MsgType
-}
-
-func (cct *createCollectionTask) BeginTs() Timestamp {
-	return cct.Base.Timestamp
-}
-
-func (cct *createCollectionTask) EndTs() Timestamp {
-	return cct.Base.Timestamp
-}
-
-func (cct *createCollectionTask) SetTs(ts Timestamp) {
-	cct.Base.Timestamp = ts
-}
-
-func (cct *createCollectionTask) OnEnqueue() error {
-	cct.Base = &commonpb.MsgBase{}
-	cct.Base.MsgType = commonpb.MsgType_CreateCollection
-	cct.Base.SourceID = Params.ProxyCfg.GetNodeID()
+func validateTextStorageV3Enabled(schema *schemapb.CollectionSchema) error {
+	if err := typeutil.ValidateTextRequiresStorageV3(schema, Params.CommonCfg.UseLoonFFI.GetAsBool()); err != nil {
+		return merr.WrapErrParameterInvalidMsg("%s", err.Error())
+	}
 	return nil
 }
 
-func (cct *createCollectionTask) PreExecute(ctx context.Context) error {
-	cct.Base.MsgType = commonpb.MsgType_CreateCollection
-	cct.Base.SourceID = Params.ProxyCfg.GetNodeID()
+type createCollectionTask struct {
+	baseTask
+	Condition
+	*milvuspb.CreateCollectionRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+	schema   *schemapb.CollectionSchema
+}
 
-	cct.schema = &schemapb.CollectionSchema{}
-	err := proto.Unmarshal(cct.Schema, cct.schema)
+func (t *createCollectionTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *createCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *createCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *createCollectionTask) Name() string {
+	return CreateCollectionTaskName
+}
+
+func (t *createCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *createCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *createCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *createCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *createCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_CreateCollection
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *createCollectionTask) validatePartitionKey(ctx context.Context) error {
+	idx := -1
+	for i, field := range t.schema.Fields {
+		if field.GetIsPartitionKey() {
+			if idx != -1 {
+				return fmt.Errorf("there are more than one partition key, field name = %s, %s", t.schema.Fields[idx].Name, field.Name)
+			}
+
+			if field.GetIsPrimaryKey() {
+				return errors.New("the partition key field must not be primary field")
+			}
+
+			if field.GetNullable() {
+				return merr.WrapErrParameterInvalidMsg("partition key field not support nullable")
+			}
+
+			// The type of the partition key field can only be int64 and varchar
+			if field.DataType != schemapb.DataType_Int64 && field.DataType != schemapb.DataType_VarChar {
+				return errors.New("the data type of partition key should be Int64 or VarChar")
+			}
+
+			if t.GetNumPartitions() < 0 {
+				return errors.New("the specified partitions should be greater than 0 if partition key is used")
+			}
+
+			maxPartitionNum := Params.RootCoordCfg.MaxPartitionNum.GetAsInt64()
+			if t.GetNumPartitions() > maxPartitionNum {
+				return merr.WrapErrParameterInvalidMsg("partition number (%d) exceeds max configuration (%d)",
+					t.GetNumPartitions(), maxPartitionNum)
+			}
+
+			// set default physical partitions num if enable partition key mode
+			if t.GetNumPartitions() == 0 {
+				defaultNum := common.DefaultPartitionsWithPartitionKey
+				if defaultNum > maxPartitionNum {
+					defaultNum = maxPartitionNum
+				}
+				t.NumPartitions = defaultNum
+			}
+
+			idx = i
+		}
+	}
+
+	// Fields in StructArrayFields should not be partition key
+	for _, field := range t.schema.StructArrayFields {
+		for _, subField := range field.Fields {
+			if subField.GetIsPartitionKey() {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("partition key is not supported for struct field, field name = %s", subField.Name))
+			}
+		}
+	}
+
+	mustPartitionKey := Params.ProxyCfg.MustUsePartitionKey.GetAsBool()
+	if mustPartitionKey && idx == -1 {
+		return merr.WrapErrParameterInvalidMsg("partition key must be set when creating the collection" +
+			" because the mustUsePartitionKey config is true")
+	}
+
+	if idx == -1 {
+		if t.GetNumPartitions() != 0 {
+			return errors.New("num_partitions should only be specified with partition key field enabled")
+		}
+	} else {
+		log.Ctx(ctx).Info("create collection with partition key mode",
+			zap.String("collectionName", t.CollectionName),
+			zap.Int64("numDefaultPartitions", t.GetNumPartitions()))
+	}
+
+	return nil
+}
+
+func (t *createCollectionTask) validateClusteringKey(ctx context.Context) error {
+	idx := -1
+	for i, field := range t.schema.Fields {
+		if field.GetIsClusteringKey() {
+			if !typeutil.IsClusteringKeyType(field.GetDataType()) {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("clustering key field %s has unsupported data type %s", field.Name, field.GetDataType().String()))
+			}
+			if typeutil.IsVectorType(field.GetDataType()) &&
+				!paramtable.Get().CommonCfg.EnableVectorClusteringKey.GetAsBool() {
+				return merr.WrapErrCollectionVectorClusteringKeyNotAllowed(t.CollectionName)
+			}
+			if idx != -1 {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("there are more than one clustering key, field name = %s, %s", t.schema.Fields[idx].Name, field.Name))
+			}
+			idx = i
+		}
+	}
+
+	// Fields in StructArrayFields should not be clustering key
+	for _, field := range t.schema.StructArrayFields {
+		for _, subField := range field.Fields {
+			if subField.GetIsClusteringKey() {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("clustering key is not supported for struct field, field name = %s", subField.Name))
+			}
+		}
+	}
+	if idx != -1 {
+		log.Ctx(ctx).Info("create collection with clustering key",
+			zap.String("collectionName", t.CollectionName),
+			zap.String("clusteringKeyField", t.schema.Fields[idx].Name))
+	}
+	return nil
+}
+
+func validateCollectionTTL(props []*commonpb.KeyValuePair) (bool, error) {
+	for _, pair := range props {
+		if pair.Key == common.CollectionTTLConfigKey {
+			val, err := strconv.Atoi(pair.Value)
+			if err != nil {
+				return true, merr.WrapErrParameterInvalidMsg("collection TTL is not a valid positive integer")
+			}
+			if val < -1 || val > common.MaxTTLSeconds {
+				return true, merr.WrapErrParameterInvalidMsg("collection TTL is out of range, expect [-1, 3155760000], got %d", val)
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func validateTTLField(props []*commonpb.KeyValuePair, fields []*schemapb.FieldSchema) (bool, error) {
+	for _, pair := range props {
+		if pair.Key == common.CollectionTTLFieldKey {
+			fieldName := pair.Value
+			for _, field := range fields {
+				if field.Name == fieldName {
+					if field.DataType != schemapb.DataType_Timestamptz {
+						return true, merr.WrapErrParameterInvalidMsg("ttl field must be timestamptz, field name = %s", fieldName)
+					}
+					return true, nil
+				}
+			}
+			return true, merr.WrapErrParameterInvalidMsg("ttl field name %s not found in schema", fieldName)
+		}
+	}
+	return false, nil
+}
+
+func (t *createCollectionTask) validateTTL() error {
+	hasCollectionTTL, err := validateCollectionTTL(t.GetProperties())
 	if err != nil {
 		return err
 	}
-	cct.schema.AutoID = false
 
-	if cct.ShardsNum > Params.ProxyCfg.MaxShardNum {
-		return fmt.Errorf("maximum shards's number should be limited to %d", Params.ProxyCfg.MaxShardNum)
+	hasTTLField, err := validateTTLField(t.GetProperties(), t.schema.Fields)
+	if err != nil {
+		return err
 	}
 
-	if int64(len(cct.schema.Fields)) > Params.ProxyCfg.MaxFieldNum {
-		return fmt.Errorf("maximum field's number should be limited to %d", Params.ProxyCfg.MaxFieldNum)
+	if hasCollectionTTL && hasTTLField {
+		return merr.WrapErrParameterInvalidMsg("collection TTL and ttl field cannot be set at the same time")
+	}
+	return nil
+}
+
+func (t *createCollectionTask) PreExecute(ctx context.Context) error {
+	t.Base.MsgType = commonpb.MsgType_CreateCollection
+	t.Base.SourceID = paramtable.GetNodeID()
+
+	t.schema = &schemapb.CollectionSchema{}
+	err := proto.Unmarshal(t.Schema, t.schema)
+	if err != nil {
+		return err
+	}
+	t.schema.AutoID = false
+	t.schema.DbName = t.GetDbName()
+
+	disableCheck, err := common.IsDisableFuncRuntimeCheck(t.GetProperties()...)
+	if err != nil {
+		return err
+	}
+	if err := validateFunction(t.schema, "", disableCheck); err != nil {
+		return err
+	}
+	if err := normalizeFunctionOutputFields(t.schema); err != nil {
+		return err
+	}
+
+	isExternalCollection := typeutil.IsExternalCollection(t.schema)
+	hasExternalConfig := t.schema.GetExternalSource() != "" || t.schema.GetExternalSpec() != ""
+	if hasExternalConfig && !isExternalCollection {
+		return merr.WrapErrParameterInvalidMsg(
+			"external_source/external_spec require external_field mappings on collection %s",
+			t.schema.GetName())
+	}
+	if err := typeutil.NormalizeAndValidateExternalCollectionSchema(t.schema); err != nil {
+		return err
+	}
+	if err := validateTextStorageV3Enabled(t.schema); err != nil {
+		return err
+	}
+
+	// External collections must be single-shard: the refresh mechanism assigns all
+	// segments to VChannelNames[0], so multiple shards would leave segments orphaned.
+	if isExternalCollection && t.ShardsNum > 1 {
+		return fmt.Errorf("external collection does not support multiple shards, got ShardsNum=%d", t.ShardsNum)
+	}
+
+	if t.ShardsNum > Params.ProxyCfg.MaxShardNum.GetAsInt32() {
+		return fmt.Errorf("maximum shards's number should be limited to %d", Params.ProxyCfg.MaxShardNum.GetAsInt())
+	}
+
+	totalFieldsNum := typeutil.GetTotalFieldsNum(t.schema)
+	if totalFieldsNum > Params.ProxyCfg.MaxFieldNum.GetAsInt() {
+		return fmt.Errorf("maximum field's number should be limited to %d", Params.ProxyCfg.MaxFieldNum.GetAsInt())
+	}
+
+	vectorFields := len(typeutil.GetVectorFieldSchemas(t.schema))
+	if vectorFields > Params.ProxyCfg.MaxVectorFieldNum.GetAsInt() {
+		return fmt.Errorf("maximum vector field's number should be limited to %d", Params.ProxyCfg.MaxVectorFieldNum.GetAsInt())
+	}
+
+	if vectorFields == 0 {
+		return merr.WrapErrParameterInvalidMsg("schema does not contain vector field")
 	}
 
 	// validate collection name
-	if err := validateCollectionName(cct.schema.Name); err != nil {
+	if err := validateCollectionName(t.schema.Name); err != nil {
 		return err
 	}
 
-	// validate whether field names duplicates
-	if err := validateDuplicatedFieldName(cct.schema.Fields); err != nil {
+	// Reject reserved system field names supplied by the user before any
+	// server-side injection runs. __virtual_pk__ is the internal PK name
+	// auto-injected for external collections; RowID and Timestamp are
+	// segcore-internal columns. Allowing a user field under these names
+	// would create a namespace trap for any tooling that assumes they are
+	// system-owned (issue #49314). Must run before
+	// injectVirtualPKForExternalCollection so the check only sees
+	// user-supplied fields.
+	if err := validateReservedFieldNames(t.schema); err != nil {
 		return err
+	}
+
+	// For external collections, inject virtual PK field if no PK exists
+	if isExternalCollection {
+		if err := injectVirtualPKForExternalCollection(t.schema); err != nil {
+			return err
+		}
 	}
 
 	// validate primary key definition
-	if err := validatePrimaryKey(cct.schema); err != nil {
+	if err := validatePrimaryKey(t.schema); err != nil {
+		return err
+	}
+
+	// validate dynamic field
+	if err := validateDynamicField(t.schema); err != nil {
 		return err
 	}
 
 	// validate auto id definition
-	if err := ValidateFieldAutoID(cct.schema); err != nil {
+	if err := ValidateFieldAutoID(t.schema); err != nil {
 		return err
 	}
 
 	// validate field type definition
-	if err := validateFieldType(cct.schema); err != nil {
+	if err := validateFieldType(t.schema); err != nil {
 		return err
 	}
 
-	for _, field := range cct.schema.Fields {
-		// validate field name
-		if err := validateFieldName(field.Name); err != nil {
+	// validate partition key mode
+	if err := t.validatePartitionKey(ctx); err != nil {
+		return err
+	}
+
+	hasPartitionKey := hasPartitionKeyModeField(t.schema)
+	if _, err := validatePartitionKeyIsolation(ctx, t.CollectionName, hasPartitionKey, t.GetProperties()...); err != nil {
+		return err
+	}
+
+	// validate query mode
+	if err := common.ValidateQueryMode(t.GetProperties()...); err != nil {
+		return err
+	}
+
+	// Validate timezone
+	tz, exist := funcutil.TryGetAttrByKeyFromRepeatedKV(common.TimezoneKey, t.GetProperties())
+	if exist && !timestamptz.IsTimezoneValid(tz) {
+		return merr.WrapErrParameterInvalidMsg("unknown or invalid IANA Time Zone ID: %s", tz)
+	}
+
+	// Validate collection ttl
+	_, err = common.GetCollectionTTL(t.GetProperties())
+	if err != nil {
+		return merr.WrapErrParameterInvalidMsg("collection ttl property value not valid, parse error: %s", err.Error())
+	}
+
+	// Validate warmup policy for all warmup keys
+	if hasWarmupProp(t.GetProperties()...) {
+		for _, prop := range t.GetProperties() {
+			if common.IsFieldWarmupKey(prop.GetKey()) {
+				return merr.WrapErrParameterInvalidMsg("warmup key '%s' is only allowed at field level, use warmup.scalarField/warmup.scalarIndex/warmup.vectorField/warmup.vectorIndex at collection level", prop.GetKey())
+			}
+			if common.IsCollectionWarmupKey(prop.GetKey()) {
+				if err := common.ValidateWarmupPolicy(prop.GetValue()); err != nil {
+					return merr.WrapErrParameterInvalidMsg("invalid warmup value for key %s: %s", prop.GetKey(), err.Error())
+				}
+			}
+		}
+	}
+
+	// validate clustering key
+	if err := t.validateClusteringKey(ctx); err != nil {
+		return err
+	}
+
+	for _, field := range t.schema.Fields {
+		if err := ValidateField(field, t.schema); err != nil {
 			return err
 		}
-		// validate vector field type parameters
-		if field.DataType == schemapb.DataType_FloatVector || field.DataType == schemapb.DataType_BinaryVector {
-			err = validateDimension(field)
-			if err != nil {
-				return err
-			}
-		}
-		// valid max length per row parameters
-		// if max_length not specified, return error
-		if field.DataType == schemapb.DataType_VarChar {
-			err = validateMaxLengthPerRow(cct.schema.Name, field)
-			if err != nil {
-				return err
-			}
+	}
+
+	for _, structArrayField := range t.schema.StructArrayFields {
+		if err := ValidateStructArrayField(structArrayField, t.schema); err != nil {
+			return err
 		}
 	}
 
-	if err := validateMultipleVectorFields(cct.schema); err != nil {
+	// Transform struct field names to ensure global uniqueness
+	// This allows different structs to have fields with the same name
+	err = transformStructFieldNames(t.schema)
+	if err != nil {
+		return fmt.Errorf("failed to transform struct field names: %v", err)
+	}
+
+	// validate whether field names duplicates (after transformation)
+	if err := validateDuplicatedFieldName(t.schema); err != nil {
 		return err
 	}
 
-	cct.CreateCollectionRequest.Schema, err = proto.Marshal(cct.schema)
+	if err := validateMultipleVectorFields(t.schema); err != nil {
+		return err
+	}
+
+	if err := validateLoadFieldsList(t.schema); err != nil {
+		return err
+	}
+
+	if err := t.validateTTL(); err != nil {
+		return err
+	}
+
+	t.Schema, err = proto.Marshal(t.schema)
 	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *createCollectionTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.CreateCollection(ctx, t.CreateCollectionRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *createCollectionTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type addCollectionFieldTask struct {
+	baseTask
+	Condition
+	*milvuspb.AddCollectionFieldRequest
+	ctx         context.Context
+	mixCoord    types.MixCoordClient
+	result      *commonpb.Status
+	fieldSchema *schemapb.FieldSchema
+	oldSchema   *schemapb.CollectionSchema
+}
+
+func (t *addCollectionFieldTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *addCollectionFieldTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *addCollectionFieldTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *addCollectionFieldTask) Name() string {
+	return AddFieldTaskName
+}
+
+func (t *addCollectionFieldTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *addCollectionFieldTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *addCollectionFieldTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *addCollectionFieldTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *addCollectionFieldTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_AddCollectionField
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *addCollectionFieldTask) PreExecute(ctx context.Context) error {
+	if t.oldSchema == nil {
+		return merr.WrapErrParameterInvalidMsg("empty old schema in add field task")
+	}
+
+	t.fieldSchema = &schemapb.FieldSchema{}
+	if err := proto.Unmarshal(t.GetSchema(), t.fieldSchema); err != nil {
+		return err
+	}
+	if err := validateAddFieldRequest(t.oldSchema, t.fieldSchema); err != nil {
+		return err
+	}
+	// User-added fields must be nullable so that old segments without this field can return
+	// NULL rather than causing a schema inconsistency at query time.
+	if !t.fieldSchema.GetNullable() {
+		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("added field must be nullable, please check it, field name = %s", t.fieldSchema.GetName()))
+	}
+	if err := ValidateField(t.fieldSchema, t.oldSchema); err != nil {
+		return err
+	}
+	log.Info("PreExecute addField task done", zap.Any("field schema", t.fieldSchema))
+	return nil
+}
+
+func (t *addCollectionFieldTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.AddCollectionField(ctx, t.AddCollectionFieldRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *addCollectionFieldTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type addCollectionStructFieldTask struct {
+	baseTask
+	Condition
+	*milvuspb.AddCollectionStructFieldRequest
+	ctx               context.Context
+	mixCoord          types.MixCoordClient
+	result            *commonpb.Status
+	structFieldSchema *schemapb.StructArrayFieldSchema
+	oldSchema         *schemapb.CollectionSchema
+}
+
+func (t *addCollectionStructFieldTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *addCollectionStructFieldTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *addCollectionStructFieldTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *addCollectionStructFieldTask) Name() string {
+	return AddStructFieldTaskName
+}
+
+func (t *addCollectionStructFieldTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *addCollectionStructFieldTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *addCollectionStructFieldTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *addCollectionStructFieldTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *addCollectionStructFieldTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_AddCollectionField
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *addCollectionStructFieldTask) PreExecute(ctx context.Context) error {
+	if t.oldSchema == nil {
+		return merr.WrapErrParameterInvalidMsg("empty old schema in add struct field task")
+	}
+	if t.GetStructArrayFieldSchema() == nil {
+		return merr.WrapErrParameterInvalidMsg("struct array field schema is nil")
+	}
+
+	t.structFieldSchema = proto.Clone(t.GetStructArrayFieldSchema()).(*schemapb.StructArrayFieldSchema)
+	if err := validateAddStructFieldRequest(t.oldSchema, t.structFieldSchema); err != nil {
+		return err
+	}
+	transformStructArrayFieldSubNames(t.structFieldSchema)
+	t.StructArrayFieldSchema = t.structFieldSchema
+
+	log.Info("PreExecute addStructField task done", zap.Any("struct field schema", t.structFieldSchema))
+	return nil
+}
+
+func (t *addCollectionStructFieldTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.AddCollectionStructField(ctx, t.AddCollectionStructFieldRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *addCollectionStructFieldTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+func validateAddStructFieldRequest(schema *schemapb.CollectionSchema, structFieldSchema *schemapb.StructArrayFieldSchema) error {
+	if schema == nil {
+		return merr.WrapErrParameterInvalidMsg("empty old schema in add struct field task")
+	}
+	if structFieldSchema == nil {
+		return merr.WrapErrParameterInvalidMsg("struct array field schema is nil")
+	}
+	if !structFieldSchema.GetNullable() {
+		return merr.WrapErrParameterInvalidMsg("added struct field must be nullable, please check it, struct field name = %s", structFieldSchema.GetName())
+	}
+	if err := validateFieldName(structFieldSchema.GetName()); err != nil {
+		return err
+	}
+	if funcutil.SliceContain([]string{common.RowIDFieldName, common.TimeStampFieldName, common.MetaFieldName, common.NamespaceFieldName, common.VirtualPKFieldName}, structFieldSchema.GetName()) {
+		return merr.WrapErrParameterInvalidMsg("not support to add system field, field name = %s", structFieldSchema.GetName())
+	}
+	if err := ValidateStructArrayField(structFieldSchema, schema); err != nil {
+		return err
+	}
+	if err := validateAddStructSubFieldProperties(structFieldSchema); err != nil {
+		return err
+	}
+	if err := validateAddStructFieldNames(schema, structFieldSchema); err != nil {
+		return err
+	}
+
+	totalFieldsNum := typeutil.GetTotalFieldsNum(schema) + len(structFieldSchema.GetFields()) + 1
+	if totalFieldsNum > Params.ProxyCfg.MaxFieldNum.GetAsInt() {
+		return fmt.Errorf("maximum field's number should be limited to %d", Params.ProxyCfg.MaxFieldNum.GetAsInt())
+	}
+
+	vectorFields := len(typeutil.GetVectorFieldSchemas(schema))
+	for _, subField := range structFieldSchema.GetFields() {
+		if typeutil.IsVectorType(subField.GetDataType()) {
+			vectorFields++
+		}
+	}
+	if vectorFields > Params.ProxyCfg.MaxVectorFieldNum.GetAsInt() {
+		return fmt.Errorf("maximum vector field's number should be limited to %d", Params.ProxyCfg.MaxVectorFieldNum.GetAsInt())
+	}
+
+	return nil
+}
+
+func validateAddStructSubFieldProperties(structFieldSchema *schemapb.StructArrayFieldSchema) error {
+	for _, subField := range structFieldSchema.GetFields() {
+		if funcutil.SliceContain([]string{common.RowIDFieldName, common.TimeStampFieldName, common.MetaFieldName, common.NamespaceFieldName, common.VirtualPKFieldName}, subField.GetName()) {
+			return merr.WrapErrParameterInvalidMsg("not support to add system field, field name = %s", subField.GetName())
+		}
+		if subField.GetIsPrimaryKey() {
+			return merr.WrapErrParameterInvalidMsg("primary key is not supported for struct field, field name = %s", subField.GetName())
+		}
+		if subField.GetAutoID() {
+			return merr.WrapErrParameterInvalidMsg("autoID is not supported for struct field, field name = %s", subField.GetName())
+		}
+		if subField.GetIsPartitionKey() {
+			return merr.WrapErrParameterInvalidMsg("partition key is not supported for struct field, field name = %s", subField.GetName())
+		}
+		if subField.GetIsClusteringKey() {
+			return merr.WrapErrParameterInvalidMsg("clustering key is not supported for struct field, field name = %s", subField.GetName())
+		}
+		if subField.GetDefaultValue() != nil {
+			return merr.WrapErrParameterInvalidMsg("default value is not supported for struct field, field name = %s", subField.GetName())
+		}
+		if subField.GetIsFunctionOutput() {
+			return merr.WrapErrParameterInvalidMsg("function output is not supported for struct field, field name = %s", subField.GetName())
+		}
+		if subField.GetExternalField() != "" {
+			return merr.WrapErrParameterInvalidMsg("add struct field operation does not support external field mapping, field name = %s", subField.GetName())
+		}
+	}
+	return nil
+}
+
+func validateAddStructFieldNames(schema *schemapb.CollectionSchema, structFieldSchema *schemapb.StructArrayFieldSchema) error {
+	existingNames := typeutil.NewSet[string]()
+	for _, field := range schema.GetFields() {
+		existingNames.Insert(field.GetName())
+	}
+	for _, structArrayField := range schema.GetStructArrayFields() {
+		existingNames.Insert(structArrayField.GetName())
+		for _, subField := range structArrayField.GetFields() {
+			if typeutil.IsStructSubField(subField.GetName()) {
+				existingNames.Insert(subField.GetName())
+			}
+			existingNames.Insert(storedStructSubFieldName(structArrayField.GetName(), subField.GetName()))
+		}
+	}
+
+	if existingNames.Contain(structFieldSchema.GetName()) {
+		return merr.WrapErrParameterInvalidMsg("duplicated field name %s", structFieldSchema.GetName())
+	}
+
+	newSubFieldNames := make(map[string]struct{})
+	for _, subField := range structFieldSchema.GetFields() {
+		if _, ok := newSubFieldNames[subField.GetName()]; ok {
+			return merr.WrapErrParameterInvalidMsg("duplicated field name %s", subField.GetName())
+		}
+		newSubFieldNames[subField.GetName()] = struct{}{}
+
+		transformedName := typeutil.ConcatStructFieldName(structFieldSchema.GetName(), subField.GetName())
+		if existingNames.Contain(transformedName) {
+			return merr.WrapErrParameterInvalidMsg("duplicated field name %s", transformedName)
+		}
+	}
+	return nil
+}
+
+func storedStructSubFieldName(structName string, fieldName string) string {
+	if typeutil.IsStructSubField(fieldName) {
+		return fieldName
+	}
+	return typeutil.ConcatStructFieldName(structName, fieldName)
+}
+
+func transformStructArrayFieldSubNames(structFieldSchema *schemapb.StructArrayFieldSchema) {
+	structName := structFieldSchema.GetName()
+	for _, field := range structFieldSchema.GetFields() {
+		field.Name = typeutil.ConcatStructFieldName(structName, field.GetName())
+	}
+}
+
+// validateAddFieldRequest validates both the old schema constraints and the new field properties
+// for an AddCollectionField request. It is the single source of truth for add-field validation.
+func validateAddFieldRequest(schema *schemapb.CollectionSchema, newFieldSchema *schemapb.FieldSchema) error {
+	// --- old schema constraints ---
+	fieldList := typeutil.NewSet[string]()
+	for _, field := range schema.GetFields() {
+		fieldList.Insert(field.GetName())
+	}
+	for _, structArrayField := range schema.GetStructArrayFields() {
+		fieldList.Insert(structArrayField.GetName())
+	}
+	if typeutil.GetTotalFieldsNum(schema) >= Params.ProxyCfg.MaxFieldNum.GetAsInt() {
+		msg := fmt.Sprintf("The number of fields has reached the maximum value %d", Params.ProxyCfg.MaxFieldNum.GetAsInt())
+		return merr.WrapErrParameterInvalidMsg(msg)
+	}
+	if fieldList.Contain(newFieldSchema.GetName()) {
+		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("duplicated field name %s", newFieldSchema.GetName()))
+	}
+
+	// --- new field property constraints ---
+	if _, ok := schemapb.DataType_name[int32(newFieldSchema.GetDataType())]; !ok || newFieldSchema.GetDataType() == schemapb.DataType_None {
+		return merr.WrapErrParameterInvalid("valid field", fmt.Sprintf("field data type: %s is not supported", newFieldSchema.GetDataType()))
+	}
+	isExternalCollection := typeutil.IsExternalCollection(schema)
+	if isExternalCollection && newFieldSchema.GetExternalField() == "" {
+		return merr.WrapErrParameterInvalidMsg("add field operation on external collection requires external_field mapping, field name = %s", newFieldSchema.GetName())
+	}
+	if !isExternalCollection && newFieldSchema.GetExternalField() != "" {
+		return merr.WrapErrParameterInvalidMsg("add field operation does not support external field mapping, field name = %s", newFieldSchema.GetName())
+	}
+	if isExternalCollection {
+		schemaWithNewField := proto.Clone(schema).(*schemapb.CollectionSchema)
+		schemaWithNewField.Fields = append(schemaWithNewField.GetFields(), proto.Clone(newFieldSchema).(*schemapb.FieldSchema))
+		if err := typeutil.ValidateExternalCollectionResolvedSchema(schemaWithNewField); err != nil {
+			return merr.WrapErrParameterInvalidMsg("%s", err.Error())
+		}
+	}
+	schemaWithNewField := proto.Clone(schema).(*schemapb.CollectionSchema)
+	schemaWithNewField.Fields = append(schemaWithNewField.GetFields(), proto.Clone(newFieldSchema).(*schemapb.FieldSchema))
+	if err := validateTextStorageV3Enabled(schemaWithNewField); err != nil {
+		return err
+	}
+	if funcutil.SliceContain([]string{common.RowIDFieldName, common.TimeStampFieldName, common.MetaFieldName, common.NamespaceFieldName, common.VirtualPKFieldName}, newFieldSchema.GetName()) {
+		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("not support to add system field, field name = %s", newFieldSchema.GetName()))
+	}
+	if newFieldSchema.GetIsPrimaryKey() {
+		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("not support to add pk field, field name = %s", newFieldSchema.GetName()))
+	}
+	if newFieldSchema.GetAutoID() {
+		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("only primary field can speficy AutoID with true, field name = %s", newFieldSchema.GetName()))
+	}
+	if newFieldSchema.GetIsPartitionKey() {
+		return merr.WrapErrParameterInvalidMsg("not support to add partition key field, field name  = %s", newFieldSchema.GetName())
+	}
+	if newFieldSchema.GetIsClusteringKey() {
+		if !typeutil.IsClusteringKeyType(newFieldSchema.GetDataType()) {
+			return merr.WrapErrParameterInvalidMsg(
+				fmt.Sprintf("clustering key field %s has unsupported data type %s",
+					newFieldSchema.GetName(), newFieldSchema.GetDataType().String()))
+		}
+		for _, f := range schema.GetFields() {
+			if f.GetIsClusteringKey() {
+				return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("already has another clustering key field, field name: %s", newFieldSchema.GetName()))
+			}
+		}
+	}
+	if typeutil.IsVectorType(newFieldSchema.DataType) {
+		vectorFields := len(typeutil.GetVectorFieldSchemas(schema))
+		if vectorFields >= Params.ProxyCfg.MaxVectorFieldNum.GetAsInt() {
+			return fmt.Errorf("maximum vector field's number should be limited to %d", Params.ProxyCfg.MaxVectorFieldNum.GetAsInt())
+		}
+	}
+
+	// NOTE: The nullable requirement for added fields is enforced by callers that deal with
+	// user-defined fields (e.g. addCollectionFieldTask). Function output fields managed by
+	// alterCollectionSchemaTask are explicitly prohibited from being nullable by validateFunction,
+	// so the check is intentionally left to callers rather than enforced here universally.
+	//
+	// Dense vector types require a dimension TypeParam. This check applies unconditionally
+	// (regardless of nullable) because a vector field without dimension is always invalid.
+	// SparseFloatVector is excluded because it does not have a fixed dimension by design.
+	if typeutil.IsVectorType(newFieldSchema.DataType) {
+		if newFieldSchema.DataType == schemapb.DataType_FloatVector ||
+			newFieldSchema.DataType == schemapb.DataType_Float16Vector ||
+			newFieldSchema.DataType == schemapb.DataType_BFloat16Vector ||
+			newFieldSchema.DataType == schemapb.DataType_BinaryVector ||
+			newFieldSchema.DataType == schemapb.DataType_Int8Vector {
+			if len(newFieldSchema.TypeParams) == 0 {
+				return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("vector field must have dimension specified, field name = %s", newFieldSchema.GetName()))
+			}
+		}
+	}
+	return nil
+}
+
+type alterCollectionSchemaTask struct {
+	baseTask
+	Condition
+	*milvuspb.AlterCollectionSchemaRequest
+	*milvuspb.AlterCollectionSchemaResponse
+	ctx       context.Context
+	mixCoord  types.MixCoordClient
+	oldSchema *schemapb.CollectionSchema
+}
+
+func (t *alterCollectionSchemaTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *alterCollectionSchemaTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *alterCollectionSchemaTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *alterCollectionSchemaTask) Name() string {
+	return AlterCollectionSchemaTaskName
+}
+
+func (t *alterCollectionSchemaTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *alterCollectionSchemaTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *alterCollectionSchemaTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *alterCollectionSchemaTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *alterCollectionSchemaTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_AlterCollectionSchema
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *alterCollectionSchemaTask) PreExecute(ctx context.Context) error {
+	if t.oldSchema == nil {
+		return merr.WrapErrParameterInvalidMsg("empty old schema in alter collection schema task")
+	}
+
+	action := t.GetAction()
+	if action == nil {
+		return merr.WrapErrParameterInvalidMsg("action is nil in alter schema task")
+	}
+
+	switch action.GetOp().(type) {
+	case *milvuspb.AlterCollectionSchemaRequest_Action_AddRequest:
+		return t.preExecuteAdd(ctx)
+	case *milvuspb.AlterCollectionSchemaRequest_Action_DropRequest:
+		return t.preExecuteDrop(ctx)
+	default:
+		return merr.WrapErrParameterInvalidMsg("unknown action type in alter collection schema request")
+	}
+}
+
+func (t *alterCollectionSchemaTask) preExecuteAdd(ctx context.Context) error {
+	addRequest := t.GetAction().GetAddRequest()
+
+	fieldInfos := addRequest.GetFieldInfos()
+	funcSchemas := addRequest.GetFuncSchema()
+
+	// AlterCollectionSchema currently only supports adding exactly one function with its output fields.
+	// RootCoord enforces the same constraint (ddl_callbacks_alter_collection_schema.go);
+	// validate early at Proxy to give clearer error messages.
+	if len(funcSchemas) != 1 || funcSchemas[0] == nil {
+		return merr.WrapErrParameterInvalidMsg("For now, exactly one function schema is required in alter schema task")
+	}
+	if funcSchemas[0].GetType() != schemapb.FunctionType_BM25 {
+		return merr.WrapErrParameterInvalidMsg("For now, only BM25 function is supported in alter schema task")
+	}
+	if len(fieldInfos) == 0 {
+		return merr.WrapErrParameterInvalidMsg("fieldInfos is empty, function output fields are required")
+	}
+
+	if len(fieldInfos) != 1 {
+		return merr.WrapErrParameterInvalidMsg("For now, only one field info is supported in alter schema task")
+	}
+	newFieldSchema := fieldInfos[0].GetFieldSchema()
+	if newFieldSchema == nil {
+		return merr.WrapErrParameterInvalidMsg("empty new field schema in alter schema task")
+	}
+	if err := validateAddFieldRequest(t.oldSchema, newFieldSchema); err != nil {
+		return err
+	}
+	if err := ValidateField(newFieldSchema, t.oldSchema); err != nil {
+		return err
+	}
+
+	// Verify that every OutputFieldName of the function refers to one of the newly-added
+	// fields (from fieldInfos), not to a field that already exists in the old schema.
+	// This prevents a caller from wiring function output to an existing field, which
+	// would corrupt that field's data silently.
+	newFieldNames := make(map[string]struct{}, len(fieldInfos))
+	for _, fi := range fieldInfos {
+		if fi.GetFieldSchema() != nil {
+			newFieldNames[fi.GetFieldSchema().GetName()] = struct{}{}
+		}
+	}
+	for _, outName := range funcSchemas[0].GetOutputFieldNames() {
+		if _, isNew := newFieldNames[outName]; !isNew {
+			return merr.WrapErrParameterInvalidMsg(
+				"function output field %q must be one of the newly-added fields, not an existing field",
+				outName,
+			)
+		}
+	}
+
+	// Validate function-field type compatibility (e.g., BM25 requires varchar input,
+	// SparseFloatVector output). Construct a merged schema with old fields + new fields
+	// + new function, then validate only the new function to avoid re-checking existing
+	// functions' runtime providers.
+	mergedSchema := proto.Clone(t.oldSchema).(*schemapb.CollectionSchema)
+	for _, fieldInfo := range fieldInfos {
+		mergedSchema.Fields = append(mergedSchema.Fields, proto.Clone(fieldInfo.GetFieldSchema()).(*schemapb.FieldSchema))
+	}
+	mergedSchema.Functions = append(mergedSchema.Functions, funcSchemas[0])
+	if err := validateFunction(mergedSchema, funcSchemas[0].GetName(), false); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (cct *createCollectionTask) Execute(ctx context.Context) error {
-	var err error
-	cct.result, err = cct.rootCoord.CreateCollection(ctx, cct.CreateCollectionRequest)
-	return err
+func (t *alterCollectionSchemaTask) preExecuteDrop(ctx context.Context) error {
+	dropReq := t.GetAction().GetDropRequest()
+
+	switch id := dropReq.GetIdentifier().(type) {
+	case *milvuspb.AlterCollectionSchemaRequest_DropRequest_FunctionName:
+		return validateDropFunction(t.oldSchema, id.FunctionName)
+
+	case *milvuspb.AlterCollectionSchemaRequest_DropRequest_FieldId:
+		for _, f := range t.oldSchema.Fields {
+			if f.FieldID == id.FieldId {
+				return validateDropField(t.oldSchema, f.Name)
+			}
+		}
+		// Struct array field and its sub-fields share the FieldID namespace but
+		// live outside schema.Fields. Route struct-level drops to the normal
+		// by-name path; sub-field drops are not supported in this change.
+		for _, sf := range t.oldSchema.StructArrayFields {
+			if sf.FieldID == id.FieldId {
+				return validateDropField(t.oldSchema, sf.Name)
+			}
+			for _, sub := range sf.Fields {
+				if sub.FieldID == id.FieldId {
+					return merr.WrapErrParameterInvalidMsg(
+						"cannot drop sub-field of struct array field: %s.%s", sf.Name, sub.Name)
+				}
+			}
+		}
+		return merr.WrapErrParameterInvalidMsg("field not found with id: %d", id.FieldId)
+
+	case *milvuspb.AlterCollectionSchemaRequest_DropRequest_FieldName:
+		return validateDropField(t.oldSchema, id.FieldName)
+
+	default:
+		return merr.WrapErrParameterInvalidMsg("drop request must specify field_name, field_id, or function_name")
+	}
 }
 
-func (cct *createCollectionTask) PostExecute(ctx context.Context) error {
+func (t *alterCollectionSchemaTask) Execute(ctx context.Context) error {
+	// For AddRequest, mark all new fields as function output before sending to RootCoord.
+	// DropRequest needs no extra processing here; RootCoord handles it entirely.
+	if addRequest := t.GetAction().GetAddRequest(); addRequest != nil {
+		for _, fieldInfo := range addRequest.GetFieldInfos() {
+			if fieldInfo != nil && fieldInfo.GetFieldSchema() != nil {
+				fieldInfo.GetFieldSchema().IsFunctionOutput = true
+			}
+		}
+	}
+
+	var err error
+	t.AlterCollectionSchemaResponse, err = t.mixCoord.AlterCollectionSchema(ctx, t.AlterCollectionSchemaRequest)
+	return merr.CheckRPCCall(t.GetAlterStatus(), err)
+}
+
+func (t *alterCollectionSchemaTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+// validateDropField validates that a field can be safely dropped from the schema.
+func validateDropField(schema *schemapb.CollectionSchema, fieldName string) error {
+	if fieldName == "" {
+		return merr.WrapErrParameterInvalidMsg("field name is empty")
+	}
+
+	// Struct array fields share the name namespace with top-level fields but
+	// live in schema.StructArrayFields. Dropping the whole struct is allowed;
+	// dropping a single sub-field is not (no symmetric add-sub-field support).
+	for _, sf := range schema.StructArrayFields {
+		if sf.Name == fieldName {
+			return validateDropStructArrayField(schema, sf)
+		}
+		for _, sub := range sf.Fields {
+			if sub.Name == fieldName {
+				return merr.WrapErrParameterInvalidMsg(
+					"cannot drop sub-field of struct array field: %s.%s", sf.Name, fieldName)
+			}
+		}
+	}
+
+	// Find the target field in top-level Fields.
+	var targetField *schemapb.FieldSchema
+	for _, field := range schema.Fields {
+		if field.Name == fieldName {
+			targetField = field
+			break
+		}
+	}
+	if targetField == nil {
+		return merr.WrapErrParameterInvalidMsg("field not found: %s", fieldName)
+	}
+
+	// Check: cannot drop system fields
+	if funcutil.SliceContain([]string{common.RowIDFieldName, common.TimeStampFieldName, common.MetaFieldName, common.NamespaceFieldName}, fieldName) {
+		return merr.WrapErrParameterInvalidMsg("cannot drop system field: %s", fieldName)
+	}
+
+	// Check: cannot drop primary key field
+	if targetField.IsPrimaryKey {
+		return merr.WrapErrParameterInvalidMsg("cannot drop primary key field: %s", fieldName)
+	}
+
+	// Check: cannot drop partition key field
+	if targetField.IsPartitionKey {
+		return merr.WrapErrParameterInvalidMsg("cannot drop partition key field: %s", fieldName)
+	}
+
+	// Check: cannot drop clustering key field
+	if targetField.GetIsClusteringKey() {
+		return merr.WrapErrParameterInvalidMsg("cannot drop clustering key field: %s", fieldName)
+	}
+
+	// Check: cannot drop dynamic field; use AlterCollection to disable dynamic schema instead.
+	if targetField.IsDynamic {
+		return merr.WrapErrParameterInvalidMsg("cannot drop dynamic field: %s, use AlterCollection to disable dynamic schema instead", fieldName)
+	}
+
+	// Check: cannot drop the last vector field. GetVectorFieldSchemas counts
+	// vectors in both top-level Fields and StructArrayField sub-fields.
+	if typeutil.IsVectorType(targetField.DataType) {
+		if len(typeutil.GetVectorFieldSchemas(schema)) <= 1 {
+			return merr.WrapErrParameterInvalidMsg("cannot drop the last vector field: %s", fieldName)
+		}
+	}
+
+	// Check: field must not be referenced by any function
+	for _, fn := range schema.Functions {
+		for _, inputName := range fn.InputFieldNames {
+			if inputName == fieldName {
+				return merr.WrapErrParameterInvalidMsg("field is referenced by function %s as input, drop function first", fn.Name)
+			}
+		}
+		for _, outputName := range fn.OutputFieldNames {
+			if outputName == fieldName {
+				return merr.WrapErrParameterInvalidMsg("field is referenced by function %s as output, drop function first", fn.Name)
+			}
+		}
+	}
+
+	return nil
+}
+
+func validateDropStructArrayField(schema *schemapb.CollectionSchema, sf *schemapb.StructArrayFieldSchema) error {
+	removedVectors := 0
+	for _, sub := range sf.GetFields() {
+		if sub.GetIsPrimaryKey() {
+			return merr.WrapErrParameterInvalidMsg("cannot drop struct array field %s: sub-field %s is primary key", sf.GetName(), sub.GetName())
+		}
+		if sub.GetIsPartitionKey() {
+			return merr.WrapErrParameterInvalidMsg("cannot drop struct array field %s: sub-field %s is partition key", sf.GetName(), sub.GetName())
+		}
+		if sub.GetIsClusteringKey() {
+			return merr.WrapErrParameterInvalidMsg("cannot drop struct array field %s: sub-field %s is clustering key", sf.GetName(), sub.GetName())
+		}
+		if sub.GetIsDynamic() {
+			return merr.WrapErrParameterInvalidMsg("cannot drop struct array field %s: sub-field %s is dynamic", sf.GetName(), sub.GetName())
+		}
+		for _, fn := range schema.GetFunctions() {
+			for _, inputName := range fn.GetInputFieldNames() {
+				if inputName == sub.GetName() {
+					return merr.WrapErrParameterInvalidMsg("cannot drop struct array field %s: sub-field %s is referenced by function %s as input", sf.GetName(), sub.GetName(), fn.GetName())
+				}
+			}
+			for _, outputName := range fn.GetOutputFieldNames() {
+				if outputName == sub.GetName() {
+					return merr.WrapErrParameterInvalidMsg("cannot drop struct array field %s: sub-field %s is referenced by function %s as output", sf.GetName(), sub.GetName(), fn.GetName())
+				}
+			}
+		}
+		if typeutil.IsVectorType(sub.GetDataType()) {
+			removedVectors++
+		}
+	}
+	if removedVectors >= len(typeutil.GetVectorFieldSchemas(schema)) {
+		return merr.WrapErrParameterInvalidMsg(
+			"cannot drop struct array field %s: it would leave no vector field in the collection",
+			sf.GetName())
+	}
+	return nil
+}
+
+// validateDropFunction checks that the function exists, and that the cascade
+// removal of its output fields would not leave the collection without any
+// vector field. Without this check, a user told to "drop function first" by
+// validateDropField could end up with an unsearchable collection.
+func validateDropFunction(schema *schemapb.CollectionSchema, functionName string) error {
+	if functionName == "" {
+		return merr.WrapErrParameterInvalidMsg("function name is empty")
+	}
+
+	var targetFunc *schemapb.FunctionSchema
+	for _, fn := range schema.Functions {
+		if fn.Name == functionName {
+			targetFunc = fn
+			break
+		}
+	}
+	if targetFunc == nil {
+		return merr.WrapErrParameterInvalidMsg("function not found: %s", functionName)
+	}
+
+	// Cascade removes the function's output fields; refuse if it removes all vectors.
+	removedVectors := 0
+	for _, name := range targetFunc.OutputFieldNames {
+		if f := typeutil.GetFieldByName(schema, name); f != nil && typeutil.IsVectorType(f.DataType) {
+			removedVectors++
+		}
+	}
+	if removedVectors >= len(typeutil.GetVectorFieldSchemas(schema)) {
+		return merr.WrapErrParameterInvalidMsg(
+			"cannot drop function %s: it would leave no vector field in the collection",
+			functionName)
+	}
 	return nil
 }
 
 type dropCollectionTask struct {
+	baseTask
 	Condition
 	*milvuspb.DropCollectionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
-	chMgr     channelsMgr
-	chTicker  channelsTimeTicker
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+	chMgr    channelsMgr
 }
 
-func (dct *dropCollectionTask) TraceCtx() context.Context {
-	return dct.ctx
+func (t *dropCollectionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (dct *dropCollectionTask) ID() UniqueID {
-	return dct.Base.MsgID
+func (t *dropCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (dct *dropCollectionTask) SetID(uid UniqueID) {
-	dct.Base.MsgID = uid
+func (t *dropCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (dct *dropCollectionTask) Name() string {
+func (t *dropCollectionTask) Name() string {
 	return DropCollectionTaskName
 }
 
-func (dct *dropCollectionTask) Type() commonpb.MsgType {
-	return dct.Base.MsgType
+func (t *dropCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (dct *dropCollectionTask) BeginTs() Timestamp {
-	return dct.Base.Timestamp
+func (t *dropCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dct *dropCollectionTask) EndTs() Timestamp {
-	return dct.Base.Timestamp
+func (t *dropCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dct *dropCollectionTask) SetTs(ts Timestamp) {
-	dct.Base.Timestamp = ts
+func (t *dropCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (dct *dropCollectionTask) OnEnqueue() error {
-	dct.Base = &commonpb.MsgBase{}
+func (t *dropCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_DropCollection
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (dct *dropCollectionTask) PreExecute(ctx context.Context) error {
-	dct.Base.MsgType = commonpb.MsgType_DropCollection
-	dct.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if err := validateCollectionName(dct.CollectionName); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (dct *dropCollectionTask) Execute(ctx context.Context) error {
-	collID, err := globalMetaCache.GetCollectionID(ctx, dct.CollectionName)
+func (t *dropCollectionTask) PreExecute(ctx context.Context) error {
+	// No need to check collection name
+	// Validation shall be preformed in `CreateCollection`
+	// also permit drop collection one with bad collection name
+	_, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.GetCollectionName())
 	if err != nil {
-		// make dropping collection idempotent.
-		dct.result = &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}
-		return nil
-	}
-
-	dct.result, err = dct.rootCoord.DropCollection(ctx, dct.DropCollectionRequest)
-	if err != nil {
+		if errors.Is(err, merr.ErrCollectionNotFound) || errors.Is(err, merr.ErrDatabaseNotFound) {
+			// make dropping collection idempotent.
+			log.Ctx(ctx).Warn("drop non-existent collection", zap.String("collection", t.GetCollectionName()), zap.String("database", t.GetDbName()))
+			return nil
+		}
 		return err
 	}
 
-	_ = dct.chMgr.removeDMLStream(collID)
-	globalMetaCache.RemoveCollection(ctx, dct.CollectionName)
 	return nil
 }
 
-func (dct *dropCollectionTask) PostExecute(ctx context.Context) error {
-	globalMetaCache.RemoveCollection(ctx, dct.CollectionName)
+func (t *dropCollectionTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.DropCollection(ctx, t.DropCollectionRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *dropCollectionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
-// Support wildcard in output fields:
-//   "*" - all scalar fields
-//   "%" - all vector fields
-// For example, A and B are scalar fields, C and D are vector fields, duplicated fields will automatically be removed.
-//   output_fields=["*"] 	 ==> [A,B]
-//   output_fields=["%"] 	 ==> [C,D]
-//   output_fields=["*","%"] ==> [A,B,C,D]
-//   output_fields=["*",A] 	 ==> [A,B]
-//   output_fields=["*",C]   ==> [A,B,C]
-func translateOutputFields(outputFields []string, schema *schemapb.CollectionSchema, addPrimary bool) ([]string, error) {
-	var primaryFieldName string
-	scalarFieldNameMap := make(map[string]bool)
-	vectorFieldNameMap := make(map[string]bool)
-	resultFieldNameMap := make(map[string]bool)
-	resultFieldNames := make([]string, 0)
+type truncateCollectionTask struct {
+	baseTask
+	Condition
+	*milvuspb.TruncateCollectionRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.TruncateCollectionResponse
+	chMgr    channelsMgr
+}
 
-	for _, field := range schema.Fields {
-		if field.IsPrimaryKey {
-			primaryFieldName = field.Name
-		}
-		if field.DataType == schemapb.DataType_BinaryVector || field.DataType == schemapb.DataType_FloatVector {
-			vectorFieldNameMap[field.Name] = true
-		} else {
-			scalarFieldNameMap[field.Name] = true
-		}
-	}
+func (t *truncateCollectionTask) TraceCtx() context.Context {
+	return t.ctx
+}
 
-	for _, outputFieldName := range outputFields {
-		outputFieldName = strings.TrimSpace(outputFieldName)
-		if outputFieldName == "*" {
-			for fieldName := range scalarFieldNameMap {
-				resultFieldNameMap[fieldName] = true
-			}
-		} else if outputFieldName == "%" {
-			for fieldName := range vectorFieldNameMap {
-				resultFieldNameMap[fieldName] = true
-			}
-		} else {
-			resultFieldNameMap[outputFieldName] = true
-		}
-	}
+func (t *truncateCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
+}
 
-	if addPrimary {
-		resultFieldNameMap[primaryFieldName] = true
-	}
+func (t *truncateCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
 
-	for fieldName := range resultFieldNameMap {
-		resultFieldNames = append(resultFieldNames, fieldName)
+func (t *truncateCollectionTask) Name() string {
+	return TruncateCollectionTaskName
+}
+
+func (t *truncateCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *truncateCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *truncateCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *truncateCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *truncateCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
 	}
-	return resultFieldNames, nil
+	t.Base.MsgType = commonpb.MsgType_TruncateCollection
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *truncateCollectionTask) PreExecute(ctx context.Context) error {
+	if err := validateCollectionName(t.CollectionName); err != nil {
+		return err
+	}
+	// Truncate is a destructive op on internal segments. External collections
+	// have no internal data to truncate — their authoritative data lives in
+	// the user's object store and is materialized by RefreshExternalCollection.
+	// Allowing truncate would either no-op silently (misleading) or wipe the
+	// generated segment metadata while leaving the external source intact,
+	// putting the collection in an inconsistent state from which the next
+	// load/search would fail. Reject up front; users who want to reset the
+	// view should use RefreshExternalCollection or DropCollection.
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), t.GetCollectionName())
+	if err != nil {
+		return err
+	}
+	if typeutil.IsExternalCollection(collSchema.CollectionSchema) {
+		return merr.WrapErrParameterInvalidMsg(
+			"truncate is not supported on external collections; use RefreshExternalCollection to refresh the data view, or DropCollection to remove it")
+	}
+	return nil
+}
+
+func (t *truncateCollectionTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.TruncateCollection(ctx, t.TruncateCollectionRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *truncateCollectionTask) PostExecute(ctx context.Context) error {
+	return nil
 }
 
 type hasCollectionTask struct {
+	baseTask
 	Condition
 	*milvuspb.HasCollectionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *milvuspb.BoolResponse
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.BoolResponse
 }
 
-func (hct *hasCollectionTask) TraceCtx() context.Context {
-	return hct.ctx
+func (t *hasCollectionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (hct *hasCollectionTask) ID() UniqueID {
-	return hct.Base.MsgID
+func (t *hasCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (hct *hasCollectionTask) SetID(uid UniqueID) {
-	hct.Base.MsgID = uid
+func (t *hasCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (hct *hasCollectionTask) Name() string {
+func (t *hasCollectionTask) Name() string {
 	return HasCollectionTaskName
 }
 
-func (hct *hasCollectionTask) Type() commonpb.MsgType {
-	return hct.Base.MsgType
+func (t *hasCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (hct *hasCollectionTask) BeginTs() Timestamp {
-	return hct.Base.Timestamp
+func (t *hasCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (hct *hasCollectionTask) EndTs() Timestamp {
-	return hct.Base.Timestamp
+func (t *hasCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (hct *hasCollectionTask) SetTs(ts Timestamp) {
-	hct.Base.Timestamp = ts
+func (t *hasCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (hct *hasCollectionTask) OnEnqueue() error {
-	hct.Base = &commonpb.MsgBase{}
+func (t *hasCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_HasCollection
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (hct *hasCollectionTask) PreExecute(ctx context.Context) error {
-	hct.Base.MsgType = commonpb.MsgType_HasCollection
-	hct.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if err := validateCollectionName(hct.CollectionName); err != nil {
+func (t *hasCollectionTask) PreExecute(ctx context.Context) error {
+	if err := validateCollectionName(t.CollectionName); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (hct *hasCollectionTask) Execute(ctx context.Context) error {
-	var err error
-	hct.result, err = hct.rootCoord.HasCollection(ctx, hct.HasCollectionRequest)
-	if err != nil {
+func (t *hasCollectionTask) Execute(ctx context.Context) error {
+	t.result = &milvuspb.BoolResponse{
+		Status: merr.Success(),
+	}
+	_, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.GetCollectionName())
+	// error other than
+	if err != nil && !errors.Is(err, merr.ErrCollectionNotFound) {
+		t.result.Status = merr.Status(err)
 		return err
 	}
-	if hct.result == nil {
-		return errors.New("has collection resp is nil")
-	}
-	if hct.result.Status.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(hct.result.Status.Reason)
-	}
+	// if collection not nil, means error is ErrCollectionNotFound, result is false
+	// otherwise, result is true
+	t.result.Value = (err == nil)
 	return nil
 }
 
-func (hct *hasCollectionTask) PostExecute(ctx context.Context) error {
+func (t *hasCollectionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type describeCollectionTask struct {
+	baseTask
 	Condition
 	*milvuspb.DescribeCollectionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *milvuspb.DescribeCollectionResponse
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.DescribeCollectionResponse
 }
 
-func (dct *describeCollectionTask) TraceCtx() context.Context {
-	return dct.ctx
+func (t *describeCollectionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (dct *describeCollectionTask) ID() UniqueID {
-	return dct.Base.MsgID
+func (t *describeCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (dct *describeCollectionTask) SetID(uid UniqueID) {
-	dct.Base.MsgID = uid
+func (t *describeCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (dct *describeCollectionTask) Name() string {
+func (t *describeCollectionTask) Name() string {
 	return DescribeCollectionTaskName
 }
 
-func (dct *describeCollectionTask) Type() commonpb.MsgType {
-	return dct.Base.MsgType
+func (t *describeCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (dct *describeCollectionTask) BeginTs() Timestamp {
-	return dct.Base.Timestamp
+func (t *describeCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dct *describeCollectionTask) EndTs() Timestamp {
-	return dct.Base.Timestamp
+func (t *describeCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dct *describeCollectionTask) SetTs(ts Timestamp) {
-	dct.Base.Timestamp = ts
+func (t *describeCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (dct *describeCollectionTask) OnEnqueue() error {
-	dct.Base = &commonpb.MsgBase{}
+func (t *describeCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_DescribeCollection
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (dct *describeCollectionTask) PreExecute(ctx context.Context) error {
-	dct.Base.MsgType = commonpb.MsgType_DescribeCollection
-	dct.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if dct.CollectionID != 0 && len(dct.CollectionName) == 0 {
+func (t *describeCollectionTask) PreExecute(ctx context.Context) error {
+	if t.CollectionID != 0 && len(t.CollectionName) == 0 {
 		return nil
 	}
 
-	return validateCollectionName(dct.CollectionName)
+	return validateCollectionName(t.CollectionName)
 }
 
-func (dct *describeCollectionTask) Execute(ctx context.Context) error {
+func (t *describeCollectionTask) Execute(ctx context.Context) error {
 	var err error
-	dct.result = &milvuspb.DescribeCollectionResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
+	t.result = &milvuspb.DescribeCollectionResponse{
+		Status: merr.Success(),
 		Schema: &schemapb.CollectionSchema{
-			Name:        "",
-			Description: "",
-			AutoID:      false,
-			Fields:      make([]*schemapb.FieldSchema, 0),
+			Name:              "",
+			Description:       "",
+			AutoID:            false,
+			Fields:            make([]*schemapb.FieldSchema, 0),
+			Functions:         make([]*schemapb.FunctionSchema, 0),
+			StructArrayFields: make([]*schemapb.StructArrayFieldSchema, 0),
 		},
 		CollectionID:         0,
 		VirtualChannelNames:  nil,
 		PhysicalChannelNames: nil,
-		CollectionName:       dct.GetCollectionName(),
+		CollectionName:       t.GetCollectionName(),
+		DbName:               t.GetDbName(),
 	}
 
-	result, err := dct.rootCoord.DescribeCollection(ctx, dct.DescribeCollectionRequest)
-
+	ctx = AppendUserInfoForRPC(ctx)
+	result, err := t.mixCoord.DescribeCollection(ctx, t.DescribeCollectionRequest)
 	if err != nil {
 		return err
 	}
 
-	if result.Status.ErrorCode != commonpb.ErrorCode_Success {
-		dct.result.Status = result.Status
-	} else {
-		dct.result.Schema.Name = result.Schema.Name
-		dct.result.Schema.Description = result.Schema.Description
-		dct.result.Schema.AutoID = result.Schema.AutoID
-		dct.result.CollectionID = result.CollectionID
-		dct.result.VirtualChannelNames = result.VirtualChannelNames
-		dct.result.PhysicalChannelNames = result.PhysicalChannelNames
-		dct.result.CreatedTimestamp = result.CreatedTimestamp
-		dct.result.CreatedUtcTimestamp = result.CreatedUtcTimestamp
-		dct.result.ShardsNum = result.ShardsNum
-		dct.result.ConsistencyLevel = result.ConsistencyLevel
-		dct.result.Aliases = result.Aliases
-		for _, field := range result.Schema.Fields {
-			if field.FieldID >= common.StartOfUserFieldID {
-				dct.result.Schema.Fields = append(dct.result.Schema.Fields, &schemapb.FieldSchema{
-					FieldID:      field.FieldID,
-					Name:         field.Name,
-					IsPrimaryKey: field.IsPrimaryKey,
-					AutoID:       field.AutoID,
-					Description:  field.Description,
-					DataType:     field.DataType,
-					TypeParams:   field.TypeParams,
-					IndexParams:  field.IndexParams,
-				})
-			}
+	if result.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
+		t.result.Status = result.Status
+
+		// compatibility with PyMilvus existing implementation
+		err := merr.Error(t.result.GetStatus())
+		if errors.Is(err, merr.ErrCollectionNotFound) {
+			// nolint
+			t.result.Status.ErrorCode = commonpb.ErrorCode_UnexpectedError
+			// nolint
+			t.result.Status.Reason = fmt.Sprintf("can't find collection[database=%s][collection=%s]", t.GetDbName(), t.GetCollectionName())
+			t.result.Status.ExtraInfo = map[string]string{merr.InputErrorFlagKey: "true"}
+		}
+		return nil
+	}
+
+	t.result.Schema.Name = result.Schema.Name
+	t.result.Schema.Description = result.Schema.Description
+	t.result.Schema.AutoID = result.Schema.AutoID
+	t.result.Schema.EnableDynamicField = result.Schema.EnableDynamicField
+	t.result.Schema.ExternalSource = result.Schema.ExternalSource
+	// Pass spec through unredacted; the public proxy.DescribeCollection
+	// entry point applies RedactExternalSpec uniformly across cached and
+	// remote provider paths so internal-only callers of this task path
+	// (if any) still observe raw creds for FFI auth.
+	t.result.Schema.ExternalSpec = result.Schema.ExternalSpec
+	t.result.Schema.EnableNamespace = result.Schema.EnableNamespace
+	t.result.CollectionID = result.CollectionID
+	t.result.VirtualChannelNames = result.VirtualChannelNames
+	t.result.PhysicalChannelNames = result.PhysicalChannelNames
+	t.result.CreatedTimestamp = result.CreatedTimestamp
+	t.result.CreatedUtcTimestamp = result.CreatedUtcTimestamp
+	t.result.ShardsNum = result.ShardsNum
+	t.result.ConsistencyLevel = result.ConsistencyLevel
+	t.result.Aliases = result.Aliases
+	t.result.Properties = result.Properties
+	t.result.DbName = result.GetDbName()
+	t.result.DbId = result.GetDbId()
+	t.result.NumPartitions = result.NumPartitions
+	t.result.UpdateTimestamp = result.UpdateTimestamp
+	t.result.UpdateTimestampStr = result.UpdateTimestampStr
+	copyFieldSchema := func(field *schemapb.FieldSchema) *schemapb.FieldSchema {
+		return &schemapb.FieldSchema{
+			FieldID:          field.FieldID,
+			Name:             field.Name,
+			IsPrimaryKey:     field.IsPrimaryKey,
+			AutoID:           field.AutoID,
+			Description:      field.Description,
+			DataType:         field.DataType,
+			TypeParams:       field.TypeParams,
+			IndexParams:      field.IndexParams,
+			IsDynamic:        field.IsDynamic,
+			IsPartitionKey:   field.IsPartitionKey,
+			IsClusteringKey:  field.IsClusteringKey,
+			DefaultValue:     field.DefaultValue,
+			ElementType:      field.ElementType,
+			Nullable:         field.Nullable,
+			IsFunctionOutput: field.IsFunctionOutput,
+			ExternalField:    field.GetExternalField(),
 		}
 	}
+
+	for _, field := range result.Schema.Fields {
+		if field.IsDynamic || field.Name == common.NamespaceFieldName {
+			continue
+		}
+		if field.FieldID >= common.StartOfUserFieldID {
+			t.result.Schema.Fields = append(t.result.Schema.Fields, copyFieldSchema(field))
+		}
+	}
+
+	for i, structArrayField := range result.Schema.StructArrayFields {
+		t.result.Schema.StructArrayFields = append(t.result.Schema.StructArrayFields, &schemapb.StructArrayFieldSchema{
+			FieldID:     structArrayField.FieldID,
+			Name:        structArrayField.Name,
+			Description: structArrayField.Description,
+			Fields:      make([]*schemapb.FieldSchema, 0, len(structArrayField.Fields)),
+			Nullable:    structArrayField.Nullable,
+		})
+		for _, field := range structArrayField.Fields {
+			t.result.Schema.StructArrayFields[i].Fields = append(t.result.Schema.StructArrayFields[i].Fields, copyFieldSchema(field))
+		}
+	}
+
+	for _, function := range result.Schema.Functions {
+		t.result.Schema.Functions = append(t.result.Schema.Functions, proto.Clone(function).(*schemapb.FunctionSchema))
+	}
+
+	if err := restoreStructFieldNames(t.result.Schema); err != nil {
+		return fmt.Errorf("failed to restore struct field names: %v", err)
+	}
+
 	return nil
 }
 
-func (dct *describeCollectionTask) PostExecute(ctx context.Context) error {
+func (t *describeCollectionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type showCollectionsTask struct {
+	baseTask
 	Condition
 	*milvuspb.ShowCollectionsRequest
-	ctx        context.Context
-	rootCoord  types.RootCoord
-	queryCoord types.QueryCoord
-	result     *milvuspb.ShowCollectionsResponse
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.ShowCollectionsResponse
 }
 
-func (sct *showCollectionsTask) TraceCtx() context.Context {
-	return sct.ctx
+func (t *showCollectionsTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (sct *showCollectionsTask) ID() UniqueID {
-	return sct.Base.MsgID
+func (t *showCollectionsTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (sct *showCollectionsTask) SetID(uid UniqueID) {
-	sct.Base.MsgID = uid
+func (t *showCollectionsTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (sct *showCollectionsTask) Name() string {
+func (t *showCollectionsTask) Name() string {
 	return ShowCollectionTaskName
 }
 
-func (sct *showCollectionsTask) Type() commonpb.MsgType {
-	return sct.Base.MsgType
+func (t *showCollectionsTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (sct *showCollectionsTask) BeginTs() Timestamp {
-	return sct.Base.Timestamp
+func (t *showCollectionsTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (sct *showCollectionsTask) EndTs() Timestamp {
-	return sct.Base.Timestamp
+func (t *showCollectionsTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (sct *showCollectionsTask) SetTs(ts Timestamp) {
-	sct.Base.Timestamp = ts
+func (t *showCollectionsTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (sct *showCollectionsTask) OnEnqueue() error {
-	sct.Base = &commonpb.MsgBase{}
+func (t *showCollectionsTask) OnEnqueue() error {
+	t.Base = commonpbutil.NewMsgBase()
+	t.Base.MsgType = commonpb.MsgType_ShowCollections
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (sct *showCollectionsTask) PreExecute(ctx context.Context) error {
-	sct.Base.MsgType = commonpb.MsgType_ShowCollections
-	sct.Base.SourceID = Params.ProxyCfg.GetNodeID()
-	if sct.GetType() == milvuspb.ShowType_InMemory {
-		for _, collectionName := range sct.CollectionNames {
+func (t *showCollectionsTask) PreExecute(ctx context.Context) error {
+	if t.GetType() == milvuspb.ShowType_InMemory {
+		for _, collectionName := range t.CollectionNames {
 			if err := validateCollectionName(collectionName); err != nil {
 				return err
 			}
@@ -636,50 +1845,39 @@ func (sct *showCollectionsTask) PreExecute(ctx context.Context) error {
 	return nil
 }
 
-func (sct *showCollectionsTask) Execute(ctx context.Context) error {
-	respFromRootCoord, err := sct.rootCoord.ShowCollections(ctx, sct.ShowCollectionsRequest)
-
-	if err != nil {
+func (t *showCollectionsTask) Execute(ctx context.Context) error {
+	ctx = AppendUserInfoForRPC(ctx)
+	respFromRootCoord, err := t.mixCoord.ShowCollections(ctx, t.ShowCollectionsRequest)
+	if err = merr.CheckRPCCall(respFromRootCoord, err); err != nil {
 		return err
 	}
 
-	if respFromRootCoord == nil {
-		return errors.New("failed to show collections")
-	}
-
-	if respFromRootCoord.Status.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(respFromRootCoord.Status.Reason)
-	}
-
-	if sct.GetType() == milvuspb.ShowType_InMemory {
+	if t.GetType() == milvuspb.ShowType_InMemory {
 		IDs2Names := make(map[UniqueID]string)
 		for offset, collectionName := range respFromRootCoord.CollectionNames {
 			collectionID := respFromRootCoord.CollectionIds[offset]
 			IDs2Names[collectionID] = collectionName
 		}
 		collectionIDs := make([]UniqueID, 0)
-		for _, collectionName := range sct.CollectionNames {
-			collectionID, err := globalMetaCache.GetCollectionID(ctx, collectionName)
+		for _, collectionName := range t.CollectionNames {
+			collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), collectionName)
 			if err != nil {
-				log.Debug("Failed to get collection id.", zap.Any("collectionName", collectionName),
-					zap.Any("requestID", sct.Base.MsgID), zap.Any("requestType", "showCollections"))
+				log.Ctx(ctx).Debug("Failed to get collection id.", zap.String("collectionName", collectionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
 				return err
 			}
 			collectionIDs = append(collectionIDs, collectionID)
 			IDs2Names[collectionID] = collectionName
 		}
 
-		resp, err := sct.queryCoord.ShowCollections(ctx, &querypb.ShowCollectionsRequest{
-			Base: &commonpb.MsgBase{
-				MsgType:   commonpb.MsgType_ShowCollections,
-				MsgID:     sct.Base.MsgID,
-				Timestamp: sct.Base.Timestamp,
-				SourceID:  sct.Base.SourceID,
-			},
-			//DbID: sct.ShowCollectionsRequest.DbName,
+		resp, err := t.mixCoord.ShowLoadCollections(ctx, &querypb.ShowCollectionsRequest{
+			Base: commonpbutil.UpdateMsgBase(
+				t.Base,
+				commonpbutil.WithMsgType(commonpb.MsgType_ShowCollections),
+			),
+			// DbID: t.ShowCollectionsRequest.DbName,
 			CollectionIDs: collectionIDs,
 		})
-
 		if err != nil {
 			return err
 		}
@@ -688,16 +1886,16 @@ func (sct *showCollectionsTask) Execute(ctx context.Context) error {
 			return errors.New("failed to show collections")
 		}
 
-		if resp.Status.ErrorCode != commonpb.ErrorCode_Success {
+		if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
 			// update collectionID to collection name, and return new error info to sdk
-			newErrorReason := resp.Status.Reason
+			newErrorReason := resp.GetStatus().GetReason()
 			for _, collectionID := range collectionIDs {
 				newErrorReason = ReplaceID2Name(newErrorReason, collectionID, IDs2Names[collectionID])
 			}
 			return errors.New(newErrorReason)
 		}
 
-		sct.result = &milvuspb.ShowCollectionsResponse{
+		t.result = &milvuspb.ShowCollectionsResponse{
 			Status:                resp.Status,
 			CollectionNames:       make([]string, 0, len(resp.CollectionIDs)),
 			CollectionIds:         make([]int64, 0, len(resp.CollectionIDs)),
@@ -705,92 +1903,748 @@ func (sct *showCollectionsTask) Execute(ctx context.Context) error {
 			CreatedUtcTimestamps:  make([]uint64, 0, len(resp.CollectionIDs)),
 			InMemoryPercentages:   make([]int64, 0, len(resp.CollectionIDs)),
 			QueryServiceAvailable: make([]bool, 0, len(resp.CollectionIDs)),
+			ShardsNum:             make([]int32, 0, len(resp.CollectionIDs)),
 		}
 
 		for offset, id := range resp.CollectionIDs {
 			collectionName, ok := IDs2Names[id]
 			if !ok {
-				log.Debug("Failed to get collection info.", zap.Any("collectionName", collectionName),
-					zap.Any("requestID", sct.Base.MsgID), zap.Any("requestType", "showCollections"))
-				return errors.New("failed to show collections")
+				log.Ctx(ctx).Debug("Failed to get collection info. This collection may be not released",
+					zap.Int64("collectionID", id),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
+				continue
 			}
-			collectionInfo, err := globalMetaCache.GetCollectionInfo(ctx, collectionName)
+			collectionInfo, err := globalMetaCache.GetCollectionInfo(ctx, t.GetDbName(), collectionName, id)
 			if err != nil {
-				log.Debug("Failed to get collection info.", zap.Any("collectionName", collectionName),
-					zap.Any("requestID", sct.Base.MsgID), zap.Any("requestType", "showCollections"))
+				log.Ctx(ctx).Debug("Failed to get collection info.", zap.String("collectionName", collectionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
 				return err
 			}
-			sct.result.CollectionIds = append(sct.result.CollectionIds, id)
-			sct.result.CollectionNames = append(sct.result.CollectionNames, collectionName)
-			sct.result.CreatedTimestamps = append(sct.result.CreatedTimestamps, collectionInfo.createdTimestamp)
-			sct.result.CreatedUtcTimestamps = append(sct.result.CreatedUtcTimestamps, collectionInfo.createdUtcTimestamp)
-			sct.result.InMemoryPercentages = append(sct.result.InMemoryPercentages, resp.InMemoryPercentages[offset])
-			sct.result.QueryServiceAvailable = append(sct.result.QueryServiceAvailable, resp.QueryServiceAvailable[offset])
+			t.result.CollectionIds = append(t.result.CollectionIds, id)
+			t.result.CollectionNames = append(t.result.CollectionNames, collectionName)
+			t.result.CreatedTimestamps = append(t.result.CreatedTimestamps, collectionInfo.createdTimestamp)
+			t.result.CreatedUtcTimestamps = append(t.result.CreatedUtcTimestamps, collectionInfo.createdUtcTimestamp)
+			t.result.InMemoryPercentages = append(t.result.InMemoryPercentages, resp.InMemoryPercentages[offset])
+			t.result.QueryServiceAvailable = append(t.result.QueryServiceAvailable, resp.QueryServiceAvailable[offset])
+			t.result.ShardsNum = append(t.result.ShardsNum, collectionInfo.shardsNum)
 		}
 	} else {
-		sct.result = respFromRootCoord
+		t.result = respFromRootCoord
 	}
 
 	return nil
 }
 
-func (sct *showCollectionsTask) PostExecute(ctx context.Context) error {
+func (t *showCollectionsTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type alterCollectionTask struct {
+	baseTask
+	Condition
+	*milvuspb.AlterCollectionRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+}
+
+func (t *alterCollectionTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *alterCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *alterCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *alterCollectionTask) Name() string {
+	return AlterCollectionTaskName
+}
+
+func (t *alterCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *alterCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *alterCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *alterCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *alterCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_AlterCollection
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func hasMmapProp(props ...*commonpb.KeyValuePair) bool {
+	for _, p := range props {
+		if p.GetKey() == common.MmapEnabledKey {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTTLProp(props ...*commonpb.KeyValuePair) bool {
+	for _, p := range props {
+		if p.GetKey() == common.CollectionTTLConfigKey {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTTLFieldProp(props ...*commonpb.KeyValuePair) bool {
+	for _, p := range props {
+		if p.GetKey() == common.CollectionTTLFieldKey {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWarmupProp(props ...*commonpb.KeyValuePair) bool {
+	for _, p := range props {
+		if common.IsWarmupKey(p.GetKey()) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPropInDeletekeys(keys []string) string {
+	for _, key := range keys {
+		if key == common.MmapEnabledKey || common.IsWarmupKey(key) {
+			return key
+		}
+	}
+	return ""
+}
+
+// checkVectorIndexExist checks if the collection has any vector index.
+// Returns the vector field name that has an index, or empty string if none.
+func checkVectorIndexExist(ctx context.Context, dbName, collectionName string, collectionID int64, mixCoord types.MixCoordClient) (string, error) {
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, dbName, collectionName)
+	if err != nil {
+		return "", err
+	}
+
+	indexResponse, err := mixCoord.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{
+		CollectionID: collectionID,
+		IndexName:    "",
+	})
+	if err = merr.CheckRPCCall(indexResponse, err); err != nil && !errors.Is(err, merr.ErrIndexNotFound) {
+		return "", merr.WrapErrServiceInternal("describe index failed", err.Error())
+	}
+	for _, index := range indexResponse.IndexInfos {
+		for _, field := range collSchema.Fields {
+			if index.FieldID == field.FieldID && typeutil.IsVectorType(field.DataType) {
+				return field.GetName(), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// detectBoolPropChange detects whether a boolean collection property is being
+// changed via Properties or DeleteKeys. parseFn validates and parses the new
+// value when the key is found in Properties.
+// only one of properties or deleteKeys should be provided
+func detectBoolPropChange(
+	oldValue bool,
+	propKey string,
+	properties []*commonpb.KeyValuePair,
+	deleteKeys []string,
+	parseFn func() (bool, error),
+) (newValue bool, changed bool, err error) {
+	// this is duplicated with the check in alterCollectionTask PreExecute
+	if len(properties) > 0 && len(deleteKeys) > 0 {
+		return false, false, merr.WrapErrParameterInvalidMsg("cannot provide both DeleteKeys and ExtraParams")
+	}
+	newValue = oldValue
+	if _, ok := funcutil.TryGetAttrByKeyFromRepeatedKV(propKey, properties); ok {
+		newValue, err = parseFn()
+		if err != nil {
+			return false, false, err
+		}
+		changed = oldValue != newValue
+	}
+	for _, key := range deleteKeys {
+		if key == propKey {
+			newValue = false
+			changed = oldValue != newValue
+			break
+		}
+	}
+	return newValue, changed, nil
+}
+
+// detectQueryModeChange detects whether the query_mode collection property is
+// being changed via Properties or DeleteKeys. Returns the new query mode string
+// (empty string means no query mode) and whether it changed.
+func detectQueryModeChange(
+	oldQueryMode string,
+	properties []*commonpb.KeyValuePair,
+	deleteKeys []string,
+) (newQueryMode string, changed bool, err error) {
+	// this is duplicated with the check in alterCollectionTask PreExecute
+	if len(properties) > 0 && len(deleteKeys) > 0 {
+		return "", false, merr.WrapErrParameterInvalidMsg("cannot provide both DeleteKeys and ExtraParams")
+	}
+	newQueryMode = oldQueryMode
+	if common.IsQueryModeKeyExists(properties...) {
+		if err := common.ValidateQueryMode(properties...); err != nil {
+			return "", false, err
+		}
+		newQueryMode = common.GetQueryMode(properties...)
+		changed = oldQueryMode != newQueryMode
+	}
+	for _, key := range deleteKeys {
+		if key == common.QueryModeKey {
+			newQueryMode = ""
+			changed = oldQueryMode != newQueryMode
+			break
+		}
+	}
+	return newQueryMode, changed, nil
+}
+
+func validatePartitionKeyIsolation(ctx context.Context, colName string, isPartitionKeyEnabled bool, props ...*commonpb.KeyValuePair) (bool, error) {
+	iso, err := common.IsPartitionKeyIsolationKvEnabled(props...)
+	if err != nil {
+		return false, err
+	}
+
+	// partition key isolation is not set, skip
+	if !iso {
+		return false, nil
+	}
+
+	if !isPartitionKeyEnabled {
+		return false, merr.WrapErrCollectionIllegalSchema(colName,
+			"partition key isolation mode is enabled but no partition key field is set. Please set the partition key first")
+	}
+
+	if !paramtable.Get().CommonCfg.EnableMaterializedView.GetAsBool() {
+		return false, merr.WrapErrCollectionIllegalSchema(colName,
+			"partition key isolation mode is enabled but current Milvus does not support it. Please contact us")
+	}
+
+	log.Ctx(ctx).Info("validated with partition key isolation", zap.String("collectionName", colName))
+
+	return true, nil
+}
+
+func (t *alterCollectionTask) PreExecute(ctx context.Context) error {
+	if len(t.GetProperties()) > 0 && len(t.GetDeleteKeys()) > 0 {
+		return merr.WrapErrParameterInvalidMsg("cannot provide both DeleteKeys and ExtraParams")
+	}
+
+	// External source/spec form an atomic tuple bound to the physical data
+	// layout. The only supported way to change them is RefreshExternalCollection,
+	// which applies them atomically and re-runs the data load pipeline.
+	for _, prop := range t.GetProperties() {
+		if prop.GetKey() == common.CollectionExternalSource || prop.GetKey() == common.CollectionExternalSpec {
+			return merr.WrapErrParameterInvalidMsg(
+				"cannot alter %s via alter_collection_properties; use RefreshExternalCollection instead",
+				prop.GetKey())
+		}
+	}
+	for _, key := range t.GetDeleteKeys() {
+		if key == common.CollectionExternalSource || key == common.CollectionExternalSpec {
+			return merr.WrapErrParameterInvalidMsg(
+				"cannot delete %s; external source/spec are immutable post-create except via RefreshExternalCollection",
+				key)
+		}
+	}
+
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), t.CollectionName)
+	if err != nil {
+		return err
+	}
+	collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
+	if err != nil {
+		return err
+	}
+
+	t.CollectionID = collectionID
+
+	if len(t.GetProperties()) > 0 {
+		hasMmap := hasMmapProp(t.Properties...)
+		hasWarmup := hasWarmupProp(t.Properties...)
+		if hasMmap || hasWarmup {
+			loaded, err := isCollectionLoaded(ctx, t.mixCoord, t.CollectionID)
+			if err != nil {
+				return err
+			}
+			if loaded {
+				// keeping the original error msg here for compatibility
+				if hasMmap {
+					return merr.WrapErrCollectionLoaded(t.CollectionName, "can not alter mmap properties if collection loaded")
+				}
+				if hasWarmup {
+					return merr.WrapErrCollectionLoaded(t.CollectionName, "can not alter warmup properties if collection loaded")
+				}
+			}
+		}
+
+		enabled, _ := common.IsAllowInsertAutoID(t.Properties...)
+		if enabled {
+			primaryFieldSchema, err := typeutil.GetPrimaryFieldSchema(collSchema.CollectionSchema)
+			if err != nil {
+				return err
+			}
+			if !primaryFieldSchema.AutoID {
+				return merr.WrapErrParameterInvalidMsg("the value for %s must be false when autoID is false", common.AllowInsertAutoIDKey)
+			}
+		}
+		// Check the validation of timezone
+		userDefinedTimezone, exist := funcutil.TryGetAttrByKeyFromRepeatedKV(common.TimezoneKey, t.Properties)
+		if exist && !timestamptz.IsTimezoneValid(userDefinedTimezone) {
+			return merr.WrapErrParameterInvalidMsg("unknown or invalid IANA Time Zone ID: %s", userDefinedTimezone)
+		}
+
+		hasTTL, err := validateCollectionTTL(t.GetProperties())
+		if err != nil {
+			return err
+		}
+		hasTTLField, err := validateTTLField(t.GetProperties(), collSchema.GetFields())
+		if err != nil {
+			return err
+		}
+		if hasTTL && hasTTLField {
+			return merr.WrapErrParameterInvalidMsg("collection TTL and ttl field cannot be set at the same time")
+		}
+		if hasTTL && hasTTLFieldProp(collSchema.GetProperties()...) {
+			return merr.WrapErrParameterInvalidMsg("ttl field is already exists, cannot be set collection TTL")
+		}
+		if hasTTLField && hasTTLProp(collSchema.GetProperties()...) {
+			return merr.WrapErrParameterInvalidMsg("collection TTL is already set, cannot be set ttl field")
+		}
+
+		// Validate warmup policy for all warmup keys
+		if hasWarmupProp(t.Properties...) {
+			for _, prop := range t.Properties {
+				if common.IsFieldWarmupKey(prop.GetKey()) {
+					return merr.WrapErrParameterInvalidMsg("warmup key '%s' is only allowed at field level, use warmup.scalarField/warmup.scalarIndex/warmup.vectorField/warmup.vectorIndex at collection level", prop.GetKey())
+				}
+				if common.IsCollectionWarmupKey(prop.GetKey()) {
+					if err := common.ValidateWarmupPolicy(prop.GetValue()); err != nil {
+						return merr.WrapErrParameterInvalidMsg("invalid warmup value for key %s: %s", prop.GetKey(), err.Error())
+					}
+				}
+			}
+		}
+	} else if len(t.GetDeleteKeys()) > 0 {
+		key := hasPropInDeletekeys(t.DeleteKeys)
+		if key != "" {
+			loaded, err := isCollectionLoaded(ctx, t.mixCoord, t.CollectionID)
+			if err != nil {
+				return err
+			}
+			if loaded {
+				if key == common.MmapEnabledKey {
+					return merr.WrapErrCollectionLoaded(t.CollectionName, "can not delete mmap properties if collection loaded")
+				}
+				return merr.WrapErrCollectionLoaded(t.CollectionName, "can not delete %s properties if collection loaded", key)
+			}
+		}
+	}
+
+	isPartitionKeyMode, err := isPartitionKeyMode(ctx, t.GetDbName(), t.CollectionName)
+	if err != nil {
+		return err
+	}
+	collBasicInfo, err := globalMetaCache.GetCollectionInfo(t.ctx, t.GetDbName(), t.CollectionName, t.CollectionID)
+	if err != nil {
+		return err
+	}
+	newIsoValue, isoChanged, err := detectBoolPropChange(
+		collBasicInfo.partitionKeyIsolation, common.PartitionKeyIsolationKey,
+		t.Properties, t.GetDeleteKeys(),
+		func() (bool, error) {
+			return validatePartitionKeyIsolation(ctx, t.CollectionName, isPartitionKeyMode, t.Properties...)
+		},
+	)
+	if err != nil {
+		return err
+	}
+
+	newQueryMode, queryModeChanged, err := detectQueryModeChange(
+		collBasicInfo.queryMode,
+		t.Properties, t.GetDeleteKeys(),
+	)
+	if err != nil {
+		return err
+	}
+
+	log.Ctx(ctx).Info("alter collection pre check with partition key isolation/query mode",
+		zap.String("collectionName", t.CollectionName),
+		zap.Bool("isPartitionKeyMode", isPartitionKeyMode),
+		zap.Bool("newIsoValue", newIsoValue),
+		zap.Bool("oldIsoValue", collBasicInfo.partitionKeyIsolation),
+		zap.String("newQueryMode", newQueryMode),
+		zap.String("oldQueryMode", collBasicInfo.queryMode))
+
+	// If partition key isolation or query_mode changed, check for existing vector index.
+	// Changing these properties requires dropping the vector index first.
+	if isoChanged || queryModeChanged {
+		if vecField, err := checkVectorIndexExist(ctx, t.GetDbName(), t.CollectionName, t.CollectionID, t.mixCoord); err != nil {
+			return err
+		} else if vecField != "" {
+			if isoChanged {
+				return merr.WrapErrIndexDuplicate(vecField,
+					"can not alter partition key isolation mode if the collection already has a vector index. Please drop the index first")
+			}
+			if queryModeChanged {
+				return merr.WrapErrIndexDuplicate(vecField,
+					"can not alter "+common.QueryModeKey+" if the collection already has a vector index. Please drop the index first")
+			}
+		}
+	}
+	return nil
+}
+
+func (t *alterCollectionTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.AlterCollection(ctx, t.AlterCollectionRequest)
+	if err = merr.CheckRPCCall(t.result, err); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *alterCollectionTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type alterCollectionFieldTask struct {
+	baseTask
+	Condition
+	*milvuspb.AlterCollectionFieldRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+}
+
+func (t *alterCollectionFieldTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *alterCollectionFieldTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *alterCollectionFieldTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *alterCollectionFieldTask) Name() string {
+	return AlterCollectionTaskName
+}
+
+func (t *alterCollectionFieldTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *alterCollectionFieldTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *alterCollectionFieldTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *alterCollectionFieldTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *alterCollectionFieldTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_AlterCollectionField
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+const (
+	MmapEnabledKey = "mmap_enabled"
+)
+
+var allowedAlterProps = []string{
+	common.MaxLengthKey,
+	common.MmapEnabledKey,
+	common.MaxCapacityKey,
+	common.FieldDescriptionKey,
+	common.WarmupKey,
+	common.WarmupScalarFieldKey,
+	common.WarmupScalarIndexKey,
+	common.WarmupVectorFieldKey,
+	common.WarmupVectorIndexKey,
+}
+
+var allowedDropProps = []string{
+	common.MmapEnabledKey,
+	common.WarmupKey,
+	common.WarmupScalarFieldKey,
+	common.WarmupScalarIndexKey,
+	common.WarmupVectorFieldKey,
+	common.WarmupVectorIndexKey,
+}
+
+func IsKeyAllowAlter(key string) bool {
+	for _, allowedKey := range allowedAlterProps {
+		if key == allowedKey {
+			return true
+		}
+	}
+	return false
+}
+
+func IsKeyAllowDrop(key string) bool {
+	for _, allowedKey := range allowedDropProps {
+		if key == allowedKey {
+			return true
+		}
+	}
+	return false
+}
+
+func updateKey(key string) string {
+	var updatedKey string
+	if key == MmapEnabledKey {
+		updatedKey = common.MmapEnabledKey
+	} else {
+		updatedKey = key
+	}
+	return updatedKey
+}
+
+func updatePropertiesKeys(oldProps []*commonpb.KeyValuePair) []*commonpb.KeyValuePair {
+	props := make(map[string]string)
+	for _, prop := range oldProps {
+		updatedKey := updateKey(prop.Key)
+		props[updatedKey] = prop.Value
+	}
+
+	propKV := make([]*commonpb.KeyValuePair, 0)
+	for key, value := range props {
+		propKV = append(propKV, &commonpb.KeyValuePair{
+			Key:   key,
+			Value: value,
+		})
+	}
+
+	return propKV
+}
+
+func (t *alterCollectionFieldTask) PreExecute(ctx context.Context) error {
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), t.CollectionName)
+	if err != nil {
+		return err
+	}
+
+	isCollectionLoadedFn := func() (bool, error) {
+		collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
+		if err != nil {
+			return false, err
+		}
+		loaded, err1 := isCollectionLoaded(ctx, t.mixCoord, collectionID)
+		if err1 != nil {
+			return false, err1
+		}
+		return loaded, nil
+	}
+
+	t.Properties = updatePropertiesKeys(t.Properties)
+	for _, prop := range t.Properties {
+		if !IsKeyAllowAlter(prop.Key) {
+			return merr.WrapErrParameterInvalidMsg("%s does not allow update in collection field param", prop.Key)
+		}
+		// Check the value type based on the key
+		switch prop.Key {
+		case common.MmapEnabledKey:
+			loaded, err := isCollectionLoadedFn()
+			if err != nil {
+				return err
+			}
+			if loaded {
+				return merr.WrapErrCollectionLoaded(t.CollectionName, "can not alter collection field properties if collection loaded")
+			}
+
+		case common.WarmupKey:
+			loaded, err := isCollectionLoadedFn()
+			if err != nil {
+				return err
+			}
+			if loaded {
+				return merr.WrapErrCollectionLoaded(t.CollectionName, "can not alter warmup if collection loaded")
+			}
+			if err := common.ValidateWarmupPolicy(prop.Value); err != nil {
+				return merr.WrapErrParameterInvalidMsg(err.Error())
+			}
+
+		case common.MaxLengthKey:
+			IsStringType := false
+			fieldName := ""
+			for _, field := range collSchema.Fields {
+				if field.GetName() == t.FieldName && (typeutil.IsStringType(field.DataType) || typeutil.IsArrayContainStringElementType(field.DataType, field.ElementType)) {
+					IsStringType = true
+					fieldName = field.GetName()
+					break
+				}
+			}
+			if !IsStringType {
+				return merr.WrapErrParameterInvalidMsg("%s can not modify the maxlength for non-string types", fieldName)
+			}
+			value, err := strconv.Atoi(prop.Value)
+			if err != nil {
+				return merr.WrapErrParameterInvalidMsg("%s should be an integer, but got %T", prop.Key, prop.Value)
+			}
+
+			defaultMaxVarCharLength := Params.ProxyCfg.MaxVarCharLength.GetAsInt64()
+			if int64(value) > defaultMaxVarCharLength {
+				return merr.WrapErrParameterInvalidMsg("%s exceeds the maximum allowed value %s", prop.Value, strconv.FormatInt(defaultMaxVarCharLength, 10))
+			}
+		case common.MaxCapacityKey:
+			IsArrayType := false
+			fieldName := ""
+			for _, field := range collSchema.Fields {
+				if field.GetName() == t.FieldName && typeutil.IsArrayType(field.DataType) {
+					IsArrayType = true
+					fieldName = field.GetName()
+					break
+				}
+			}
+			if !IsArrayType {
+				return merr.WrapErrParameterInvalidMsg("%s can not modify the maxcapacity for non-array types", fieldName)
+			}
+
+			maxCapacityPerRow, err := strconv.ParseInt(prop.Value, 10, 64)
+			if err != nil {
+				return merr.WrapErrParameterInvalidMsg("the value for %s of field %s must be an integer", common.MaxCapacityKey, fieldName)
+			}
+			if maxCapacityPerRow > defaultMaxArrayCapacity || maxCapacityPerRow <= 0 {
+				return merr.WrapErrParameterInvalidMsg("the maximum capacity specified for a Array should be in (0, %d]", defaultMaxArrayCapacity)
+			}
+		}
+	}
+
+	deleteKeys := make([]string, 0)
+	for _, key := range t.DeleteKeys {
+		updatedKey := updateKey(key)
+		if !IsKeyAllowDrop(updatedKey) {
+			return merr.WrapErrParameterInvalidMsg("%s is not allowed to drop in collection field param", key)
+		}
+
+		if updatedKey == common.MmapEnabledKey || common.IsFieldWarmupKey(updatedKey) {
+			loaded, err := isCollectionLoadedFn()
+			if err != nil {
+				return err
+			}
+			if loaded {
+				return merr.WrapErrCollectionLoaded(t.CollectionName, "can not drop collection field properties if collection loaded")
+			}
+		}
+
+		deleteKeys = append(deleteKeys, updatedKey)
+	}
+	t.DeleteKeys = deleteKeys
+
+	return nil
+}
+
+func (t *alterCollectionFieldTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.AlterCollectionField(ctx, t.AlterCollectionFieldRequest)
+	if err = merr.CheckRPCCall(t.result, err); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *alterCollectionFieldTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type createPartitionTask struct {
+	baseTask
 	Condition
 	*milvuspb.CreatePartitionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 }
 
-func (cpt *createPartitionTask) TraceCtx() context.Context {
-	return cpt.ctx
+func (t *createPartitionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (cpt *createPartitionTask) ID() UniqueID {
-	return cpt.Base.MsgID
+func (t *createPartitionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (cpt *createPartitionTask) SetID(uid UniqueID) {
-	cpt.Base.MsgID = uid
+func (t *createPartitionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (cpt *createPartitionTask) Name() string {
+func (t *createPartitionTask) Name() string {
 	return CreatePartitionTaskName
 }
 
-func (cpt *createPartitionTask) Type() commonpb.MsgType {
-	return cpt.Base.MsgType
+func (t *createPartitionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (cpt *createPartitionTask) BeginTs() Timestamp {
-	return cpt.Base.Timestamp
+func (t *createPartitionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (cpt *createPartitionTask) EndTs() Timestamp {
-	return cpt.Base.Timestamp
+func (t *createPartitionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (cpt *createPartitionTask) SetTs(ts Timestamp) {
-	cpt.Base.Timestamp = ts
+func (t *createPartitionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (cpt *createPartitionTask) OnEnqueue() error {
-	cpt.Base = &commonpb.MsgBase{}
+func (t *createPartitionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_CreatePartition
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (cpt *createPartitionTask) PreExecute(ctx context.Context) error {
-	cpt.Base.MsgType = commonpb.MsgType_CreatePartition
-	cpt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName, partitionTag := cpt.CollectionName, cpt.PartitionName
+func (t *createPartitionTask) PreExecute(ctx context.Context) error {
+	collName, partitionTag := t.CollectionName, t.PartitionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
+	}
+
+	// Check partition key mode
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), collName)
+	if err != nil {
+		return err
+	}
+	if typeutil.HasPartitionKey(collSchema.CollectionSchema) {
+		return errors.New("disable create partition if partition key mode is used")
 	}
 
 	if err := validatePartitionTag(partitionTag, true); err != nil {
@@ -800,148 +2654,192 @@ func (cpt *createPartitionTask) PreExecute(ctx context.Context) error {
 	return nil
 }
 
-func (cpt *createPartitionTask) Execute(ctx context.Context) (err error) {
-	cpt.result, err = cpt.rootCoord.CreatePartition(ctx, cpt.CreatePartitionRequest)
+func (t *createPartitionTask) Execute(ctx context.Context) (err error) {
+	resp, err := t.mixCoord.CreatePartitionV2(ctx, t.CreatePartitionRequest)
 	if err != nil {
 		return err
 	}
-	if cpt.result.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(cpt.result.Reason)
+	t.result = resp.Status
+	if err := merr.CheckRPCCall(t.result, err); err != nil {
+		return err
 	}
-	return err
+	collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.GetCollectionName())
+	if err != nil {
+		t.result = merr.Status(err)
+		return err
+	}
+	t.result, err = t.mixCoord.SyncNewCreatedPartition(ctx, &querypb.SyncNewCreatedPartitionRequest{
+		Base:         commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_CreatePartition)),
+		CollectionID: collectionID,
+		PartitionID:  resp.PartitionID,
+	})
+	return merr.CheckRPCCall(t.result, err)
 }
 
-func (cpt *createPartitionTask) PostExecute(ctx context.Context) error {
+func (t *createPartitionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type dropPartitionTask struct {
+	baseTask
 	Condition
 	*milvuspb.DropPartitionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 }
 
-func (dpt *dropPartitionTask) TraceCtx() context.Context {
-	return dpt.ctx
+func (t *dropPartitionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (dpt *dropPartitionTask) ID() UniqueID {
-	return dpt.Base.MsgID
+func (t *dropPartitionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (dpt *dropPartitionTask) SetID(uid UniqueID) {
-	dpt.Base.MsgID = uid
+func (t *dropPartitionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (dpt *dropPartitionTask) Name() string {
+func (t *dropPartitionTask) Name() string {
 	return DropPartitionTaskName
 }
 
-func (dpt *dropPartitionTask) Type() commonpb.MsgType {
-	return dpt.Base.MsgType
+func (t *dropPartitionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (dpt *dropPartitionTask) BeginTs() Timestamp {
-	return dpt.Base.Timestamp
+func (t *dropPartitionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dpt *dropPartitionTask) EndTs() Timestamp {
-	return dpt.Base.Timestamp
+func (t *dropPartitionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dpt *dropPartitionTask) SetTs(ts Timestamp) {
-	dpt.Base.Timestamp = ts
+func (t *dropPartitionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (dpt *dropPartitionTask) OnEnqueue() error {
-	dpt.Base = &commonpb.MsgBase{}
+func (t *dropPartitionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_DropPartition
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (dpt *dropPartitionTask) PreExecute(ctx context.Context) error {
-	dpt.Base.MsgType = commonpb.MsgType_DropPartition
-	dpt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName, partitionTag := dpt.CollectionName, dpt.PartitionName
+func (t *dropPartitionTask) PreExecute(ctx context.Context) error {
+	collName, partitionTag := t.CollectionName, t.PartitionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
+	}
+
+	// Check partition key mode
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), collName)
+	if err != nil {
+		return err
+	}
+	if typeutil.HasPartitionKey(collSchema.CollectionSchema) {
+		return errors.New("disable drop partition if partition key mode is used")
 	}
 
 	if err := validatePartitionTag(partitionTag, true); err != nil {
 		return err
 	}
 
-	return nil
-}
-
-func (dpt *dropPartitionTask) Execute(ctx context.Context) (err error) {
-	dpt.result, err = dpt.rootCoord.DropPartition(ctx, dpt.DropPartitionRequest)
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.GetCollectionName())
 	if err != nil {
 		return err
 	}
-	if dpt.result.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(dpt.result.Reason)
+	partID, err := globalMetaCache.GetPartitionID(ctx, t.GetDbName(), t.GetCollectionName(), t.GetPartitionName())
+	if err != nil {
+		if errors.Is(merr.ErrPartitionNotFound, err) || errors.Is(merr.ErrCollectionNotFound, err) || errors.Is(merr.ErrDatabaseNotFound, err) {
+			return nil
+		}
+		return err
 	}
-	return err
+
+	collLoaded, err := isCollectionLoaded(ctx, t.mixCoord, collID)
+	if err != nil {
+		return err
+	}
+	if collLoaded {
+		loaded, err := isPartitionLoaded(ctx, t.mixCoord, collID, partID)
+		if err != nil {
+			return err
+		}
+		if loaded {
+			return errors.New("partition cannot be dropped, partition is loaded, please release it first")
+		}
+	}
+
+	return nil
 }
 
-func (dpt *dropPartitionTask) PostExecute(ctx context.Context) error {
+func (t *dropPartitionTask) Execute(ctx context.Context) (err error) {
+	t.result, err = t.mixCoord.DropPartition(ctx, t.DropPartitionRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *dropPartitionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type hasPartitionTask struct {
+	baseTask
 	Condition
 	*milvuspb.HasPartitionRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *milvuspb.BoolResponse
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.BoolResponse
 }
 
-func (hpt *hasPartitionTask) TraceCtx() context.Context {
-	return hpt.ctx
+func (t *hasPartitionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (hpt *hasPartitionTask) ID() UniqueID {
-	return hpt.Base.MsgID
+func (t *hasPartitionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (hpt *hasPartitionTask) SetID(uid UniqueID) {
-	hpt.Base.MsgID = uid
+func (t *hasPartitionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (hpt *hasPartitionTask) Name() string {
+func (t *hasPartitionTask) Name() string {
 	return HasPartitionTaskName
 }
 
-func (hpt *hasPartitionTask) Type() commonpb.MsgType {
-	return hpt.Base.MsgType
+func (t *hasPartitionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (hpt *hasPartitionTask) BeginTs() Timestamp {
-	return hpt.Base.Timestamp
+func (t *hasPartitionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (hpt *hasPartitionTask) EndTs() Timestamp {
-	return hpt.Base.Timestamp
+func (t *hasPartitionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (hpt *hasPartitionTask) SetTs(ts Timestamp) {
-	hpt.Base.Timestamp = ts
+func (t *hasPartitionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (hpt *hasPartitionTask) OnEnqueue() error {
-	hpt.Base = &commonpb.MsgBase{}
+func (t *hasPartitionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_HasPartition
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (hpt *hasPartitionTask) PreExecute(ctx context.Context) error {
-	hpt.Base.MsgType = commonpb.MsgType_HasPartition
-	hpt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName, partitionTag := hpt.CollectionName, hpt.PartitionName
+func (t *hasPartitionTask) PreExecute(ctx context.Context) error {
+	collName, partitionTag := t.CollectionName, t.PartitionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
@@ -953,77 +2851,72 @@ func (hpt *hasPartitionTask) PreExecute(ctx context.Context) error {
 	return nil
 }
 
-func (hpt *hasPartitionTask) Execute(ctx context.Context) (err error) {
-	hpt.result, err = hpt.rootCoord.HasPartition(ctx, hpt.HasPartitionRequest)
-	if err != nil {
-		return err
-	}
-	if hpt.result.Status.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(hpt.result.Status.Reason)
-	}
-	return err
+func (t *hasPartitionTask) Execute(ctx context.Context) (err error) {
+	t.result, err = t.mixCoord.HasPartition(ctx, t.HasPartitionRequest)
+	return merr.CheckRPCCall(t.result, err)
 }
 
-func (hpt *hasPartitionTask) PostExecute(ctx context.Context) error {
+func (t *hasPartitionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type showPartitionsTask struct {
+	baseTask
 	Condition
 	*milvuspb.ShowPartitionsRequest
-	ctx        context.Context
-	rootCoord  types.RootCoord
-	queryCoord types.QueryCoord
-	result     *milvuspb.ShowPartitionsResponse
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.ShowPartitionsResponse
 }
 
-func (spt *showPartitionsTask) TraceCtx() context.Context {
-	return spt.ctx
+func (t *showPartitionsTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (spt *showPartitionsTask) ID() UniqueID {
-	return spt.Base.MsgID
+func (t *showPartitionsTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (spt *showPartitionsTask) SetID(uid UniqueID) {
-	spt.Base.MsgID = uid
+func (t *showPartitionsTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (spt *showPartitionsTask) Name() string {
+func (t *showPartitionsTask) Name() string {
 	return ShowPartitionTaskName
 }
 
-func (spt *showPartitionsTask) Type() commonpb.MsgType {
-	return spt.Base.MsgType
+func (t *showPartitionsTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (spt *showPartitionsTask) BeginTs() Timestamp {
-	return spt.Base.Timestamp
+func (t *showPartitionsTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (spt *showPartitionsTask) EndTs() Timestamp {
-	return spt.Base.Timestamp
+func (t *showPartitionsTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (spt *showPartitionsTask) SetTs(ts Timestamp) {
-	spt.Base.Timestamp = ts
+func (t *showPartitionsTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (spt *showPartitionsTask) OnEnqueue() error {
-	spt.Base = &commonpb.MsgBase{}
+func (t *showPartitionsTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_ShowPartitions
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (spt *showPartitionsTask) PreExecute(ctx context.Context) error {
-	spt.Base.MsgType = commonpb.MsgType_ShowPartitions
-	spt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if err := validateCollectionName(spt.CollectionName); err != nil {
+func (t *showPartitionsTask) PreExecute(ctx context.Context) error {
+	if err := validateCollectionName(t.CollectionName); err != nil {
 		return err
 	}
 
-	if spt.GetType() == milvuspb.ShowType_InMemory {
-		for _, partitionName := range spt.PartitionNames {
+	if t.GetType() == milvuspb.ShowType_InMemory {
+		for _, partitionName := range t.PartitionNames {
 			if err := validatePartitionTag(partitionName, true); err != nil {
 				return err
 			}
@@ -1033,26 +2926,18 @@ func (spt *showPartitionsTask) PreExecute(ctx context.Context) error {
 	return nil
 }
 
-func (spt *showPartitionsTask) Execute(ctx context.Context) error {
-	respFromRootCoord, err := spt.rootCoord.ShowPartitions(ctx, spt.ShowPartitionsRequest)
-	if err != nil {
+func (t *showPartitionsTask) Execute(ctx context.Context) error {
+	respFromRootCoord, err := t.mixCoord.ShowPartitions(ctx, t.ShowPartitionsRequest)
+	if err = merr.CheckRPCCall(respFromRootCoord, err); err != nil {
 		return err
 	}
 
-	if respFromRootCoord == nil {
-		return errors.New("failed to show partitions")
-	}
-
-	if respFromRootCoord.Status.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(respFromRootCoord.Status.Reason)
-	}
-
-	if spt.GetType() == milvuspb.ShowType_InMemory {
-		collectionName := spt.CollectionName
-		collectionID, err := globalMetaCache.GetCollectionID(ctx, collectionName)
+	if t.GetType() == milvuspb.ShowType_InMemory {
+		collectionName := t.CollectionName
+		collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), collectionName)
 		if err != nil {
-			log.Debug("Failed to get collection id.", zap.Any("collectionName", collectionName),
-				zap.Any("requestID", spt.Base.MsgID), zap.Any("requestType", "showPartitions"))
+			log.Ctx(ctx).Debug("Failed to get collection id.", zap.String("collectionName", collectionName),
+				zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 			return err
 		}
 		IDs2Names := make(map[UniqueID]string)
@@ -1061,40 +2946,29 @@ func (spt *showPartitionsTask) Execute(ctx context.Context) error {
 			IDs2Names[partitionID] = partitionName
 		}
 		partitionIDs := make([]UniqueID, 0)
-		for _, partitionName := range spt.PartitionNames {
-			partitionID, err := globalMetaCache.GetPartitionID(ctx, collectionName, partitionName)
+		for _, partitionName := range t.PartitionNames {
+			partitionID, err := globalMetaCache.GetPartitionID(ctx, t.GetDbName(), collectionName, partitionName)
 			if err != nil {
-				log.Debug("Failed to get partition id.", zap.Any("partitionName", partitionName),
-					zap.Any("requestID", spt.Base.MsgID), zap.Any("requestType", "showPartitions"))
+				log.Ctx(ctx).Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 				return err
 			}
 			partitionIDs = append(partitionIDs, partitionID)
 			IDs2Names[partitionID] = partitionName
 		}
-		resp, err := spt.queryCoord.ShowPartitions(ctx, &querypb.ShowPartitionsRequest{
-			Base: &commonpb.MsgBase{
-				MsgType:   commonpb.MsgType_ShowCollections,
-				MsgID:     spt.Base.MsgID,
-				Timestamp: spt.Base.Timestamp,
-				SourceID:  spt.Base.SourceID,
-			},
+		resp, err := t.mixCoord.ShowLoadPartitions(ctx, &querypb.ShowPartitionsRequest{
+			Base: commonpbutil.UpdateMsgBase(
+				t.Base,
+				commonpbutil.WithMsgType(commonpb.MsgType_ShowCollections),
+			),
 			CollectionID: collectionID,
 			PartitionIDs: partitionIDs,
 		})
-
-		if err != nil {
+		if err = merr.CheckRPCCall(resp, err); err != nil {
 			return err
 		}
 
-		if resp == nil {
-			return errors.New("failed to show partitions")
-		}
-
-		if resp.Status.ErrorCode != commonpb.ErrorCode_Success {
-			return errors.New(resp.Status.Reason)
-		}
-
-		spt.result = &milvuspb.ShowPartitionsResponse{
+		t.result = &milvuspb.ShowPartitionsResponse{
 			Status:               resp.Status,
 			PartitionNames:       make([]string, 0, len(resp.PartitionIDs)),
 			PartitionIDs:         make([]int64, 0, len(resp.PartitionIDs)),
@@ -1106,881 +2980,262 @@ func (spt *showPartitionsTask) Execute(ctx context.Context) error {
 		for offset, id := range resp.PartitionIDs {
 			partitionName, ok := IDs2Names[id]
 			if !ok {
-				log.Debug("Failed to get partition id.", zap.Any("partitionName", partitionName),
-					zap.Any("requestID", spt.Base.MsgID), zap.Any("requestType", "showPartitions"))
+				log.Ctx(ctx).Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 				return errors.New("failed to show partitions")
 			}
-			partitionInfo, err := globalMetaCache.GetPartitionInfo(ctx, collectionName, partitionName)
+			partitionInfo, err := globalMetaCache.GetPartitionInfo(ctx, t.GetDbName(), collectionName, partitionName)
 			if err != nil {
-				log.Debug("Failed to get partition id.", zap.Any("partitionName", partitionName),
-					zap.Any("requestID", spt.Base.MsgID), zap.Any("requestType", "showPartitions"))
+				log.Ctx(ctx).Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 				return err
 			}
-			spt.result.PartitionIDs = append(spt.result.PartitionIDs, id)
-			spt.result.PartitionNames = append(spt.result.PartitionNames, partitionName)
-			spt.result.CreatedTimestamps = append(spt.result.CreatedTimestamps, partitionInfo.createdTimestamp)
-			spt.result.CreatedUtcTimestamps = append(spt.result.CreatedUtcTimestamps, partitionInfo.createdUtcTimestamp)
-			spt.result.InMemoryPercentages = append(spt.result.InMemoryPercentages, resp.InMemoryPercentages[offset])
+			t.result.PartitionIDs = append(t.result.PartitionIDs, id)
+			t.result.PartitionNames = append(t.result.PartitionNames, partitionName)
+			t.result.CreatedTimestamps = append(t.result.CreatedTimestamps, partitionInfo.createdTimestamp)
+			t.result.CreatedUtcTimestamps = append(t.result.CreatedUtcTimestamps, partitionInfo.createdUtcTimestamp)
+			t.result.InMemoryPercentages = append(t.result.InMemoryPercentages, resp.InMemoryPercentages[offset])
 		}
 	} else {
-		spt.result = respFromRootCoord
+		t.result = respFromRootCoord
 	}
 
 	return nil
 }
 
-func (spt *showPartitionsTask) PostExecute(ctx context.Context) error {
+func (t *showPartitionsTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
-type createIndexTask struct {
-	Condition
-	*milvuspb.CreateIndexRequest
-	ctx        context.Context
-	rootCoord  types.RootCoord
-	indexCoord types.IndexCoord
-	result     *commonpb.Status
-
-	collectionID UniqueID
-	fieldSchema  *schemapb.FieldSchema
-}
-
-func (cit *createIndexTask) TraceCtx() context.Context {
-	return cit.ctx
-}
-
-func (cit *createIndexTask) ID() UniqueID {
-	return cit.Base.MsgID
-}
-
-func (cit *createIndexTask) SetID(uid UniqueID) {
-	cit.Base.MsgID = uid
-}
-
-func (cit *createIndexTask) Name() string {
-	return CreateIndexTaskName
-}
-
-func (cit *createIndexTask) Type() commonpb.MsgType {
-	return cit.Base.MsgType
-}
-
-func (cit *createIndexTask) BeginTs() Timestamp {
-	return cit.Base.Timestamp
-}
-
-func (cit *createIndexTask) EndTs() Timestamp {
-	return cit.Base.Timestamp
-}
-
-func (cit *createIndexTask) SetTs(ts Timestamp) {
-	cit.Base.Timestamp = ts
-}
-
-func (cit *createIndexTask) OnEnqueue() error {
-	cit.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func parseIndexParams(m []*commonpb.KeyValuePair) (map[string]string, error) {
-	indexParams := make(map[string]string)
-	for _, kv := range m {
-		if kv.Key == "params" { // TODO(dragondriver): change `params` to const variable
-			params, err := funcutil.ParseIndexParamsMap(kv.Value)
-			if err != nil {
-				return nil, err
-			}
-			for k, v := range params {
-				indexParams[k] = v
-			}
-		} else {
-			indexParams[kv.Key] = kv.Value
-		}
-	}
-	_, exist := indexParams["index_type"] // TODO(dragondriver): change `index_type` to const variable
-	if !exist {
-		indexParams["index_type"] = indexparamcheck.IndexFaissIvfPQ // IVF_PQ is the default index type
-	}
-	return indexParams, nil
-}
-
-func (cit *createIndexTask) getIndexedField(ctx context.Context) (*schemapb.FieldSchema, error) {
-	schema, err := globalMetaCache.GetCollectionSchema(ctx, cit.GetCollectionName())
-	if err != nil {
-		log.Error("failed to get collection schema", zap.Error(err))
-		return nil, fmt.Errorf("failed to get collection schema: %s", err)
-	}
-	schemaHelper, err := typeutil.CreateSchemaHelper(schema)
-	if err != nil {
-		log.Error("failed to parse collection schema", zap.Error(err))
-		return nil, fmt.Errorf("failed to parse collection schema: %s", err)
-	}
-	field, err := schemaHelper.GetFieldFromName(cit.GetFieldName())
-	if err != nil {
-		log.Error("create index on non-exist field", zap.Error(err))
-		return nil, fmt.Errorf("cannot create index on non-exist field: %s", cit.GetFieldName())
-	}
-	return field, nil
-}
-
-func fillDimension(field *schemapb.FieldSchema, indexParams map[string]string) error {
-	vecDataTypes := []schemapb.DataType{
-		schemapb.DataType_FloatVector,
-		schemapb.DataType_BinaryVector,
-	}
-	if !funcutil.SliceContain(vecDataTypes, field.GetDataType()) {
-		return nil
-	}
-	params := make([]*commonpb.KeyValuePair, 0, len(field.GetTypeParams())+len(field.GetIndexParams()))
-	params = append(params, field.GetTypeParams()...)
-	params = append(params, field.GetIndexParams()...)
-	dimensionInSchema, err := funcutil.GetAttrByKeyFromRepeatedKV("dim", params)
-	if err != nil {
-		return fmt.Errorf("dimension not found in schema")
-	}
-	dimension, exist := indexParams["dim"]
-	if exist {
-		if dimensionInSchema != dimension {
-			return fmt.Errorf("dimension mismatch, dimension in schema: %s, dimension: %s", dimensionInSchema, dimension)
-		}
-	} else {
-		indexParams["dim"] = dimensionInSchema
-	}
-	return nil
-}
-
-func checkTrain(field *schemapb.FieldSchema, indexParams map[string]string) error {
-	indexType := indexParams["index_type"]
-
-	// skip params check of non-vector field.
-	vecDataTypes := []schemapb.DataType{
-		schemapb.DataType_FloatVector,
-		schemapb.DataType_BinaryVector,
-	}
-	if !funcutil.SliceContain(vecDataTypes, field.GetDataType()) {
-		return indexparamcheck.CheckIndexValid(field.GetDataType(), indexType, indexParams)
-	}
-
-	adapter, err := indexparamcheck.GetConfAdapterMgrInstance().GetAdapter(indexType)
-	if err != nil {
-		log.Warn("Failed to get conf adapter", zap.String("index_type", indexType))
-		return fmt.Errorf("invalid index type: %s", indexType)
-	}
-
-	if err := fillDimension(field, indexParams); err != nil {
-		return err
-	}
-
-	ok := adapter.CheckTrain(indexParams)
-	if !ok {
-		log.Warn("Create index with invalid params", zap.Any("index_params", indexParams))
-		return fmt.Errorf("invalid index params: %v", indexParams)
-	}
-
-	return nil
-}
-
-func (cit *createIndexTask) PreExecute(ctx context.Context) error {
-	cit.Base.MsgType = commonpb.MsgType_CreateIndex
-	cit.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName := cit.CollectionName
-
-	collID, err := globalMetaCache.GetCollectionID(ctx, collName)
-	if err != nil {
-		return err
-	}
-	cit.collectionID = collID
-
-	field, err := cit.getIndexedField(ctx)
-	if err != nil {
-		return err
-	}
-	cit.fieldSchema = field
-
-	// check index param, not accurate, only some static rules
-	indexParams, err := parseIndexParams(cit.GetExtraParams())
-	if err != nil {
-		log.Error("failed to parse index params", zap.Error(err))
-		return fmt.Errorf("failed to parse index params: %s", err)
-	}
-
-	return checkTrain(field, indexParams)
-}
-
-func (cit *createIndexTask) Execute(ctx context.Context) error {
-	log.Debug("proxy create index", zap.Int64("collID", cit.collectionID), zap.Int64("fieldID", cit.fieldSchema.GetFieldID()),
-		zap.String("indexName", cit.GetIndexName()), zap.Any("typeParams", cit.fieldSchema.GetTypeParams()),
-		zap.Any("indexParams", cit.GetExtraParams()))
-	indexParams := cit.GetExtraParams()
-	if !typeutil.IsVectorType(cit.fieldSchema.DataType) {
-		if cit.fieldSchema.DataType == schemapb.DataType_VarChar {
-			indexParams = []*commonpb.KeyValuePair{{Key: "index_type", Value: DefaultStringIndexType}}
-		} else {
-			indexParams = []*commonpb.KeyValuePair{{Key: "index_type", Value: DefaultIndexType}}
-		}
-	}
-	if cit.IndexName == "" {
-		cit.IndexName = Params.CommonCfg.DefaultIndexName
-	}
-	var err error
-	req := &indexpb.CreateIndexRequest{
-		CollectionID: cit.collectionID,
-		FieldID:      cit.fieldSchema.GetFieldID(),
-		IndexName:    cit.GetIndexName(),
-		TypeParams:   cit.fieldSchema.GetTypeParams(),
-		IndexParams:  indexParams,
-		Timestamp:    cit.BeginTs(),
-	}
-	cit.result, err = cit.indexCoord.CreateIndex(ctx, req)
-	//cit.result, err = cit.rootCoord.CreateIndex(ctx, cit.CreateIndexRequest)
-	if err != nil {
-		return err
-	}
-	if cit.result.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(cit.result.Reason)
-	}
-	return err
-}
-
-func (cit *createIndexTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-type describeIndexTask struct {
-	Condition
-	*milvuspb.DescribeIndexRequest
-	ctx        context.Context
-	indexCoord types.IndexCoord
-	result     *milvuspb.DescribeIndexResponse
-
-	collectionID UniqueID
-}
-
-func (dit *describeIndexTask) TraceCtx() context.Context {
-	return dit.ctx
-}
-
-func (dit *describeIndexTask) ID() UniqueID {
-	return dit.Base.MsgID
-}
-
-func (dit *describeIndexTask) SetID(uid UniqueID) {
-	dit.Base.MsgID = uid
-}
-
-func (dit *describeIndexTask) Name() string {
-	return DescribeIndexTaskName
-}
-
-func (dit *describeIndexTask) Type() commonpb.MsgType {
-	return dit.Base.MsgType
-}
-
-func (dit *describeIndexTask) BeginTs() Timestamp {
-	return dit.Base.Timestamp
-}
-
-func (dit *describeIndexTask) EndTs() Timestamp {
-	return dit.Base.Timestamp
-}
-
-func (dit *describeIndexTask) SetTs(ts Timestamp) {
-	dit.Base.Timestamp = ts
-}
-
-func (dit *describeIndexTask) OnEnqueue() error {
-	dit.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func (dit *describeIndexTask) PreExecute(ctx context.Context) error {
-	dit.Base.MsgType = commonpb.MsgType_DescribeIndex
-	dit.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if err := validateCollectionName(dit.CollectionName); err != nil {
-		return err
-	}
-
-	collID, _ := globalMetaCache.GetCollectionID(ctx, dit.CollectionName)
-	dit.collectionID = collID
-	return nil
-}
-
-func (dit *describeIndexTask) Execute(ctx context.Context) error {
-	schema, err := globalMetaCache.GetCollectionSchema(ctx, dit.GetCollectionName())
-	if err != nil {
-		log.Error("failed to get collection schema", zap.Error(err))
-		return fmt.Errorf("failed to get collection schema: %s", err)
-	}
-	schemaHelper, err := typeutil.CreateSchemaHelper(schema)
-	if err != nil {
-		log.Error("failed to parse collection schema", zap.Error(err))
-		return fmt.Errorf("failed to parse collection schema: %s", err)
-	}
-
-	resp, err := dit.indexCoord.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{CollectionID: dit.collectionID})
-	if err != nil || resp == nil {
-		return err
-	}
-	dit.result = &milvuspb.DescribeIndexResponse{}
-	dit.result.Status = resp.GetStatus()
-	if dit.result.Status.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(dit.result.Status.Reason)
-	}
-	for _, indexInfo := range resp.IndexInfos {
-		field, err := schemaHelper.GetFieldFromID(indexInfo.FieldID)
-		if err != nil {
-			log.Error("failed to get collection field", zap.Error(err))
-			return fmt.Errorf("failed to get collection field: %d", indexInfo.FieldID)
-		}
-
-		dit.result.IndexDescriptions = append(dit.result.IndexDescriptions, &milvuspb.IndexDescription{
-			IndexName: indexInfo.GetIndexName(),
-			IndexID:   indexInfo.GetIndexID(),
-			FieldName: field.Name,
-			Params:    indexInfo.GetIndexParams(),
-		})
-	}
-	return err
-}
-
-func (dit *describeIndexTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-type dropIndexTask struct {
-	Condition
-	ctx context.Context
-	*milvuspb.DropIndexRequest
-	indexCoord types.IndexCoord
-	result     *commonpb.Status
-
-	collectionID UniqueID
-}
-
-func (dit *dropIndexTask) TraceCtx() context.Context {
-	return dit.ctx
-}
-
-func (dit *dropIndexTask) ID() UniqueID {
-	return dit.Base.MsgID
-}
-
-func (dit *dropIndexTask) SetID(uid UniqueID) {
-	dit.Base.MsgID = uid
-}
-
-func (dit *dropIndexTask) Name() string {
-	return DropIndexTaskName
-}
-
-func (dit *dropIndexTask) Type() commonpb.MsgType {
-	return dit.Base.MsgType
-}
-
-func (dit *dropIndexTask) BeginTs() Timestamp {
-	return dit.Base.Timestamp
-}
-
-func (dit *dropIndexTask) EndTs() Timestamp {
-	return dit.Base.Timestamp
-}
-
-func (dit *dropIndexTask) SetTs(ts Timestamp) {
-	dit.Base.Timestamp = ts
-}
-
-func (dit *dropIndexTask) OnEnqueue() error {
-	dit.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func (dit *dropIndexTask) PreExecute(ctx context.Context) error {
-	dit.Base.MsgType = commonpb.MsgType_DropIndex
-	dit.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName, fieldName := dit.CollectionName, dit.FieldName
-
-	if err := validateCollectionName(collName); err != nil {
-		return err
-	}
-
-	if err := validateFieldName(fieldName); err != nil {
-		return err
-	}
-
-	if dit.IndexName == "" {
-		dit.IndexName = Params.CommonCfg.DefaultIndexName
-	}
-
-	collID, _ := globalMetaCache.GetCollectionID(ctx, dit.CollectionName)
-	dit.collectionID = collID
-
-	return nil
-}
-
-func (dit *dropIndexTask) Execute(ctx context.Context) error {
-	var err error
-	dit.result, err = dit.indexCoord.DropIndex(ctx, &indexpb.DropIndexRequest{
-		CollectionID: dit.collectionID,
-		IndexName:    dit.IndexName,
-	})
-	if dit.result == nil {
-		return errors.New("drop index resp is nil")
-	}
-	if dit.result.ErrorCode != commonpb.ErrorCode_Success {
-		return errors.New(dit.result.Reason)
-	}
-	return err
-}
-
-func (dit *dropIndexTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-type getIndexBuildProgressTask struct {
-	Condition
-	*milvuspb.GetIndexBuildProgressRequest
-	ctx        context.Context
-	indexCoord types.IndexCoord
-	rootCoord  types.RootCoord
-	dataCoord  types.DataCoord
-	result     *milvuspb.GetIndexBuildProgressResponse
-
-	collectionID UniqueID
-}
-
-func (gibpt *getIndexBuildProgressTask) TraceCtx() context.Context {
-	return gibpt.ctx
-}
-
-func (gibpt *getIndexBuildProgressTask) ID() UniqueID {
-	return gibpt.Base.MsgID
-}
-
-func (gibpt *getIndexBuildProgressTask) SetID(uid UniqueID) {
-	gibpt.Base.MsgID = uid
-}
-
-func (gibpt *getIndexBuildProgressTask) Name() string {
-	return GetIndexBuildProgressTaskName
-}
-
-func (gibpt *getIndexBuildProgressTask) Type() commonpb.MsgType {
-	return gibpt.Base.MsgType
-}
-
-func (gibpt *getIndexBuildProgressTask) BeginTs() Timestamp {
-	return gibpt.Base.Timestamp
-}
-
-func (gibpt *getIndexBuildProgressTask) EndTs() Timestamp {
-	return gibpt.Base.Timestamp
-}
-
-func (gibpt *getIndexBuildProgressTask) SetTs(ts Timestamp) {
-	gibpt.Base.Timestamp = ts
-}
-
-func (gibpt *getIndexBuildProgressTask) OnEnqueue() error {
-	gibpt.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func (gibpt *getIndexBuildProgressTask) PreExecute(ctx context.Context) error {
-	gibpt.Base.MsgType = commonpb.MsgType_GetIndexBuildProgress
-	gibpt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if err := validateCollectionName(gibpt.CollectionName); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (gibpt *getIndexBuildProgressTask) Execute(ctx context.Context) error {
-	collectionName := gibpt.CollectionName
-	collectionID, err := globalMetaCache.GetCollectionID(ctx, collectionName)
-	if err != nil { // err is not nil if collection not exists
-		return err
-	}
-	gibpt.collectionID = collectionID
-
-	if gibpt.IndexName == "" {
-		gibpt.IndexName = Params.CommonCfg.DefaultIndexName
-	}
-
-	resp, err := gibpt.indexCoord.GetIndexBuildProgress(ctx, &indexpb.GetIndexBuildProgressRequest{
-		CollectionID: collectionID,
-		IndexName:    gibpt.IndexName,
-	})
-	if err != nil {
-		return err
-	}
-
-	gibpt.result = &milvuspb.GetIndexBuildProgressResponse{
-		Status:      resp.Status,
-		TotalRows:   resp.GetTotalRows(),
-		IndexedRows: resp.GetIndexedRows(),
-	}
-
-	return nil
-}
-
-func (gibpt *getIndexBuildProgressTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-type getIndexStateTask struct {
-	Condition
-	*milvuspb.GetIndexStateRequest
-	ctx        context.Context
-	indexCoord types.IndexCoord
-	rootCoord  types.RootCoord
-	result     *milvuspb.GetIndexStateResponse
-
-	collectionID UniqueID
-}
-
-func (gist *getIndexStateTask) TraceCtx() context.Context {
-	return gist.ctx
-}
-
-func (gist *getIndexStateTask) ID() UniqueID {
-	return gist.Base.MsgID
-}
-
-func (gist *getIndexStateTask) SetID(uid UniqueID) {
-	gist.Base.MsgID = uid
-}
-
-func (gist *getIndexStateTask) Name() string {
-	return GetIndexStateTaskName
-}
-
-func (gist *getIndexStateTask) Type() commonpb.MsgType {
-	return gist.Base.MsgType
-}
-
-func (gist *getIndexStateTask) BeginTs() Timestamp {
-	return gist.Base.Timestamp
-}
-
-func (gist *getIndexStateTask) EndTs() Timestamp {
-	return gist.Base.Timestamp
-}
-
-func (gist *getIndexStateTask) SetTs(ts Timestamp) {
-	gist.Base.Timestamp = ts
-}
-
-func (gist *getIndexStateTask) OnEnqueue() error {
-	gist.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func (gist *getIndexStateTask) PreExecute(ctx context.Context) error {
-	gist.Base.MsgType = commonpb.MsgType_GetIndexState
-	gist.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	if err := validateCollectionName(gist.CollectionName); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (gist *getIndexStateTask) Execute(ctx context.Context) error {
-
-	if gist.IndexName == "" {
-		gist.IndexName = Params.CommonCfg.DefaultIndexName
-	}
-	collectionID, err := globalMetaCache.GetCollectionID(ctx, gist.CollectionName)
-	if err != nil {
-		return err
-	}
-
-	state, err := gist.indexCoord.GetIndexState(ctx, &indexpb.GetIndexStateRequest{
-		CollectionID: collectionID,
-		IndexName:    gist.IndexName,
-	})
-	if err != nil {
-		return err
-	}
-
-	gist.result = &milvuspb.GetIndexStateResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		State:      state.GetState(),
-		FailReason: state.GetFailReason(),
-	}
-	return nil
-}
-
-func (gist *getIndexStateTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-type flushTask struct {
-	Condition
-	*milvuspb.FlushRequest
-	ctx       context.Context
-	dataCoord types.DataCoord
-	result    *milvuspb.FlushResponse
-}
-
-func (ft *flushTask) TraceCtx() context.Context {
-	return ft.ctx
-}
-
-func (ft *flushTask) ID() UniqueID {
-	return ft.Base.MsgID
-}
-
-func (ft *flushTask) SetID(uid UniqueID) {
-	ft.Base.MsgID = uid
-}
-
-func (ft *flushTask) Name() string {
-	return FlushTaskName
-}
-
-func (ft *flushTask) Type() commonpb.MsgType {
-	return ft.Base.MsgType
-}
-
-func (ft *flushTask) BeginTs() Timestamp {
-	return ft.Base.Timestamp
-}
-
-func (ft *flushTask) EndTs() Timestamp {
-	return ft.Base.Timestamp
-}
-
-func (ft *flushTask) SetTs(ts Timestamp) {
-	ft.Base.Timestamp = ts
-}
-
-func (ft *flushTask) OnEnqueue() error {
-	ft.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func (ft *flushTask) PreExecute(ctx context.Context) error {
-	ft.Base.MsgType = commonpb.MsgType_Flush
-	ft.Base.SourceID = Params.ProxyCfg.GetNodeID()
-	return nil
-}
-
-func (ft *flushTask) Execute(ctx context.Context) error {
-	coll2Segments := make(map[string]*schemapb.LongArray)
-	flushColl2Segments := make(map[string]*schemapb.LongArray)
-	coll2SealTimes := make(map[string]int64)
-	for _, collName := range ft.CollectionNames {
-		collID, err := globalMetaCache.GetCollectionID(ctx, collName)
-		if err != nil {
-			return err
-		}
-		flushReq := &datapb.FlushRequest{
-			Base: &commonpb.MsgBase{
-				MsgType:   commonpb.MsgType_Flush,
-				MsgID:     ft.Base.MsgID,
-				Timestamp: ft.Base.Timestamp,
-				SourceID:  ft.Base.SourceID,
-			},
-			DbID:         0,
-			CollectionID: collID,
-		}
-		resp, err := ft.dataCoord.Flush(ctx, flushReq)
-		if err != nil {
-			return fmt.Errorf("failed to call flush to data coordinator: %s", err.Error())
-		}
-		if resp.Status.ErrorCode != commonpb.ErrorCode_Success {
-			return errors.New(resp.Status.Reason)
-		}
-		coll2Segments[collName] = &schemapb.LongArray{Data: resp.GetSegmentIDs()}
-		flushColl2Segments[collName] = &schemapb.LongArray{Data: resp.GetFlushSegmentIDs()}
-		coll2SealTimes[collName] = resp.GetTimeOfSeal()
-	}
-	ft.result = &milvuspb.FlushResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		DbName:          "",
-		CollSegIDs:      coll2Segments,
-		FlushCollSegIDs: flushColl2Segments,
-		CollSealTimes:   coll2SealTimes,
-	}
-	return nil
-}
-
-func (ft *flushTask) PostExecute(ctx context.Context) error {
-	return nil
-}
+const LoadPriorityName = "load_priority"
 
 type loadCollectionTask struct {
+	baseTask
 	Condition
 	*milvuspb.LoadCollectionRequest
-	ctx        context.Context
-	queryCoord types.QueryCoord
-	result     *commonpb.Status
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 
 	collectionID UniqueID
 }
 
-func (lct *loadCollectionTask) TraceCtx() context.Context {
-	return lct.ctx
+func (t *loadCollectionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (lct *loadCollectionTask) ID() UniqueID {
-	return lct.Base.MsgID
+func (t *loadCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (lct *loadCollectionTask) SetID(uid UniqueID) {
-	lct.Base.MsgID = uid
+func (t *loadCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (lct *loadCollectionTask) Name() string {
+func (t *loadCollectionTask) Name() string {
 	return LoadCollectionTaskName
 }
 
-func (lct *loadCollectionTask) Type() commonpb.MsgType {
-	return lct.Base.MsgType
+func (t *loadCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (lct *loadCollectionTask) BeginTs() Timestamp {
-	return lct.Base.Timestamp
+func (t *loadCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (lct *loadCollectionTask) EndTs() Timestamp {
-	return lct.Base.Timestamp
+func (t *loadCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (lct *loadCollectionTask) SetTs(ts Timestamp) {
-	lct.Base.Timestamp = ts
+func (t *loadCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (lct *loadCollectionTask) OnEnqueue() error {
-	lct.Base = &commonpb.MsgBase{}
+func (t *loadCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_LoadCollection
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (lct *loadCollectionTask) PreExecute(ctx context.Context) error {
-	log.Debug("loadCollectionTask PreExecute", zap.String("role", typeutil.ProxyRole), zap.Int64("msgID", lct.Base.MsgID))
-	lct.Base.MsgType = commonpb.MsgType_LoadCollection
-	lct.Base.SourceID = Params.ProxyCfg.GetNodeID()
+func (t *loadCollectionTask) PreExecute(ctx context.Context) error {
+	log.Ctx(ctx).Debug("loadCollectionTask PreExecute",
+		zap.String("role", typeutil.ProxyRole))
 
-	collName := lct.CollectionName
+	collName := t.CollectionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
 	}
 
-	// To compat with LoadCollcetion before Milvus@2.1
-	if lct.ReplicaNumber == 0 {
-		lct.ReplicaNumber = 1
-	}
-
 	return nil
 }
 
-func (lct *loadCollectionTask) Execute(ctx context.Context) (err error) {
-	log.Debug("loadCollectionTask Execute", zap.String("role", typeutil.ProxyRole), zap.Int64("msgID", lct.Base.MsgID))
-	collID, err := globalMetaCache.GetCollectionID(ctx, lct.CollectionName)
+func (t *loadCollectionTask) GetLoadPriority() commonpb.LoadPriority {
+	loadPriority := commonpb.LoadPriority_HIGH
+	loadPriorityStr, ok := t.LoadParams[LoadPriorityName]
+	if ok && loadPriorityStr == "low" {
+		loadPriority = commonpb.LoadPriority_LOW
+	}
+	return loadPriority
+}
+
+func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
+
+	log := log.Ctx(ctx).With(
+		zap.String("role", typeutil.ProxyRole),
+		zap.Int64("collectionID", collID))
+
+	log.Debug("loadCollectionTask Execute")
 	if err != nil {
 		return err
 	}
 
-	lct.collectionID = collID
-	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, lct.CollectionName)
+	t.collectionID = collID
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), t.CollectionName)
 	if err != nil {
 		return err
 	}
-	request := &querypb.LoadCollectionRequest{
-		Base: &commonpb.MsgBase{
-			MsgType:   commonpb.MsgType_LoadCollection,
-			MsgID:     lct.Base.MsgID,
-			Timestamp: lct.Base.Timestamp,
-			SourceID:  lct.Base.SourceID,
-		},
-		DbID:          0,
-		CollectionID:  collID,
-		Schema:        collSchema,
-		ReplicaNumber: lct.ReplicaNumber,
+	if err := validateTextStorageV3Enabled(collSchema.CollectionSchema); err != nil {
+		return err
 	}
-	log.Debug("send LoadCollectionRequest to query coordinator", zap.String("role", typeutil.ProxyRole),
-		zap.Int64("msgID", request.Base.MsgID), zap.Int64("collectionID", request.CollectionID),
-		zap.Any("schema", request.Schema))
-	lct.result, err = lct.queryCoord.LoadCollection(ctx, request)
+	// prepare load field list
+	loadFields, err := collSchema.GetLoadFieldIDs(t.GetLoadFields(), t.GetSkipLoadDynamicField())
 	if err != nil {
+		return err
+	}
+
+	// check index
+	indexResponse, err := t.mixCoord.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{
+		CollectionID: collID,
+		IndexName:    "",
+	})
+	if err == nil {
+		err = merr.Error(indexResponse.GetStatus())
+	}
+	if err != nil {
+		if errors.Is(err, merr.ErrIndexNotFound) {
+			err = merr.WrapErrIndexNotFoundForCollection(t.GetCollectionName())
+		}
+		return err
+	}
+
+	// not support multiple indexes on one field
+	fieldIndexIDs := make(map[int64]int64)
+	for _, index := range indexResponse.IndexInfos {
+		fieldIndexIDs[index.FieldID] = index.IndexID
+	}
+
+	loadFieldsSet := typeutil.NewSet(loadFields...)
+	unindexedVecFields := make([]string, 0)
+	allFields := typeutil.GetAllFieldSchemas(collSchema.CollectionSchema)
+	for _, field := range allFields {
+		if typeutil.IsVectorType(field.GetDataType()) && loadFieldsSet.Contain(field.GetFieldID()) {
+			if _, ok := fieldIndexIDs[field.GetFieldID()]; !ok {
+				unindexedVecFields = append(unindexedVecFields, field.GetName())
+			}
+		}
+	}
+
+	if len(unindexedVecFields) != 0 {
+		errMsg := fmt.Sprintf("there is no vector index on field: %v, please create index firstly", unindexedVecFields)
+		log.Debug(errMsg)
+		return errors.New(errMsg)
+	}
+	request := &querypb.LoadCollectionRequest{
+		Base: commonpbutil.UpdateMsgBase(
+			t.Base,
+			commonpbutil.WithMsgType(commonpb.MsgType_LoadCollection),
+		),
+		DbID:           0,
+		CollectionID:   collID,
+		Schema:         collSchema.CollectionSchema,
+		ReplicaNumber:  t.ReplicaNumber,
+		FieldIndexID:   fieldIndexIDs,
+		Refresh:        t.Refresh,
+		ResourceGroups: t.ResourceGroups,
+		LoadFields:     loadFields,
+		Priority:       t.GetLoadPriority(),
+	}
+	log.Info("send LoadCollectionRequest to query coordinator",
+		zap.Any("schema", request.Schema),
+		zap.Int32("priority", int32(request.GetPriority())))
+	t.result, err = t.mixCoord.LoadCollection(ctx, request)
+	if err = merr.CheckRPCCall(t.result, err); err != nil {
 		return fmt.Errorf("call query coordinator LoadCollection: %s", err)
 	}
 	return nil
 }
 
-func (lct *loadCollectionTask) PostExecute(ctx context.Context) error {
-	log.Debug("loadCollectionTask PostExecute", zap.String("role", typeutil.ProxyRole),
-		zap.Int64("msgID", lct.Base.MsgID))
+func (t *loadCollectionTask) PostExecute(ctx context.Context) error {
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
+	log.Ctx(ctx).Debug("loadCollectionTask PostExecute",
+		zap.String("role", typeutil.ProxyRole),
+		zap.Int64("collectionID", collID))
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 type releaseCollectionTask struct {
+	baseTask
 	Condition
 	*milvuspb.ReleaseCollectionRequest
-	ctx        context.Context
-	queryCoord types.QueryCoord
-	result     *commonpb.Status
-	chMgr      channelsMgr
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 
 	collectionID UniqueID
 }
 
-func (rct *releaseCollectionTask) TraceCtx() context.Context {
-	return rct.ctx
+func (t *releaseCollectionTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (rct *releaseCollectionTask) ID() UniqueID {
-	return rct.Base.MsgID
+func (t *releaseCollectionTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (rct *releaseCollectionTask) SetID(uid UniqueID) {
-	rct.Base.MsgID = uid
+func (t *releaseCollectionTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (rct *releaseCollectionTask) Name() string {
+func (t *releaseCollectionTask) Name() string {
 	return ReleaseCollectionTaskName
 }
 
-func (rct *releaseCollectionTask) Type() commonpb.MsgType {
-	return rct.Base.MsgType
+func (t *releaseCollectionTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (rct *releaseCollectionTask) BeginTs() Timestamp {
-	return rct.Base.Timestamp
+func (t *releaseCollectionTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (rct *releaseCollectionTask) EndTs() Timestamp {
-	return rct.Base.Timestamp
+func (t *releaseCollectionTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (rct *releaseCollectionTask) SetTs(ts Timestamp) {
-	rct.Base.Timestamp = ts
+func (t *releaseCollectionTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (rct *releaseCollectionTask) OnEnqueue() error {
-	rct.Base = &commonpb.MsgBase{}
+func (t *releaseCollectionTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_ReleaseCollection
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (rct *releaseCollectionTask) PreExecute(ctx context.Context) error {
-	rct.Base.MsgType = commonpb.MsgType_ReleaseCollection
-	rct.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName := rct.CollectionName
+func (t *releaseCollectionTask) PreExecute(ctx context.Context) error {
+	collName := t.CollectionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
@@ -1989,753 +3244,1050 @@ func (rct *releaseCollectionTask) PreExecute(ctx context.Context) error {
 	return nil
 }
 
-func (rct *releaseCollectionTask) Execute(ctx context.Context) (err error) {
-	collID, err := globalMetaCache.GetCollectionID(ctx, rct.CollectionName)
+func (t *releaseCollectionTask) Execute(ctx context.Context) (err error) {
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
 	if err != nil {
 		return err
 	}
-	rct.collectionID = collID
+	t.collectionID = collID
 	request := &querypb.ReleaseCollectionRequest{
-		Base: &commonpb.MsgBase{
-			MsgType:   commonpb.MsgType_ReleaseCollection,
-			MsgID:     rct.Base.MsgID,
-			Timestamp: rct.Base.Timestamp,
-			SourceID:  rct.Base.SourceID,
-		},
+		Base: commonpbutil.UpdateMsgBase(
+			t.Base,
+			commonpbutil.WithMsgType(commonpb.MsgType_ReleaseCollection),
+		),
 		DbID:         0,
 		CollectionID: collID,
 	}
 
-	rct.result, err = rct.queryCoord.ReleaseCollection(ctx, request)
+	t.result, err = t.mixCoord.ReleaseCollection(ctx, request)
+	if err = merr.CheckRPCCall(t.result, err); err != nil {
+		return err
+	}
 
-	globalMetaCache.RemoveCollection(ctx, rct.CollectionName)
-
-	return err
+	return nil
 }
 
-func (rct *releaseCollectionTask) PostExecute(ctx context.Context) error {
-	globalMetaCache.ClearShards(rct.CollectionName)
+func (t *releaseCollectionTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type loadPartitionsTask struct {
+	baseTask
 	Condition
 	*milvuspb.LoadPartitionsRequest
-	ctx        context.Context
-	queryCoord types.QueryCoord
-	result     *commonpb.Status
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 
 	collectionID UniqueID
 }
 
-func (lpt *loadPartitionsTask) TraceCtx() context.Context {
-	return lpt.ctx
+func (t *loadPartitionsTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (lpt *loadPartitionsTask) ID() UniqueID {
-	return lpt.Base.MsgID
+func (t *loadPartitionsTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (lpt *loadPartitionsTask) SetID(uid UniqueID) {
-	lpt.Base.MsgID = uid
+func (t *loadPartitionsTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (lpt *loadPartitionsTask) Name() string {
+func (t *loadPartitionsTask) Name() string {
 	return LoadPartitionTaskName
 }
 
-func (lpt *loadPartitionsTask) Type() commonpb.MsgType {
-	return lpt.Base.MsgType
+func (t *loadPartitionsTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (lpt *loadPartitionsTask) BeginTs() Timestamp {
-	return lpt.Base.Timestamp
+func (t *loadPartitionsTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (lpt *loadPartitionsTask) EndTs() Timestamp {
-	return lpt.Base.Timestamp
+func (t *loadPartitionsTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (lpt *loadPartitionsTask) SetTs(ts Timestamp) {
-	lpt.Base.Timestamp = ts
+func (t *loadPartitionsTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (lpt *loadPartitionsTask) OnEnqueue() error {
-	lpt.Base = &commonpb.MsgBase{}
+func (t *loadPartitionsTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_LoadPartitions
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (lpt *loadPartitionsTask) PreExecute(ctx context.Context) error {
-	lpt.Base.MsgType = commonpb.MsgType_LoadPartitions
-	lpt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName := lpt.CollectionName
+func (t *loadPartitionsTask) PreExecute(ctx context.Context) error {
+	collName := t.CollectionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
 	}
 
+	partitionKeyMode, err := isPartitionKeyMode(ctx, t.GetDbName(), collName)
+	if err != nil {
+		return err
+	}
+	if partitionKeyMode {
+		return errors.New("disable load partitions if partition key mode is used")
+	}
+
 	return nil
 }
 
-func (lpt *loadPartitionsTask) Execute(ctx context.Context) error {
+func (t *loadPartitionsTask) GetLoadPriority() commonpb.LoadPriority {
+	loadPriority := commonpb.LoadPriority_HIGH
+	loadPriorityStr, ok := t.LoadParams[LoadPriorityName]
+	if ok && loadPriorityStr == "low" {
+		loadPriority = commonpb.LoadPriority_LOW
+	}
+	return loadPriority
+}
+
+func (t *loadPartitionsTask) Execute(ctx context.Context) error {
 	var partitionIDs []int64
-	collID, err := globalMetaCache.GetCollectionID(ctx, lpt.CollectionName)
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
 	if err != nil {
 		return err
 	}
-	lpt.collectionID = collID
-	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, lpt.CollectionName)
+	t.collectionID = collID
+	collSchema, err := globalMetaCache.GetCollectionSchema(ctx, t.GetDbName(), t.CollectionName)
 	if err != nil {
 		return err
 	}
-	for _, partitionName := range lpt.PartitionNames {
-		partitionID, err := globalMetaCache.GetPartitionID(ctx, lpt.CollectionName, partitionName)
+	if err := validateTextStorageV3Enabled(collSchema.CollectionSchema); err != nil {
+		return err
+	}
+	// prepare load field list
+	loadFields, err := collSchema.GetLoadFieldIDs(t.GetLoadFields(), t.GetSkipLoadDynamicField())
+	if err != nil {
+		return err
+	}
+	// check index
+	indexResponse, err := t.mixCoord.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{
+		CollectionID: collID,
+		IndexName:    "",
+	})
+	if err == nil {
+		err = merr.Error(indexResponse.GetStatus())
+	}
+	if err != nil {
+		if errors.Is(err, merr.ErrIndexNotFound) {
+			err = merr.WrapErrIndexNotFoundForCollection(t.GetCollectionName())
+		}
+		return err
+	}
+
+	// not support multiple indexes on one field
+	fieldIndexIDs := make(map[int64]int64)
+	for _, index := range indexResponse.IndexInfos {
+		fieldIndexIDs[index.FieldID] = index.IndexID
+	}
+
+	loadFieldsSet := typeutil.NewSet(loadFields...)
+	unindexedVecFields := make([]string, 0)
+	allFields := typeutil.GetAllFieldSchemas(collSchema.CollectionSchema)
+	for _, field := range allFields {
+		if typeutil.IsVectorType(field.GetDataType()) && loadFieldsSet.Contain(field.GetFieldID()) {
+			if _, ok := fieldIndexIDs[field.GetFieldID()]; !ok {
+				unindexedVecFields = append(unindexedVecFields, field.GetName())
+			}
+		}
+	}
+
+	if len(unindexedVecFields) != 0 {
+		errMsg := fmt.Sprintf("there is no vector index on field: %v, please create index firstly", unindexedVecFields)
+		log.Ctx(ctx).Debug(errMsg)
+		return errors.New(errMsg)
+	}
+
+	for _, partitionName := range t.PartitionNames {
+		partitionID, err := globalMetaCache.GetPartitionID(ctx, t.GetDbName(), t.CollectionName, partitionName)
 		if err != nil {
 			return err
 		}
 		partitionIDs = append(partitionIDs, partitionID)
 	}
-	request := &querypb.LoadPartitionsRequest{
-		Base: &commonpb.MsgBase{
-			MsgType:   commonpb.MsgType_LoadPartitions,
-			MsgID:     lpt.Base.MsgID,
-			Timestamp: lpt.Base.Timestamp,
-			SourceID:  lpt.Base.SourceID,
-		},
-		DbID:          0,
-		CollectionID:  collID,
-		PartitionIDs:  partitionIDs,
-		Schema:        collSchema,
-		ReplicaNumber: lpt.ReplicaNumber,
+	if len(partitionIDs) == 0 {
+		return errors.New("failed to load partition, due to no partition specified")
 	}
-	lpt.result, err = lpt.queryCoord.LoadPartitions(ctx, request)
-	return err
+	request := &querypb.LoadPartitionsRequest{
+		Base: commonpbutil.UpdateMsgBase(
+			t.Base,
+			commonpbutil.WithMsgType(commonpb.MsgType_LoadPartitions),
+		),
+		DbID:           0,
+		CollectionID:   collID,
+		PartitionIDs:   partitionIDs,
+		Schema:         collSchema.CollectionSchema,
+		ReplicaNumber:  t.ReplicaNumber,
+		FieldIndexID:   fieldIndexIDs,
+		Refresh:        t.Refresh,
+		ResourceGroups: t.ResourceGroups,
+		LoadFields:     loadFields,
+		Priority:       t.GetLoadPriority(),
+	}
+	log.Info("send LoadPartitionRequest to query coordinator",
+		zap.Any("schema", request.Schema),
+		zap.Int32("priority", int32(request.GetPriority())))
+	t.result, err = t.mixCoord.LoadPartitions(ctx, request)
+	if err = merr.CheckRPCCall(t.result, err); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (lpt *loadPartitionsTask) PostExecute(ctx context.Context) error {
+func (t *loadPartitionsTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
 type releasePartitionsTask struct {
+	baseTask
 	Condition
 	*milvuspb.ReleasePartitionsRequest
-	ctx        context.Context
-	queryCoord types.QueryCoord
-	result     *commonpb.Status
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 
 	collectionID UniqueID
 }
 
-func (rpt *releasePartitionsTask) TraceCtx() context.Context {
-	return rpt.ctx
+func (t *releasePartitionsTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (rpt *releasePartitionsTask) ID() UniqueID {
-	return rpt.Base.MsgID
+func (t *releasePartitionsTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (rpt *releasePartitionsTask) SetID(uid UniqueID) {
-	rpt.Base.MsgID = uid
+func (t *releasePartitionsTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (rpt *releasePartitionsTask) Type() commonpb.MsgType {
-	return rpt.Base.MsgType
+func (t *releasePartitionsTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (rpt *releasePartitionsTask) Name() string {
+func (t *releasePartitionsTask) Name() string {
 	return ReleasePartitionTaskName
 }
 
-func (rpt *releasePartitionsTask) BeginTs() Timestamp {
-	return rpt.Base.Timestamp
+func (t *releasePartitionsTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (rpt *releasePartitionsTask) EndTs() Timestamp {
-	return rpt.Base.Timestamp
+func (t *releasePartitionsTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (rpt *releasePartitionsTask) SetTs(ts Timestamp) {
-	rpt.Base.Timestamp = ts
+func (t *releasePartitionsTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (rpt *releasePartitionsTask) OnEnqueue() error {
-	rpt.Base = &commonpb.MsgBase{}
+func (t *releasePartitionsTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_ReleasePartitions
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (rpt *releasePartitionsTask) PreExecute(ctx context.Context) error {
-	rpt.Base.MsgType = commonpb.MsgType_ReleasePartitions
-	rpt.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collName := rpt.CollectionName
+func (t *releasePartitionsTask) PreExecute(ctx context.Context) error {
+	collName := t.CollectionName
 
 	if err := validateCollectionName(collName); err != nil {
 		return err
 	}
 
-	return nil
-}
-
-func (rpt *releasePartitionsTask) Execute(ctx context.Context) (err error) {
-	var partitionIDs []int64
-	collID, err := globalMetaCache.GetCollectionID(ctx, rpt.CollectionName)
+	partitionKeyMode, err := isPartitionKeyMode(ctx, t.GetDbName(), collName)
 	if err != nil {
 		return err
 	}
-	rpt.collectionID = collID
-	for _, partitionName := range rpt.PartitionNames {
-		partitionID, err := globalMetaCache.GetPartitionID(ctx, rpt.CollectionName, partitionName)
+	if partitionKeyMode {
+		return errors.New("disable release partitions if partition key mode is used")
+	}
+
+	return nil
+}
+
+func (t *releasePartitionsTask) Execute(ctx context.Context) (err error) {
+	var partitionIDs []int64
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
+	if err != nil {
+		return err
+	}
+	t.collectionID = collID
+	for _, partitionName := range t.PartitionNames {
+		partitionID, err := globalMetaCache.GetPartitionID(ctx, t.GetDbName(), t.CollectionName, partitionName)
 		if err != nil {
 			return err
 		}
 		partitionIDs = append(partitionIDs, partitionID)
 	}
 	request := &querypb.ReleasePartitionsRequest{
-		Base: &commonpb.MsgBase{
-			MsgType:   commonpb.MsgType_ReleasePartitions,
-			MsgID:     rpt.Base.MsgID,
-			Timestamp: rpt.Base.Timestamp,
-			SourceID:  rpt.Base.SourceID,
-		},
+		Base: commonpbutil.UpdateMsgBase(
+			t.Base,
+			commonpbutil.WithMsgType(commonpb.MsgType_ReleasePartitions),
+		),
 		DbID:         0,
 		CollectionID: collID,
 		PartitionIDs: partitionIDs,
 	}
-	rpt.result, err = rpt.queryCoord.ReleasePartitions(ctx, request)
-	return err
-}
-
-func (rpt *releasePartitionsTask) PostExecute(ctx context.Context) error {
-	globalMetaCache.ClearShards(rpt.CollectionName)
+	t.result, err = t.mixCoord.ReleasePartitions(ctx, request)
+	if err = merr.CheckRPCCall(t.result, err); err != nil {
+		return err
+	}
 	return nil
 }
 
-type BaseDeleteTask = msgstream.DeleteMsg
+func (t *releasePartitionsTask) PostExecute(ctx context.Context) error {
+	return nil
+}
 
-type deleteTask struct {
+type CreateResourceGroupTask struct {
+	baseTask
 	Condition
-	BaseDeleteTask
-	ctx        context.Context
-	deleteExpr string
-	//req       *milvuspb.DeleteRequest
-	result    *milvuspb.MutationResult
-	chMgr     channelsMgr
-	chTicker  channelsTimeTicker
-	vChannels []vChan
-	pChannels []pChan
-
-	collectionID UniqueID
-	schema       *schemapb.CollectionSchema
+	*milvuspb.CreateResourceGroupRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
 }
 
-func (dt *deleteTask) TraceCtx() context.Context {
-	return dt.ctx
+func (t *CreateResourceGroupTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-func (dt *deleteTask) ID() UniqueID {
-	return dt.Base.MsgID
+func (t *CreateResourceGroupTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-func (dt *deleteTask) SetID(uid UniqueID) {
-	dt.Base.MsgID = uid
+func (t *CreateResourceGroupTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-func (dt *deleteTask) Type() commonpb.MsgType {
-	return dt.Base.MsgType
+func (t *CreateResourceGroupTask) Name() string {
+	return CreateResourceGroupTaskName
 }
 
-func (dt *deleteTask) Name() string {
-	return deleteTaskName
+func (t *CreateResourceGroupTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (dt *deleteTask) BeginTs() Timestamp {
-	return dt.Base.Timestamp
+func (t *CreateResourceGroupTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dt *deleteTask) EndTs() Timestamp {
-	return dt.Base.Timestamp
+func (t *CreateResourceGroupTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (dt *deleteTask) SetTs(ts Timestamp) {
-	dt.Base.Timestamp = ts
+func (t *CreateResourceGroupTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (dt *deleteTask) OnEnqueue() error {
-	dt.DeleteRequest.Base = &commonpb.MsgBase{}
+func (t *CreateResourceGroupTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_CreateResourceGroup
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (dt *deleteTask) getPChanStats() (map[pChan]pChanStatistics, error) {
-	ret := make(map[pChan]pChanStatistics)
-
-	channels, err := dt.getChannels()
-	if err != nil {
-		return ret, err
-	}
-
-	beginTs := dt.BeginTs()
-	endTs := dt.EndTs()
-
-	for _, channel := range channels {
-		ret[channel] = pChanStatistics{
-			minTs: beginTs,
-			maxTs: endTs,
-		}
-	}
-	return ret, nil
+func (t *CreateResourceGroupTask) PreExecute(ctx context.Context) error {
+	return nil
 }
 
-func (dt *deleteTask) getChannels() ([]pChan, error) {
-	collID, err := globalMetaCache.GetCollectionID(dt.ctx, dt.CollectionName)
-	if err != nil {
-		return nil, err
-	}
-	return dt.chMgr.getChannels(collID)
+func (t *CreateResourceGroupTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.CreateResourceGroup(ctx, t.CreateResourceGroupRequest)
+	return merr.CheckRPCCall(t.result, err)
 }
 
-func getPrimaryKeysFromExpr(schema *schemapb.CollectionSchema, expr string) (res *schemapb.IDs, rowNum int64, err error) {
-	if len(expr) == 0 {
-		log.Warn("empty expr")
-		return
-	}
-
-	plan, err := createExprPlan(schema, expr)
-	if err != nil {
-		return res, 0, fmt.Errorf("failed to create expr plan, expr = %s", expr)
-	}
-
-	// delete request only support expr "id in [a, b]"
-	termExpr, ok := plan.Node.(*planpb.PlanNode_Predicates).Predicates.Expr.(*planpb.Expr_TermExpr)
-	if !ok {
-		return res, 0, fmt.Errorf("invalid plan node type, only pk in [1, 2] supported")
-	}
-
-	res = &schemapb.IDs{}
-	rowNum = int64(len(termExpr.TermExpr.Values))
-	switch termExpr.TermExpr.ColumnInfo.GetDataType() {
-	case schemapb.DataType_Int64:
-		ids := make([]int64, 0)
-		for _, v := range termExpr.TermExpr.Values {
-			ids = append(ids, v.GetInt64Val())
-		}
-		res.IdField = &schemapb.IDs_IntId{
-			IntId: &schemapb.LongArray{
-				Data: ids,
-			},
-		}
-	case schemapb.DataType_VarChar:
-		ids := make([]string, 0)
-		for _, v := range termExpr.TermExpr.Values {
-			ids = append(ids, v.GetStringVal())
-		}
-		res.IdField = &schemapb.IDs_StrId{
-			StrId: &schemapb.StringArray{
-				Data: ids,
-			},
-		}
-	default:
-		return res, 0, fmt.Errorf("invalid field data type specifyed in delete expr")
-	}
-
-	return res, rowNum, nil
+func (t *CreateResourceGroupTask) PostExecute(ctx context.Context) error {
+	return nil
 }
 
-func (dt *deleteTask) PreExecute(ctx context.Context) error {
-	dt.Base.MsgType = commonpb.MsgType_Delete
-	dt.Base.SourceID = Params.ProxyCfg.GetNodeID()
+type UpdateResourceGroupsTask struct {
+	baseTask
+	Condition
+	*milvuspb.UpdateResourceGroupsRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+}
 
-	dt.result = &milvuspb.MutationResult{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-		IDs: &schemapb.IDs{
-			IdField: nil,
-		},
-		Timestamp: dt.BeginTs(),
+func (t *UpdateResourceGroupsTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *UpdateResourceGroupsTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *UpdateResourceGroupsTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *UpdateResourceGroupsTask) Name() string {
+	return UpdateResourceGroupsTaskName
+}
+
+func (t *UpdateResourceGroupsTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *UpdateResourceGroupsTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *UpdateResourceGroupsTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *UpdateResourceGroupsTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *UpdateResourceGroupsTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
 	}
+	t.Base.MsgType = commonpb.MsgType_UpdateResourceGroups
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
 
-	collName := dt.CollectionName
-	if err := validateCollectionName(collName); err != nil {
-		log.Error("Invalid collection name", zap.String("collectionName", collName))
+func (t *UpdateResourceGroupsTask) PreExecute(ctx context.Context) error {
+	return nil
+}
+
+func (t *UpdateResourceGroupsTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.UpdateResourceGroups(ctx, &querypb.UpdateResourceGroupsRequest{
+		Base:           t.GetBase(),
+		ResourceGroups: t.GetResourceGroups(),
+	})
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *UpdateResourceGroupsTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type DropResourceGroupTask struct {
+	baseTask
+	Condition
+	*milvuspb.DropResourceGroupRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+}
+
+func (t *DropResourceGroupTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *DropResourceGroupTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *DropResourceGroupTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *DropResourceGroupTask) Name() string {
+	return DropResourceGroupTaskName
+}
+
+func (t *DropResourceGroupTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *DropResourceGroupTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *DropResourceGroupTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *DropResourceGroupTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *DropResourceGroupTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_DropResourceGroup
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *DropResourceGroupTask) PreExecute(ctx context.Context) error {
+	return nil
+}
+
+func (t *DropResourceGroupTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.DropResourceGroup(ctx, t.DropResourceGroupRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *DropResourceGroupTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type DescribeResourceGroupTask struct {
+	baseTask
+	Condition
+	*milvuspb.DescribeResourceGroupRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.DescribeResourceGroupResponse
+}
+
+func (t *DescribeResourceGroupTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *DescribeResourceGroupTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *DescribeResourceGroupTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *DescribeResourceGroupTask) Name() string {
+	return DescribeResourceGroupTaskName
+}
+
+func (t *DescribeResourceGroupTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *DescribeResourceGroupTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *DescribeResourceGroupTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *DescribeResourceGroupTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *DescribeResourceGroupTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_DescribeResourceGroup
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *DescribeResourceGroupTask) PreExecute(ctx context.Context) error {
+	return nil
+}
+
+func (t *DescribeResourceGroupTask) Execute(ctx context.Context) error {
+	var err error
+	resp, err := t.mixCoord.DescribeResourceGroup(ctx, &querypb.DescribeResourceGroupRequest{
+		ResourceGroup: t.ResourceGroup,
+	})
+	if err != nil {
 		return err
 	}
-	collID, err := globalMetaCache.GetCollectionID(ctx, collName)
-	if err != nil {
-		log.Debug("Failed to get collection id", zap.String("collectionName", collName))
-		return err
-	}
-	dt.DeleteRequest.CollectionID = collID
-	dt.collectionID = collID
 
-	// If partitionName is not empty, partitionID will be set.
-	if len(dt.PartitionName) > 0 {
-		partName := dt.PartitionName
-		if err := validatePartitionTag(partName, true); err != nil {
-			log.Error("Invalid partition name", zap.String("partitionName", partName))
-			return err
+	getCollectionName := func(collections map[int64]int32) (map[string]int32, error) {
+		ret := make(map[string]int32)
+		for key, value := range collections {
+			name, err := globalMetaCache.GetCollectionName(ctx, "", key)
+			if err != nil {
+				log.Ctx(ctx).Warn("failed to get collection name",
+					zap.Int64("collectionID", key),
+					zap.Error(err))
+
+				// if collection has been dropped, skip it
+				if errors.Is(err, merr.ErrCollectionNotFound) {
+					continue
+				}
+				return nil, err
+			}
+			ret[name] = value
 		}
-		partID, err := globalMetaCache.GetPartitionID(ctx, collName, partName)
+		return ret, nil
+	}
+
+	if resp.GetStatus().GetErrorCode() == commonpb.ErrorCode_Success {
+		rgInfo := resp.GetResourceGroup()
+
+		numLoadedReplica, err := getCollectionName(rgInfo.NumLoadedReplica)
 		if err != nil {
-			log.Debug("Failed to get partition id", zap.String("collectionName", collName), zap.String("partitionName", partName))
 			return err
 		}
-		dt.DeleteRequest.PartitionID = partID
+		numOutgoingNode, err := getCollectionName(rgInfo.NumOutgoingNode)
+		if err != nil {
+			return err
+		}
+		numIncomingNode, err := getCollectionName(rgInfo.NumIncomingNode)
+		if err != nil {
+			return err
+		}
+
+		t.result = &milvuspb.DescribeResourceGroupResponse{
+			Status: resp.Status,
+			ResourceGroup: &milvuspb.ResourceGroup{
+				Name:             rgInfo.GetName(),
+				Capacity:         rgInfo.GetCapacity(),
+				NumAvailableNode: rgInfo.NumAvailableNode,
+				NumLoadedReplica: numLoadedReplica,
+				NumOutgoingNode:  numOutgoingNode,
+				NumIncomingNode:  numIncomingNode,
+				Config:           rgInfo.Config,
+				Nodes:            rgInfo.Nodes,
+			},
+		}
 	} else {
-		dt.DeleteRequest.PartitionID = common.InvalidPartitionID
-	}
-
-	schema, err := globalMetaCache.GetCollectionSchema(ctx, collName)
-	if err != nil {
-		log.Error("Failed to get collection schema", zap.String("collectionName", collName))
-		return err
-	}
-	dt.schema = schema
-
-	// get delete.primaryKeys from delete expr
-	primaryKeys, numRow, err := getPrimaryKeysFromExpr(schema, dt.deleteExpr)
-	if err != nil {
-		log.Error("Failed to get primary keys from expr", zap.Error(err))
-		return err
-	}
-
-	dt.DeleteRequest.NumRows = numRow
-	dt.DeleteRequest.PrimaryKeys = primaryKeys
-	log.Debug("get primary keys from expr", zap.Int64("len of primary keys", dt.DeleteRequest.NumRows))
-
-	// set result
-	dt.result.IDs = primaryKeys
-	dt.result.DeleteCnt = dt.DeleteRequest.NumRows
-
-	dt.Timestamps = make([]uint64, numRow)
-	for index := range dt.Timestamps {
-		dt.Timestamps[index] = dt.BeginTs()
-	}
-
-	return nil
-}
-
-func (dt *deleteTask) Execute(ctx context.Context) (err error) {
-	sp, ctx := trace.StartSpanFromContextWithOperationName(dt.ctx, "Proxy-Delete-Execute")
-	defer sp.Finish()
-
-	tr := timerecord.NewTimeRecorder(fmt.Sprintf("proxy execute delete %d", dt.ID()))
-
-	collID := dt.DeleteRequest.CollectionID
-	stream, err := dt.chMgr.getOrCreateDmlStream(collID)
-	if err != nil {
-		return err
-	}
-
-	// hash primary keys to channels
-	channelNames, err := dt.chMgr.getVChannels(collID)
-	if err != nil {
-		log.Error("get vChannels failed", zap.Int64("collectionID", collID), zap.Error(err))
-		dt.result.Status.ErrorCode = commonpb.ErrorCode_UnexpectedError
-		dt.result.Status.Reason = err.Error()
-		return err
-	}
-	dt.HashValues = typeutil.HashPK2Channels(dt.result.IDs, channelNames)
-
-	log.Info("send delete request to virtual channels",
-		zap.String("collection", dt.GetCollectionName()),
-		zap.Int64("collection_id", collID),
-		zap.Strings("virtual_channels", channelNames),
-		zap.Int64("task_id", dt.ID()))
-
-	tr.Record("get vchannels")
-	// repack delete msg by dmChannel
-	result := make(map[uint32]msgstream.TsMsg)
-	collectionName := dt.CollectionName
-	collectionID := dt.CollectionID
-	partitionID := dt.PartitionID
-	partitionName := dt.PartitionName
-	proxyID := dt.Base.SourceID
-	for index, key := range dt.HashValues {
-		ts := dt.Timestamps[index]
-		_, ok := result[key]
-		if !ok {
-			sliceRequest := internalpb.DeleteRequest{
-				Base: &commonpb.MsgBase{
-					MsgType:   commonpb.MsgType_Delete,
-					MsgID:     dt.Base.MsgID,
-					Timestamp: ts,
-					SourceID:  proxyID,
-				},
-				CollectionID:   collectionID,
-				PartitionID:    partitionID,
-				CollectionName: collectionName,
-				PartitionName:  partitionName,
-				PrimaryKeys:    &schemapb.IDs{},
-			}
-			deleteMsg := &msgstream.DeleteMsg{
-				BaseMsg: msgstream.BaseMsg{
-					Ctx: ctx,
-				},
-				DeleteRequest: sliceRequest,
-			}
-			result[key] = deleteMsg
-		}
-		curMsg := result[key].(*msgstream.DeleteMsg)
-		curMsg.HashValues = append(curMsg.HashValues, dt.HashValues[index])
-		curMsg.Timestamps = append(curMsg.Timestamps, dt.Timestamps[index])
-		typeutil.AppendIDs(curMsg.PrimaryKeys, dt.PrimaryKeys, index)
-		curMsg.NumRows++
-	}
-
-	// send delete request to log broker
-	msgPack := &msgstream.MsgPack{
-		BeginTs: dt.BeginTs(),
-		EndTs:   dt.EndTs(),
-	}
-	for _, msg := range result {
-		if msg != nil {
-			msgPack.Msgs = append(msgPack.Msgs, msg)
+		t.result = &milvuspb.DescribeResourceGroupResponse{
+			Status: resp.Status,
 		}
 	}
 
-	tr.Record("pack messages")
-	err = stream.Produce(msgPack)
+	return nil
+}
+
+func (t *DescribeResourceGroupTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type TransferNodeTask struct {
+	baseTask
+	Condition
+	*milvuspb.TransferNodeRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+}
+
+func (t *TransferNodeTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *TransferNodeTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *TransferNodeTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *TransferNodeTask) Name() string {
+	return TransferNodeTaskName
+}
+
+func (t *TransferNodeTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *TransferNodeTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *TransferNodeTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *TransferNodeTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *TransferNodeTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_TransferNode
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *TransferNodeTask) PreExecute(ctx context.Context) error {
+	return nil
+}
+
+func (t *TransferNodeTask) Execute(ctx context.Context) error {
+	var err error
+	t.result, err = t.mixCoord.TransferNode(ctx, t.TransferNodeRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *TransferNodeTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type TransferReplicaTask struct {
+	baseTask
+	Condition
+	*milvuspb.TransferReplicaRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *commonpb.Status
+}
+
+func (t *TransferReplicaTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *TransferReplicaTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *TransferReplicaTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *TransferReplicaTask) Name() string {
+	return TransferReplicaTaskName
+}
+
+func (t *TransferReplicaTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *TransferReplicaTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *TransferReplicaTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *TransferReplicaTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *TransferReplicaTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_TransferReplica
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *TransferReplicaTask) PreExecute(ctx context.Context) error {
+	return nil
+}
+
+func (t *TransferReplicaTask) Execute(ctx context.Context) error {
+	var err error
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
 	if err != nil {
-		dt.result.Status.ErrorCode = commonpb.ErrorCode_UnexpectedError
-		dt.result.Status.Reason = err.Error()
 		return err
 	}
-	sendMsgDur := tr.Record("send delete request to dml channels")
-	metrics.ProxySendMutationReqLatency.WithLabelValues(strconv.FormatInt(Params.ProxyCfg.GetNodeID(), 10), metrics.DeleteLabel).Observe(float64(sendMsgDur.Milliseconds()))
+	t.result, err = t.mixCoord.TransferReplica(ctx, &querypb.TransferReplicaRequest{
+		SourceResourceGroup: t.SourceResourceGroup,
+		TargetResourceGroup: t.TargetResourceGroup,
+		CollectionID:        collID,
+		NumReplica:          t.NumReplica,
+	})
+	return merr.CheckRPCCall(t.result, err)
+}
 
+func (t *TransferReplicaTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
-func (dt *deleteTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-// CreateAliasTask contains task information of CreateAlias
-type CreateAliasTask struct {
+type ListResourceGroupsTask struct {
+	baseTask
 	Condition
-	*milvuspb.CreateAliasRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
+	*milvuspb.ListResourceGroupsRequest
+	ctx      context.Context
+	mixCoord types.MixCoordClient
+	result   *milvuspb.ListResourceGroupsResponse
 }
 
-// TraceCtx returns the trace context of the task.
-func (c *CreateAliasTask) TraceCtx() context.Context {
-	return c.ctx
+func (t *ListResourceGroupsTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-// ID return the id of the task
-func (c *CreateAliasTask) ID() UniqueID {
-	return c.Base.MsgID
+func (t *ListResourceGroupsTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-// SetID sets the id of the task
-func (c *CreateAliasTask) SetID(uid UniqueID) {
-	c.Base.MsgID = uid
+func (t *ListResourceGroupsTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-// Name returns the name of the task
-func (c *CreateAliasTask) Name() string {
-	return CreateAliasTaskName
+func (t *ListResourceGroupsTask) Name() string {
+	return ListResourceGroupsTaskName
 }
 
-// Type returns the type of the task
-func (c *CreateAliasTask) Type() commonpb.MsgType {
-	return c.Base.MsgType
+func (t *ListResourceGroupsTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-// BeginTs returns the ts
-func (c *CreateAliasTask) BeginTs() Timestamp {
-	return c.Base.Timestamp
+func (t *ListResourceGroupsTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-// EndTs returns the ts
-func (c *CreateAliasTask) EndTs() Timestamp {
-	return c.Base.Timestamp
+func (t *ListResourceGroupsTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-// SetTs sets the ts
-func (c *CreateAliasTask) SetTs(ts Timestamp) {
-	c.Base.Timestamp = ts
+func (t *ListResourceGroupsTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-// OnEnqueue defines the behavior task enqueued
-func (c *CreateAliasTask) OnEnqueue() error {
-	c.Base = &commonpb.MsgBase{}
+func (t *ListResourceGroupsTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_ListResourceGroups
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-// PreExecute defines the action before task execution
-func (c *CreateAliasTask) PreExecute(ctx context.Context) error {
-	c.Base.MsgType = commonpb.MsgType_CreateAlias
-	c.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collAlias := c.Alias
-	// collection alias uses the same format as collection name
-	if err := ValidateCollectionAlias(collAlias); err != nil {
-		return err
-	}
-
-	collName := c.CollectionName
-	if err := validateCollectionName(collName); err != nil {
-		return err
-	}
+func (t *ListResourceGroupsTask) PreExecute(ctx context.Context) error {
 	return nil
 }
 
-// Execute defines the actual execution of create alias
-func (c *CreateAliasTask) Execute(ctx context.Context) error {
+func (t *ListResourceGroupsTask) Execute(ctx context.Context) error {
 	var err error
-	c.result, err = c.rootCoord.CreateAlias(ctx, c.CreateAliasRequest)
+	t.result, err = t.mixCoord.ListResourceGroups(ctx, t.ListResourceGroupsRequest)
+	return merr.CheckRPCCall(t.result, err)
+}
+
+func (t *ListResourceGroupsTask) PostExecute(ctx context.Context) error {
+	return nil
+}
+
+type RunAnalyzerTask struct {
+	baseTask
+	Condition
+	*milvuspb.RunAnalyzerRequest
+	ctx          context.Context
+	collectionID typeutil.UniqueID
+	fieldID      typeutil.UniqueID
+	dbName       string
+	lb           shardclient.LBPolicy
+
+	result *milvuspb.RunAnalyzerResponse
+}
+
+func (t *RunAnalyzerTask) TraceCtx() context.Context {
+	return t.ctx
+}
+
+func (t *RunAnalyzerTask) ID() UniqueID {
+	return t.Base.MsgID
+}
+
+func (t *RunAnalyzerTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
+}
+
+func (t *RunAnalyzerTask) Name() string {
+	return RunAnalyzerTaskName
+}
+
+func (t *RunAnalyzerTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
+}
+
+func (t *RunAnalyzerTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *RunAnalyzerTask) EndTs() Timestamp {
+	return t.Base.Timestamp
+}
+
+func (t *RunAnalyzerTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
+}
+
+func (t *RunAnalyzerTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_RunAnalyzer
+	t.Base.SourceID = paramtable.GetNodeID()
+	return nil
+}
+
+func (t *RunAnalyzerTask) PreExecute(ctx context.Context) error {
+	t.dbName = t.GetDbName()
+
+	collID, err := globalMetaCache.GetCollectionID(ctx, t.dbName, t.GetCollectionName())
+	if err != nil { // err is not nil if collection not exists
+		return merr.WrapErrAsInputErrorWhen(err, merr.ErrCollectionNotFound, merr.ErrDatabaseNotFound)
+	}
+
+	t.collectionID = collID
+
+	schema, err := globalMetaCache.GetCollectionSchema(ctx, t.dbName, t.GetCollectionName())
+	if err != nil { // err is not nil if collection not exists
+		return merr.WrapErrAsInputErrorWhen(err, merr.ErrCollectionNotFound, merr.ErrDatabaseNotFound)
+	}
+
+	fieldId, ok := schema.MapFieldID(t.GetFieldName())
+	if !ok {
+		return merr.WrapErrAsInputError(merr.WrapErrFieldNotFound(t.GetFieldName()))
+	}
+
+	t.fieldID = fieldId
+	t.result = &milvuspb.RunAnalyzerResponse{}
+	return nil
+}
+
+func (t *RunAnalyzerTask) runAnalyzerOnShardleader(ctx context.Context, nodeID int64, qn types.QueryNodeClient, channel string) error {
+	resp, err := qn.RunAnalyzer(ctx, &querypb.RunAnalyzerRequest{
+		Channel:       channel,
+		FieldId:       t.fieldID,
+		AnalyzerNames: t.GetAnalyzerNames(),
+		Placeholder:   t.GetPlaceholder(),
+		WithDetail:    t.GetWithDetail(),
+		WithHash:      t.GetWithHash(),
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := merr.Error(resp.GetStatus()); err != nil {
+		return err
+	}
+	t.result = resp
+	return nil
+}
+
+func (t *RunAnalyzerTask) Execute(ctx context.Context) error {
+	err := t.lb.ExecuteOneChannel(ctx, shardclient.CollectionWorkLoad{
+		Db:             t.dbName,
+		CollectionName: t.GetCollectionName(),
+		CollectionID:   t.collectionID,
+		Nq:             int64(len(t.GetPlaceholder())),
+		Exec:           t.runAnalyzerOnShardleader,
+	})
+
 	return err
 }
 
-// PostExecute defines the post execution, do nothing for create alias
-func (c *CreateAliasTask) PostExecute(ctx context.Context) error {
+func (t *RunAnalyzerTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
-// DropAliasTask is the task to drop alias
-type DropAliasTask struct {
+// git highlight after search
+type HighlightTask struct {
+	baseTask
 	Condition
-	*milvuspb.DropAliasRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
+	*querypb.GetHighlightRequest
+	ctx            context.Context
+	collectionName string
+	collectionID   typeutil.UniqueID
+	dbName         string
+	lb             shardclient.LBPolicy
+
+	result *querypb.GetHighlightResponse
 }
 
-// TraceCtx returns the context for trace
-func (d *DropAliasTask) TraceCtx() context.Context {
-	return d.ctx
+func (t *HighlightTask) TraceCtx() context.Context {
+	return t.ctx
 }
 
-// ID returns the MsgID
-func (d *DropAliasTask) ID() UniqueID {
-	return d.Base.MsgID
+func (t *HighlightTask) ID() UniqueID {
+	return t.Base.MsgID
 }
 
-// SetID sets the MsgID
-func (d *DropAliasTask) SetID(uid UniqueID) {
-	d.Base.MsgID = uid
+func (t *HighlightTask) SetID(uid UniqueID) {
+	t.Base.MsgID = uid
 }
 
-// Name returns the name of the task
-func (d *DropAliasTask) Name() string {
-	return DropAliasTaskName
+func (t *HighlightTask) Name() string {
+	return HighlightTaskName
 }
 
-func (d *DropAliasTask) Type() commonpb.MsgType {
-	return d.Base.MsgType
+func (t *HighlightTask) Type() commonpb.MsgType {
+	return t.Base.MsgType
 }
 
-func (d *DropAliasTask) BeginTs() Timestamp {
-	return d.Base.Timestamp
+func (t *HighlightTask) BeginTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (d *DropAliasTask) EndTs() Timestamp {
-	return d.Base.Timestamp
+func (t *HighlightTask) EndTs() Timestamp {
+	return t.Base.Timestamp
 }
 
-func (d *DropAliasTask) SetTs(ts Timestamp) {
-	d.Base.Timestamp = ts
+func (t *HighlightTask) SetTs(ts Timestamp) {
+	t.Base.Timestamp = ts
 }
 
-func (d *DropAliasTask) OnEnqueue() error {
-	d.Base = &commonpb.MsgBase{}
+func (t *HighlightTask) OnEnqueue() error {
+	if t.Base == nil {
+		t.Base = commonpbutil.NewMsgBase()
+	}
+	t.Base.MsgType = commonpb.MsgType_Undefined
+	t.Base.SourceID = paramtable.GetNodeID()
 	return nil
 }
 
-func (d *DropAliasTask) PreExecute(ctx context.Context) error {
-	d.Base.MsgType = commonpb.MsgType_DropAlias
-	d.Base.SourceID = Params.ProxyCfg.GetNodeID()
-	collAlias := d.Alias
-	if err := ValidateCollectionAlias(collAlias); err != nil {
+func (t *HighlightTask) PreExecute(ctx context.Context) error {
+	return nil
+}
+
+func (t *HighlightTask) getHighlightOnShardleader(ctx context.Context, nodeID int64, qn types.QueryNodeClient, channel string) error {
+	ctx = retry.WithMaxAttemptsContext(ctx, 1)
+	t.Channel = channel
+	resp, err := qn.GetHighlight(ctx, t.GetHighlightRequest)
+	if err != nil {
 		return err
 	}
+
+	if err := merr.Error(resp.GetStatus()); err != nil {
+		return err
+	}
+	t.result = resp
 	return nil
 }
 
-func (d *DropAliasTask) Execute(ctx context.Context) error {
-	var err error
-	d.result, err = d.rootCoord.DropAlias(ctx, d.DropAliasRequest)
+func (t *HighlightTask) Execute(ctx context.Context) error {
+	err := t.lb.ExecuteOneChannel(ctx, shardclient.CollectionWorkLoad{
+		Db:             t.dbName,
+		CollectionName: t.collectionName,
+		CollectionID:   t.collectionID,
+		Nq:             int64(len(t.GetTopks()) * len(t.GetTasks())),
+		Exec:           t.getHighlightOnShardleader,
+	})
+
 	return err
 }
 
-func (d *DropAliasTask) PostExecute(ctx context.Context) error {
+func (t *HighlightTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
-// AlterAliasTask is the task to alter alias
-type AlterAliasTask struct {
-	Condition
-	*milvuspb.AlterAliasRequest
-	ctx       context.Context
-	rootCoord types.RootCoord
-	result    *commonpb.Status
-}
-
-func (a *AlterAliasTask) TraceCtx() context.Context {
-	return a.ctx
-}
-
-func (a *AlterAliasTask) ID() UniqueID {
-	return a.Base.MsgID
-}
-
-func (a *AlterAliasTask) SetID(uid UniqueID) {
-	a.Base.MsgID = uid
-}
-
-func (a *AlterAliasTask) Name() string {
-	return AlterAliasTaskName
-}
-
-func (a *AlterAliasTask) Type() commonpb.MsgType {
-	return a.Base.MsgType
-}
-
-func (a *AlterAliasTask) BeginTs() Timestamp {
-	return a.Base.Timestamp
-}
-
-func (a *AlterAliasTask) EndTs() Timestamp {
-	return a.Base.Timestamp
-}
-
-func (a *AlterAliasTask) SetTs(ts Timestamp) {
-	a.Base.Timestamp = ts
-}
-
-func (a *AlterAliasTask) OnEnqueue() error {
-	a.Base = &commonpb.MsgBase{}
-	return nil
-}
-
-func (a *AlterAliasTask) PreExecute(ctx context.Context) error {
-	a.Base.MsgType = commonpb.MsgType_AlterAlias
-	a.Base.SourceID = Params.ProxyCfg.GetNodeID()
-
-	collAlias := a.Alias
-	// collection alias uses the same format as collection name
-	if err := ValidateCollectionAlias(collAlias); err != nil {
-		return err
+// isIgnoreGrowing is used to check if the request should ignore growing
+func isIgnoreGrowing(params []*commonpb.KeyValuePair) (bool, error) {
+	for _, kv := range params {
+		if kv.GetKey() == IgnoreGrowingKey {
+			ignoreGrowing, err := strconv.ParseBool(kv.GetValue())
+			if err != nil {
+				return false, errors.New("parse ignore growing field failed")
+			}
+			return ignoreGrowing, nil
+		}
 	}
-
-	collName := a.CollectionName
-	if err := validateCollectionName(collName); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (a *AlterAliasTask) Execute(ctx context.Context) error {
-	var err error
-	a.result, err = a.rootCoord.AlterAlias(ctx, a.AlterAliasRequest)
-	return err
-}
-
-func (a *AlterAliasTask) PostExecute(ctx context.Context) error {
-	return nil
+	return false, nil
 }

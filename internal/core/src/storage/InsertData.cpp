@@ -15,11 +15,21 @@
 // limitations under the License.
 
 #include "storage/InsertData.h"
-#include "storage/Event.h"
-#include "storage/Util.h"
-#include "utils/Json.h"
-#include "common/FieldMeta.h"
+
+#include <any>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <utility>
+
 #include "common/Consts.h"
+#include "common/EasyAssert.h"
+#include "common/FieldData.h"
+#include "common/FieldDataInterface.h"
+#include "fmt/core.h"
+#include "pb/schema.pb.h"
+#include "storage/Event.h"
+#include "storage/PayloadReader.h"
 
 namespace milvus::storage {
 
@@ -37,7 +47,8 @@ InsertData::Serialize(StorageType medium) {
         case StorageType::LocalDisk:
             return serialize_to_local_file();
         default:
-            PanicInfo("unsupported medium type");
+            ThrowInfo(DataFormatBroken,
+                      fmt::format("unsupported medium type {}", medium));
     }
 }
 
@@ -45,23 +56,9 @@ InsertData::Serialize(StorageType medium) {
 std::vector<uint8_t>
 InsertData::serialize_to_remote_file() {
     AssertInfo(field_data_meta_.has_value(), "field data not exist");
-    AssertInfo(field_data_ != nullptr, "empty field data");
-
-    // create insert event
-    InsertEvent insert_event;
-    auto& insert_event_data = insert_event.event_data;
-    insert_event_data.start_timestamp = time_range_.first;
-    insert_event_data.end_timestamp = time_range_.second;
-    insert_event_data.field_data = field_data_;
-
-    auto& insert_event_header = insert_event.event_header;
-    // TODO :: set timestamps
-    insert_event_header.timestamp_ = 0;
-    insert_event_header.event_type_ = EventType::InsertEvent;
-
-    // serialize insert event
-    auto insert_event_bytes = insert_event.Serialize();
-    DataType data_type = field_data_->get_data_type();
+    AssertInfo(payload_reader_->has_field_data(), "empty field data");
+    auto field_data = payload_reader_->get_field_data();
+    DataType data_type = field_data->get_data_type();
 
     // create descriptor event
     DescriptorEvent descriptor_event;
@@ -74,10 +71,14 @@ InsertData::serialize_to_remote_file() {
     des_fix_part.start_timestamp = time_range_.first;
     des_fix_part.end_timestamp = time_range_.second;
     des_fix_part.data_type = milvus::proto::schema::DataType(data_type);
-    for (auto i = int8_t(EventType::DescriptorEvent); i < int8_t(EventType::EventTypeEnd); i++) {
-        des_event_data.post_header_lengths.push_back(GetEventFixPartSize(EventType(i)));
+    for (auto i = int8_t(EventType::DescriptorEvent);
+         i < int8_t(EventType::EventTypeEnd);
+         i++) {
+        des_event_data.post_header_lengths.push_back(
+            GetEventFixPartSize(EventType(i)));
     }
-    des_event_data.extras[ORIGIN_SIZE_KEY] = std::to_string(field_data_->get_data_size());
+    des_event_data.extras[ORIGIN_SIZE_KEY] = std::to_string(field_data->Size());
+    des_event_data.extras[NULLABLE] = field_data->IsNullable();
 
     auto& des_event_header = descriptor_event.event_header;
     // TODO :: set timestamp
@@ -86,7 +87,25 @@ InsertData::serialize_to_remote_file() {
     // serialize descriptor event data
     auto des_event_bytes = descriptor_event.Serialize();
 
-    des_event_bytes.insert(des_event_bytes.end(), insert_event_bytes.begin(), insert_event_bytes.end());
+    // create insert event
+    InsertEvent insert_event;
+    insert_event.event_offset = des_event_bytes.size();
+    auto& insert_event_data = insert_event.event_data;
+    insert_event_data.start_timestamp = time_range_.first;
+    insert_event_data.end_timestamp = time_range_.second;
+    insert_event_data.payload_reader = payload_reader_;
+
+    auto& insert_event_header = insert_event.event_header;
+    // TODO :: set timestamps
+    insert_event_header.timestamp_ = 0;
+    insert_event_header.event_type_ = EventType::InsertEvent;
+
+    // serialize insert event
+    auto insert_event_bytes = insert_event.Serialize();
+
+    des_event_bytes.insert(des_event_bytes.end(),
+                           insert_event_bytes.begin(),
+                           insert_event_bytes.end());
 
     return des_event_bytes;
 }
@@ -98,7 +117,7 @@ InsertData::serialize_to_remote_file() {
 std::vector<uint8_t>
 InsertData::serialize_to_local_file() {
     LocalInsertEvent event;
-    event.field_data = field_data_;
+    event.field_data = GetFieldData();
 
     return event.Serialize();
 }

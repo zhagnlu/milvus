@@ -11,33 +11,16 @@
 
 #pragma once
 
-#include <map>
+#include <stdint.h>
 #include <string>
+#include <unordered_set>
 
-#include "common/Types.h"
-#include "exceptions/EasyAssert.h"
-#include "utils/Json.h"
+#include "common/EasyAssert.h"
+#include "knowhere/comp/index_param.h"
 
 namespace milvus::segcore {
 
-struct SmallIndexConf {
-    std::string index_type;
-    nlohmann::json build_params;
-    nlohmann::json search_params;
-};
-
 class SegcoreConfig {
- private:
-    SegcoreConfig() {
-        // hard code configurations for small index
-        SmallIndexConf sub_conf;
-        sub_conf.build_params["nlist"] = nlist_;
-        sub_conf.search_params["nprobe"] = nprobe_;
-        sub_conf.index_type = "IVF";
-        table_[knowhere::metric::L2] = sub_conf;
-        table_[knowhere::metric::IP] = sub_conf;
-    }
-
  public:
     static SegcoreConfig&
     default_config() {
@@ -49,12 +32,6 @@ class SegcoreConfig {
     void
     parse_from(const std::string& string_path);
 
-    const SmallIndexConf&
-    at(const knowhere::MetricType& metric_type) const {
-        Assert(table_.count(metric_type));
-        return table_.at(metric_type);
-    }
-
     int64_t
     get_chunk_rows() const {
         return chunk_rows_;
@@ -63,6 +40,16 @@ class SegcoreConfig {
     void
     set_chunk_rows(int64_t chunk_rows) {
         chunk_rows_ = chunk_rows;
+    }
+
+    int64_t
+    get_nlist() const {
+        return nlist_;
+    }
+
+    int64_t
+    get_nprobe() const {
+        return nprobe_;
     }
 
     void
@@ -76,15 +63,175 @@ class SegcoreConfig {
     }
 
     void
-    set_small_index_config(const knowhere::MetricType& metric_type, const SmallIndexConf& small_index_conf) {
-        table_[metric_type] = small_index_conf;
+    set_enable_interim_segment_index(bool enable_interim_segment_index) {
+        this->enable_interim_segment_index_ = enable_interim_segment_index;
+    }
+
+    bool
+    get_enable_interim_segment_index() const {
+        return enable_interim_segment_index_;
+    }
+
+    void
+    set_enable_growing_source_flush(bool enable_growing_source_flush) {
+        this->enable_growing_source_flush_ = enable_growing_source_flush;
+    }
+
+    bool
+    get_enable_growing_source_flush() const {
+        return enable_growing_source_flush_;
+    }
+
+    void
+    set_sub_dim(int64_t sub_dim) {
+        sub_dim_ = sub_dim;
+    }
+
+    int64_t
+    get_sub_dim() const {
+        return sub_dim_;
+    }
+
+    void
+    set_refine_ratio(float refine_ratio) {
+        refine_ratio_ = refine_ratio;
+    }
+
+    void
+    set_build_ratio(float build_ratio) {
+        build_ratio_ = build_ratio;
+    }
+
+    float
+    get_build_ratio() const {
+        return build_ratio_;
+    }
+
+    int64_t
+    get_refine_ratio() const {
+        return refine_ratio_;
+    }
+
+    void
+    set_dense_vector_intermin_index_type(const std::string index_type) {
+        AssertInfo(valid_dense_vector_index_type.find(index_type) !=
+                       valid_dense_vector_index_type.end(),
+                   "fail to set dense vector index type.");
+        dense_index_type_ = index_type;
+    }
+
+    std::string
+    get_dense_vector_intermin_index_type() const {
+        return dense_index_type_;
+    }
+
+    void
+    set_refine_quant_type(const std::string& refine_type) {
+        if (refine_type == "NONE") {
+            refine_type_ = knowhere::RefineType::DATA_VIEW;
+        } else if (refine_type == "BFLOAT16") {
+            refine_type_ = knowhere::RefineType::BFLOAT16_QUANT;
+        } else if (refine_type == "FLOAT16") {
+            refine_type_ = knowhere::RefineType::FLOAT16_QUANT;
+        } else if (refine_type == "UINT8") {
+            refine_type_ = knowhere::RefineType::UINT8_QUANT;
+        } else {
+            ThrowInfo(Unsupported,
+                      "unsupported refine type for intermin index.");
+        }
+    }
+
+    knowhere::RefineType
+    get_refine_quant_type() const {
+        return refine_type_;
+    }
+
+    void
+    set_refine_with_quant_flag(bool flag) {
+        refine_with_quant_flag_ = flag;
+    }
+
+    bool
+    get_refine_with_quant_flag() const {
+        return refine_with_quant_flag_;
+    }
+
+    void
+    set_enable_geometry_cache(bool enable_geometry_cache) {
+        enable_geometry_cache_ = enable_geometry_cache;
+    }
+
+    bool
+    get_enable_geometry_cache() const {
+        return enable_geometry_cache_;
+    }
+
+    void
+    set_visibility_filter_enabled(bool value) {
+        visibility_filter_enabled_ = value;
+    }
+
+    bool
+    get_visibility_filter_enabled() const {
+        return visibility_filter_enabled_;
+    }
+
+    void
+    set_prefer_field_data_when_index_has_raw_data(bool value) {
+        prefer_field_data_when_index_has_raw_data_ = value;
+    }
+
+    bool
+    get_prefer_field_data_when_index_has_raw_data() const {
+        return prefer_field_data_when_index_has_raw_data_;
+    }
+
+    static constexpr int64_t kDefaultMaxGroupByGroups = 100000;
+
+    int64_t
+    get_max_group_by_groups() const {
+        return max_group_by_groups_;
+    }
+
+    void
+    set_max_group_by_groups(int64_t v) {
+        max_group_by_groups_ = v;
+    }
+
+    void
+    set_interim_index_mem_expansion_rate(float rate) {
+        interim_index_mem_expansion_rate_ = rate;
+    }
+
+    float
+    get_interim_index_mem_expansion_rate() const {
+        return interim_index_mem_expansion_rate_;
     }
 
  private:
-    int64_t chunk_rows_ = 32 * 1024;
-    int64_t nlist_ = 100;
-    int64_t nprobe_ = 4;
-    std::map<knowhere::MetricType, SmallIndexConf> table_;
+    inline static const std::unordered_set<std::string>
+        valid_dense_vector_index_type = {
+            knowhere::IndexEnum::INDEX_FAISS_IVFFLAT_CC,
+            knowhere::IndexEnum::INDEX_FAISS_SCANN_DVR,
+    };
+    inline static bool enable_interim_segment_index_ = false;
+    inline static bool enable_growing_source_flush_ = false;
+    inline static int64_t chunk_rows_ = 32 * 1024;
+    inline static int64_t nlist_ = 100;
+    inline static int64_t nprobe_ = 4;
+    inline static int64_t sub_dim_ = 2;
+    inline static float refine_ratio_ = 3.0;
+    inline static float build_ratio_ = 0.1;
+    inline static std::string dense_index_type_ =
+        knowhere::IndexEnum::INDEX_FAISS_IVFFLAT_CC;
+    inline static knowhere::RefineType refine_type_ =
+        knowhere::RefineType::DATA_VIEW;
+    inline static bool refine_with_quant_flag_ = false;
+    inline static bool enable_geometry_cache_ = false;
+    inline static bool visibility_filter_enabled_ = true;
+    inline static bool prefer_field_data_when_index_has_raw_data_ = false;
+    inline static float interim_index_mem_expansion_rate_ = 1.15f;
+    inline static int64_t max_group_by_groups_ = kDefaultMaxGroupByGroups;
 };
 
 }  // namespace milvus::segcore

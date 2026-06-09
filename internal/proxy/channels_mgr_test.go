@@ -18,15 +18,16 @@ package proxy
 
 import (
 	"context"
-	"errors"
+	"sync/atomic"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
-
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
-
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/mocks"
 )
 
 func Test_removeDuplicate(t *testing.T) {
@@ -53,10 +54,9 @@ func Test_newChannels(t *testing.T) {
 func Test_getDmlChannelsFunc(t *testing.T) {
 	t.Run("failed to describe collection", func(t *testing.T) {
 		ctx := context.Background()
-		rc := newMockRootCoord()
-		rc.DescribeCollectionFunc = func(ctx context.Context, request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
-			return nil, errors.New("mock")
-		}
+		rc := mocks.NewMockMixCoordClient(t)
+		rc.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(nil, errors.New("mock"))
+
 		f := getDmlChannelsFunc(ctx, rc)
 		_, err := f(100)
 		assert.Error(t, err)
@@ -64,10 +64,8 @@ func Test_getDmlChannelsFunc(t *testing.T) {
 
 	t.Run("error code not success", func(t *testing.T) {
 		ctx := context.Background()
-		rc := newMockRootCoord()
-		rc.DescribeCollectionFunc = func(ctx context.Context, request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
-			return &milvuspb.DescribeCollectionResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_UnexpectedError}}, nil
-		}
+		rc := mocks.NewMockMixCoordClient(t)
+		rc.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_UnexpectedError}}, nil)
 		f := getDmlChannelsFunc(ctx, rc)
 		_, err := f(100)
 		assert.Error(t, err)
@@ -75,13 +73,13 @@ func Test_getDmlChannelsFunc(t *testing.T) {
 
 	t.Run("normal case", func(t *testing.T) {
 		ctx := context.Background()
-		rc := newMockRootCoord()
-		rc.DescribeCollectionFunc = func(ctx context.Context, request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
-			return &milvuspb.DescribeCollectionResponse{
-				VirtualChannelNames:  []string{"111", "222"},
-				PhysicalChannelNames: []string{"111", "111"},
-				Status:               &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}}, nil
-		}
+		rc := mocks.NewMockMixCoordClient(t)
+		rc.EXPECT().DescribeCollection(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{
+			VirtualChannelNames:  []string{"111", "222"},
+			PhysicalChannelNames: []string{"111", "111"},
+			Status:               &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+		}, nil)
+
 		f := getDmlChannelsFunc(ctx, rc)
 		got, err := f(100)
 		assert.NoError(t, err)
@@ -113,49 +111,54 @@ func Test_singleTypeChannelsMgr_getAllChannels(t *testing.T) {
 	})
 }
 
-func Test_singleTypeChannelsMgr_getPChans(t *testing.T) {
-	t.Run("normal case", func(t *testing.T) {
+func Test_singleTypeChannelsMgr_ensureChannels(t *testing.T) {
+	t.Run("hit cache", func(t *testing.T) {
 		m := &singleTypeChannelsMgr{
+			infos: map[UniqueID]streamInfos{
+				100: {channelInfos: channelInfos{vchans: []string{"111"}, pchans: []string{"p111"}}},
+			},
 			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{vchans: []string{"111", "222"}, pchans: []string{"111"}}, nil
+				return channelInfos{}, errors.New("should not be called")
 			},
 		}
-		got, err := m.getPChans(100)
+		got, err := m.ensureChannels(100)
 		assert.NoError(t, err)
-		assert.ElementsMatch(t, []string{"111"}, got)
+		assert.ElementsMatch(t, []string{"111"}, got.vchans)
+		assert.ElementsMatch(t, []string{"p111"}, got.pchans)
 	})
 
-	t.Run("error case", func(t *testing.T) {
+	t.Run("load and cache", func(t *testing.T) {
+		called := atomic.Int32{}
 		m := &singleTypeChannelsMgr{
+			infos: make(map[UniqueID]streamInfos),
 			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{}, errors.New("mock")
+				called.Add(1)
+				return channelInfos{vchans: []string{"111", "222"}, pchans: []string{"p111", "p222"}}, nil
 			},
 		}
-		_, err := m.getPChans(100)
-		assert.Error(t, err)
-	})
-}
-
-func Test_singleTypeChannelsMgr_getVChans(t *testing.T) {
-	t.Run("normal case", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{vchans: []string{"111", "222"}, pchans: []string{"111"}}, nil
-			},
-		}
-		got, err := m.getVChans(100)
+		got, err := m.ensureChannels(100)
 		assert.NoError(t, err)
-		assert.ElementsMatch(t, []string{"111", "222"}, got)
+		assert.ElementsMatch(t, []string{"111", "222"}, got.vchans)
+		assert.ElementsMatch(t, []string{"p111", "p222"}, got.pchans)
+		assert.Equal(t, int32(1), called.Load())
+
+		// ensure the cached value is returned without extra fetches.
+		got, err = m.ensureChannels(100)
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, []string{"111", "222"}, got.vchans)
+		assert.Equal(t, int32(1), called.Load())
 	})
 
-	t.Run("error case", func(t *testing.T) {
+	t.Run("propagate error", func(t *testing.T) {
+		expErr := errors.New("mock")
 		m := &singleTypeChannelsMgr{
+			infos: make(map[UniqueID]streamInfos),
 			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{}, errors.New("mock")
+				return channelInfos{}, expErr
 			},
 		}
-		_, err := m.getVChans(100)
-		assert.Error(t, err)
+		_, err := m.ensureChannels(1)
+		assert.ErrorIs(t, err, expErr)
 	})
 }
 
@@ -205,187 +208,11 @@ func Test_singleTypeChannelsMgr_getVChannels(t *testing.T) {
 	})
 }
 
-func Test_createStream(t *testing.T) {
-	t.Run("failed to create msgstream", func(t *testing.T) {
-		factory := newMockMsgStreamFactory()
-		factory.fQStream = func(ctx context.Context) (msgstream.MsgStream, error) {
-			return nil, errors.New("mock")
-		}
-		_, err := createStream(factory, dmlStreamType, nil, nil)
-		assert.Error(t, err)
-	})
-
-	t.Run("failed to create query msgstream", func(t *testing.T) {
-		factory := newMockMsgStreamFactory()
-		factory.f = func(ctx context.Context) (msgstream.MsgStream, error) {
-			return nil, errors.New("mock")
-		}
-		_, err := createStream(factory, dqlStreamType, nil, nil)
-		assert.Error(t, err)
-	})
-
-	t.Run("normal case", func(t *testing.T) {
-		factory := newMockMsgStreamFactory()
-		factory.f = func(ctx context.Context) (msgstream.MsgStream, error) {
-			return newMockMsgStream(), nil
-		}
-		_, err := createStream(factory, dmlStreamType, []string{"111"}, func(tsMsgs []msgstream.TsMsg, hashKeys [][]int32) (map[int32]*msgstream.MsgPack, error) {
-			return nil, nil
-		})
-		assert.NoError(t, err)
-	})
-}
-
-func Test_singleTypeChannelsMgr_createMsgStream(t *testing.T) {
-	t.Run("re-create", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			infos: map[UniqueID]streamInfos{
-				100: {stream: newMockMsgStream()},
-			},
-		}
-		stream, err := m.createMsgStream(100)
-		assert.NoError(t, err)
-		assert.NotNil(t, stream)
-	})
-
-	t.Run("failed to get channels", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{}, errors.New("mock")
-			},
-		}
-		_, err := m.createMsgStream(100)
-		assert.Error(t, err)
-	})
-
-	t.Run("failed to create message stream", func(t *testing.T) {
-		factory := newMockMsgStreamFactory()
-		factory.f = func(ctx context.Context) (msgstream.MsgStream, error) {
-			return nil, errors.New("mock")
-		}
-		m := &singleTypeChannelsMgr{
-			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{vchans: []string{"111", "222"}, pchans: []string{"111"}}, nil
-			},
-			msgStreamFactory: factory,
-			singleStreamType: dmlStreamType,
-			repackFunc:       nil,
-		}
-		_, err := m.createMsgStream(100)
-		assert.Error(t, err)
-	})
-
-	t.Run("normal case", func(t *testing.T) {
-		factory := newMockMsgStreamFactory()
-		factory.f = func(ctx context.Context) (msgstream.MsgStream, error) {
-			return newMockMsgStream(), nil
-		}
-		m := &singleTypeChannelsMgr{
-			infos: make(map[UniqueID]streamInfos),
-			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{vchans: []string{"111", "222"}, pchans: []string{"111"}}, nil
-			},
-			msgStreamFactory: factory,
-			singleStreamType: dmlStreamType,
-			repackFunc:       nil,
-		}
-		stream, err := m.createMsgStream(100)
-		assert.NoError(t, err)
-		assert.NotNil(t, stream)
-		stream, err = m.getOrCreateStream(100)
-		assert.NoError(t, err)
-		assert.NotNil(t, stream)
-	})
-}
-
-func Test_singleTypeChannelsMgr_lockGetStream(t *testing.T) {
-	t.Run("collection not found", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			infos: make(map[UniqueID]streamInfos),
-		}
-		_, err := m.lockGetStream(100)
-		assert.Error(t, err)
-	})
-
-	t.Run("normal case", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			infos: map[UniqueID]streamInfos{
-				100: {stream: newMockMsgStream()},
-			},
-		}
-		stream, err := m.lockGetStream(100)
-		assert.NoError(t, err)
-		assert.NotNil(t, stream)
-	})
-}
-
-func Test_singleTypeChannelsMgr_getStream(t *testing.T) {
-	t.Run("exist", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			infos: map[UniqueID]streamInfos{
-				100: {stream: newMockMsgStream()},
-			},
-		}
-		stream, err := m.getOrCreateStream(100)
-		assert.NoError(t, err)
-		assert.NotNil(t, stream)
-	})
-
-	t.Run("failed to create", func(t *testing.T) {
-		m := &singleTypeChannelsMgr{
-			infos: map[UniqueID]streamInfos{},
-			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{}, errors.New("mock")
-			},
-		}
-		_, err := m.getOrCreateStream(100)
-		assert.Error(t, err)
-	})
-
-	t.Run("get after create", func(t *testing.T) {
-		factory := newMockMsgStreamFactory()
-		factory.f = func(ctx context.Context) (msgstream.MsgStream, error) {
-			return newMockMsgStream(), nil
-		}
-		m := &singleTypeChannelsMgr{
-			infos: make(map[UniqueID]streamInfos),
-			getChannelsFunc: func(collectionID UniqueID) (channelInfos, error) {
-				return channelInfos{vchans: []string{"111", "222"}, pchans: []string{"111"}}, nil
-			},
-			msgStreamFactory: factory,
-			singleStreamType: dmlStreamType,
-			repackFunc:       nil,
-		}
-		stream, err := m.getOrCreateStream(100)
-		assert.NoError(t, err)
-		assert.NotNil(t, stream)
-	})
-}
-
 func Test_singleTypeChannelsMgr_removeStream(t *testing.T) {
 	m := &singleTypeChannelsMgr{
 		infos: map[UniqueID]streamInfos{
-			100: {
-				stream: newMockMsgStream(),
-			},
+			100: {},
 		},
 	}
-	err := m.removeStream(100)
-	assert.NoError(t, err)
-	_, err = m.lockGetStream(100)
-	assert.Error(t, err)
-}
-
-func Test_singleTypeChannelsMgr_removeAllStream(t *testing.T) {
-	m := &singleTypeChannelsMgr{
-		infos: map[UniqueID]streamInfos{
-			100: {
-				stream: newMockMsgStream(),
-			},
-		},
-	}
-	err := m.removeAllStream()
-	assert.NoError(t, err)
-	_, err = m.lockGetStream(100)
-	assert.Error(t, err)
+	m.removeStream(100)
 }

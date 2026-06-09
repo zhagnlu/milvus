@@ -14,41 +14,81 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "arrow/api.h"
+#include "arrow/array/array_base.h"
+#include "arrow/array/builder_base.h"
+#include "arrow/util/type_fwd.h"
+#include "common/EasyAssert.h"
+#include "common/Types.h"
+#include "parquet/arrow/writer.h"
+#include "parquet/properties.h"
+#include "storage/PayloadStream.h"
 #include "storage/PayloadWriter.h"
-#include "exceptions/EasyAssert.h"
-#include "common/FieldMeta.h"
 #include "storage/Util.h"
 
 namespace milvus::storage {
 
 // create payload writer for numeric data type
-PayloadWriter::PayloadWriter(const DataType column_type) : column_type_(column_type) {
+PayloadWriter::PayloadWriter(const DataType column_type, bool nullable)
+    : column_type_(column_type), nullable_(nullable) {
     builder_ = CreateArrowBuilder(column_type);
-    schema_ = CreateArrowSchema(column_type);
+    schema_ = CreateArrowSchema(column_type, nullable);
 }
 
 // create payload writer for vector data type
-PayloadWriter::PayloadWriter(const DataType column_type, int dim) : column_type_(column_type) {
+PayloadWriter::PayloadWriter(const DataType column_type, int dim, bool nullable)
+    : column_type_(column_type), nullable_(nullable) {
+    AssertInfo(column_type != DataType::VECTOR_SPARSE_U32_F32,
+               "PayloadWriter for Sparse Float Vector should be created "
+               "using the constructor without dimension");
     init_dimension(dim);
+}
+
+// create payload writer for VectorArray with element_type
+PayloadWriter::PayloadWriter(const DataType column_type,
+                             int dim,
+                             DataType element_type,
+                             bool nullable)
+    : column_type_(column_type),
+      nullable_(nullable),
+      element_type_(element_type) {
+    AssertInfo(column_type == DataType::VECTOR_ARRAY,
+               "This constructor is only for VECTOR_ARRAY");
+    AssertInfo(element_type != DataType::NONE,
+               "element_type must be specified for VECTOR_ARRAY");
+    dimension_ = dim;
+    builder_ = CreateArrowBuilder(column_type, element_type, dim, nullable_);
+    schema_ = CreateArrowSchema(column_type, dim, element_type, nullable_);
 }
 
 void
 PayloadWriter::init_dimension(int dim) {
     if (dimension_.has_value()) {
-        AssertInfo(dimension_ == dim, "init dimension with diff values repeatedly");
+        AssertInfo(dimension_ == dim,
+                   "init dimension with diff values repeatedly");
         return;
     }
 
     dimension_ = dim;
-    builder_ = CreateArrowBuilder(column_type_, dim);
-    schema_ = CreateArrowSchema(column_type_, dim);
+    builder_ = CreateArrowBuilder(column_type_, element_type_, dim, nullable_);
+    schema_ = CreateArrowSchema(column_type_, dim, nullable_);
 }
 
 void
 PayloadWriter::add_one_string_payload(const char* str, int str_size) {
     AssertInfo(output_ == nullptr, "payload writer has been finished");
-    AssertInfo(milvus::datatype_is_string(column_type_), "mismatch data type");
+    AssertInfo(milvus::IsStringDataType(column_type_), "mismatch data type");
     AddOneStringToArrowBuilder(builder_, str, str_size);
+    rows_.fetch_add(1);
+}
+
+void
+PayloadWriter::add_one_binary_payload(const uint8_t* data, int length) {
+    AssertInfo(output_ == nullptr, "payload writer has been finished");
+    AssertInfo(milvus::IsBinaryDataType(column_type_) ||
+                   milvus::IsSparseFloatVectorDataType(column_type_),
+               "mismatch data type");
+    AddOneBinaryToArrowBuilder(builder_, data, length);
     rows_.fetch_add(1);
 }
 
@@ -57,7 +97,7 @@ PayloadWriter::add_payload(const Payload& raw_data) {
     AssertInfo(output_ == nullptr, "payload writer has been finished");
     AssertInfo(column_type_ == raw_data.data_type, "mismatch data type");
     AssertInfo(builder_ != nullptr, "empty arrow builder");
-    if (milvus::datatype_is_vector(column_type_)) {
+    if (milvus::IsVectorDataType(column_type_)) {
         AssertInfo(dimension_.has_value(), "dimension has not been inited");
         AssertInfo(dimension_ == raw_data.dimension, "inconsistent dimension");
     }
@@ -71,15 +111,33 @@ PayloadWriter::finish() {
     AssertInfo(output_ == nullptr, "payload writer has been finished");
     std::shared_ptr<arrow::Array> array;
     auto ast = builder_->Finish(&array);
-    AssertInfo(ast.ok(), "builder failed to finish");
+    AssertInfo(ast.ok(), ast.ToString());
 
     auto table = arrow::Table::Make(schema_, {array});
     output_ = std::make_shared<storage::PayloadOutputStream>();
     auto mem_pool = arrow::default_memory_pool();
-    ast = parquet::arrow::WriteTable(
-        *table, mem_pool, output_, 1024 * 1024 * 1024,
-        parquet::WriterProperties::Builder().compression(arrow::Compression::ZSTD)->compression_level(3)->build());
-    AssertInfo(ast.ok(), "write data to output stream failed");
+
+    std::shared_ptr<parquet::ArrowWriterProperties> arrow_properties =
+        parquet::default_arrow_writer_properties();
+    if (column_type_ == DataType::VECTOR_ARRAY ||
+        (nullable_ && IsVectorDataType(column_type_) &&
+         !IsSparseFloatVectorDataType(column_type_))) {
+        // For VectorArray and nullable vectors, we need to store schema metadata
+        parquet::ArrowWriterProperties::Builder arrow_props_builder;
+        arrow_props_builder.store_schema();
+        arrow_properties = arrow_props_builder.build();
+    }
+
+    ast = parquet::arrow::WriteTable(*table,
+                                     mem_pool,
+                                     output_,
+                                     1024 * 1024 * 1024,
+                                     parquet::WriterProperties::Builder()
+                                         .compression(arrow::Compression::ZSTD)
+                                         ->compression_level(3)
+                                         ->build(),
+                                     arrow_properties);
+    AssertInfo(ast.ok(), ast.ToString());
 }
 
 bool

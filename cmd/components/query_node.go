@@ -18,12 +18,17 @@ package components
 
 import (
 	"context"
+	"time"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/util/dependency"
+	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	grpcquerynode "github.com/milvus-io/milvus/internal/distributed/querynode"
+	"github.com/milvus-io/milvus/internal/util/dependency"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // QueryNode implements QueryNode grpc server
@@ -43,27 +48,37 @@ func NewQueryNode(ctx context.Context, factory dependency.Factory) (*QueryNode, 
 		ctx: ctx,
 		svr: svr,
 	}, nil
+}
 
+func (q *QueryNode) Prepare() error {
+	return q.svr.Prepare()
 }
 
 // Run starts service
 func (q *QueryNode) Run() error {
 	if err := q.svr.Run(); err != nil {
-		panic(err)
+		log.Ctx(q.ctx).Error("QueryNode starts error", zap.Error(err))
+		return err
 	}
-	log.Debug("QueryNode successfully started")
+	log.Ctx(q.ctx).Info("QueryNode successfully started")
 	return nil
 }
 
 // Stop terminates service
 func (q *QueryNode) Stop() error {
-	if err := q.svr.Stop(); err != nil {
-		return err
-	}
-	return nil
+	timeout := paramtable.Get().QueryNodeCfg.GracefulStopTimeout.GetAsDuration(time.Second)
+	return exitWhenStopTimeout(q.svr.Stop, timeout)
 }
 
 // GetComponentStates returns QueryNode's states
-func (q *QueryNode) GetComponentStates(ctx context.Context, request *internalpb.GetComponentStatesRequest) (*internalpb.ComponentStates, error) {
-	return q.svr.GetComponentStates(ctx, request)
+func (q *QueryNode) Health(ctx context.Context) commonpb.StateCode {
+	resp, err := q.svr.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
+	if err != nil {
+		return commonpb.StateCode_Abnormal
+	}
+	return resp.State.GetStateCode()
+}
+
+func (q *QueryNode) GetName() string {
+	return typeutil.QueryNodeRole
 }

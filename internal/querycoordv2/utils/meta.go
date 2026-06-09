@@ -1,58 +1,54 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package utils
 
 import (
 	"context"
 	"fmt"
-	"math/rand"
+	"sort"
+	"strings"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
-	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
+	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
+	"github.com/milvus-io/milvus/internal/util/streamingutil"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-func GetReplicaNodesInfo(replicaMgr *meta.ReplicaManager, nodeMgr *session.NodeManager, replicaID int64) []*session.NodeInfo {
-	replica := replicaMgr.Get(replicaID)
-	if replica == nil {
-		return nil
-	}
-
-	nodes := make([]*session.NodeInfo, 0, len(replica.Nodes))
-	for node := range replica.Nodes {
-		nodes = append(nodes, nodeMgr.Get(node))
-	}
-	return nodes
-}
-
-func GetPartitions(collectionMgr *meta.CollectionManager, broker meta.Broker, collectionID int64) ([]int64, error) {
-	collection := collectionMgr.GetCollection(collectionID)
-	if collection != nil {
-		partitions, err := broker.GetPartitions(context.Background(), collectionID)
-		return partitions, err
-	}
-
-	partitions := collectionMgr.GetPartitionsByCollection(collectionID)
-	if partitions != nil {
-		return lo.Map(partitions, func(partition *meta.Partition, i int) int64 {
-			return partition.PartitionID
-		}), nil
-	}
-
-	// todo(yah01): replace this error with a defined error
-	return nil, fmt.Errorf("collection/partition not loaded")
+func GetPartitions(ctx context.Context, targetMgr meta.TargetManagerInterface, collectionID int64) ([]int64, error) {
+	// fetch next target first, sync next target contains the wanted partition list
+	// if not found, current will be used instead for dist adjustment requests
+	return targetMgr.GetPartitions(ctx, collectionID, meta.NextTargetFirst)
 }
 
 // GroupNodesByReplica groups nodes by replica,
 // returns ReplicaID -> NodeIDs
-func GroupNodesByReplica(replicaMgr *meta.ReplicaManager, collectionID int64, nodes []int64) map[int64][]int64 {
+func GroupNodesByReplica(ctx context.Context, replicaMgr *meta.ReplicaManager, collectionID int64, nodes []int64) map[int64][]int64 {
 	ret := make(map[int64][]int64)
-	replicas := replicaMgr.GetByCollection(collectionID)
+	replicas := replicaMgr.GetByCollection(ctx, collectionID)
 	for _, replica := range replicas {
 		for _, node := range nodes {
-			if replica.Nodes.Contain(node) {
-				ret[replica.ID] = append(ret[replica.ID], node)
+			if replica.Contains(node) {
+				ret[replica.GetID()] = append(ret[replica.GetID()], node)
 			}
 		}
 	}
@@ -72,78 +68,210 @@ func GroupPartitionsByCollection(partitions []*meta.Partition) map[int64][]*meta
 
 // GroupSegmentsByReplica groups segments by replica,
 // returns ReplicaID -> Segments
-func GroupSegmentsByReplica(replicaMgr *meta.ReplicaManager, collectionID int64, segments []*meta.Segment) map[int64][]*meta.Segment {
+func GroupSegmentsByReplica(ctx context.Context, replicaMgr *meta.ReplicaManager, collectionID int64, segments []*meta.Segment) map[int64][]*meta.Segment {
 	ret := make(map[int64][]*meta.Segment)
-	replicas := replicaMgr.GetByCollection(collectionID)
+	replicas := replicaMgr.GetByCollection(ctx, collectionID)
 	for _, replica := range replicas {
 		for _, segment := range segments {
-			if replica.Nodes.Contain(segment.Node) {
-				ret[replica.ID] = append(ret[replica.ID], segment)
+			if replica.Contains(segment.Node) {
+				ret[replica.GetID()] = append(ret[replica.GetID()], segment)
 			}
 		}
 	}
 	return ret
 }
 
-// AssignNodesToReplicas assigns nodes to the given replicas,
-// all given replicas must be the same collection,
-// the given replicas have to be not in ReplicaManager
-func AssignNodesToReplicas(nodeMgr *session.NodeManager, replicas ...*meta.Replica) {
-	replicaNumber := len(replicas)
-	nodes := nodeMgr.GetAll()
-	rand.Shuffle(len(nodes), func(i, j int) {
-		nodes[i], nodes[j] = nodes[j], nodes[i]
-	})
+// RecoverReplicaOfCollection recovers all replica of collection with latest resource group.
+func RecoverReplicaOfCollection(ctx context.Context, m *meta.Meta, collectionID typeutil.UniqueID) {
+	logger := log.With(zap.Int64("collectionID", collectionID))
+	rgNames := m.GetResourceGroupByCollection(ctx, collectionID)
+	if rgNames.Len() == 0 {
+		logger.Error("no resource group found for collection")
+		return
+	}
+	rgs, err := m.GetResourceGroups(ctx, rgNames.Collect())
+	if err != nil {
+		logger.Error("unreachable code as expected, fail to get resource group for replica", zap.Error(err))
+		return
+	}
 
-	for i, node := range nodes {
-		replicas[i%replicaNumber].AddNode(node.ID())
+	if err := m.RecoverNodesInCollection(ctx, collectionID, rgs); err != nil {
+		logger.Warn("fail to set available nodes in replica", zap.Error(err))
 	}
 }
 
-// SpawnReplicas spawns replicas for given collection, assign nodes to them, and save them
-func SpawnReplicas(replicaMgr *meta.ReplicaManager, nodeMgr *session.NodeManager, collection int64, replicaNumber int32) ([]*meta.Replica, error) {
-	replicas, err := replicaMgr.Spawn(collection, replicaNumber)
+// RecoverAllCollectionrecovers all replica of all collection in resource group.
+func RecoverAllCollection(m *meta.Meta) {
+	for _, collection := range m.GetAll(context.TODO()) {
+		RecoverReplicaOfCollection(context.TODO(), m, collection)
+	}
+}
+
+func AssignReplica(ctx context.Context, m *meta.Meta, resourceGroups []string, replicaNumber int32, checkNodeNum bool) (map[string]int, error) {
+	if len(resourceGroups) != 0 && len(resourceGroups) != 1 && len(resourceGroups) != int(replicaNumber) {
+		return nil, merr.WrapErrParameterInvalidMsg("replica=[%d] resource group=[%s], resource group num can only be 0, 1 or same as replica number", replicaNumber, strings.Join(resourceGroups, ","))
+	}
+
+	if streamingutil.IsStreamingServiceEnabled() && checkNodeNum {
+		streamingNodeCount := snmanager.StaticStreamingNodeManager.GetStreamingQueryNodeIDs().Len()
+		if replicaNumber > int32(streamingNodeCount) {
+			return nil, merr.WrapErrStreamingNodeNotEnough(streamingNodeCount, int(replicaNumber), fmt.Sprintf("when load %d replica count", replicaNumber))
+		}
+	}
+
+	replicaNumInRG := make(map[string]int)
+	if len(resourceGroups) == 0 {
+		// All replicas should be spawned in default resource group.
+		replicaNumInRG[meta.DefaultResourceGroupName] = int(replicaNumber)
+	} else if len(resourceGroups) == 1 {
+		// All replicas should be spawned in the given resource group.
+		replicaNumInRG[resourceGroups[0]] = int(replicaNumber)
+	} else {
+		// replicas should be spawned in different resource groups one by one.
+		for _, rgName := range resourceGroups {
+			replicaNumInRG[rgName] += 1
+		}
+	}
+
+	// TODO: !!!Warning, ResourceManager and ReplicaManager doesn't protected with each other in concurrent operation.
+	// 1. replica1 got rg1's node snapshot but doesn't spawn finished.
+	// 2. rg1 is removed.
+	// 3. replica1 spawn finished, but cannot find related resource group.
+	for rgName, num := range replicaNumInRG {
+		if !m.ContainResourceGroup(ctx, rgName) {
+			return nil, merr.WrapErrResourceGroupNotFound(rgName)
+		}
+		nodes, err := m.GetNodes(ctx, rgName)
+		if err != nil {
+			return nil, err
+		}
+
+		if num > len(nodes) {
+			log.Warn("failed to check resource group", zap.Error(err))
+			if checkNodeNum {
+				err := merr.WrapErrResourceGroupNodeNotEnough(rgName, len(nodes), num)
+				return nil, err
+			}
+		}
+	}
+	return replicaNumInRG, nil
+}
+
+// SpawnReplicasWithReplicaConfig spawns replicas with replica config.
+func SpawnReplicasWithReplicaConfig(ctx context.Context, m *meta.Meta, params meta.SpawnWithReplicaConfigParams) ([]*meta.Replica, error) {
+	replicas, err := m.SpawnWithReplicaConfig(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	AssignNodesToReplicas(nodeMgr, replicas...)
-	return replicas, replicaMgr.Put(replicas...)
+	RecoverReplicaOfCollection(ctx, m, params.CollectionID)
+	if streamingutil.IsStreamingServiceEnabled() {
+		m.RecoverSQNodesInCollection(ctx, params.CollectionID, snmanager.StaticStreamingNodeManager.GetStreamingQueryNodeIDsByResourceGroup())
+	}
+	return replicas, nil
 }
 
-// RegisterTargets fetch channels and segments of given collection(partitions) from DataCoord,
-// and then registers them on Target Manager
-func RegisterTargets(ctx context.Context,
-	targetMgr *meta.TargetManager,
-	broker meta.Broker,
-	collection int64, partitions []int64) error {
-	dmChannels := make(map[string][]*datapb.VchannelInfo)
+// SpawnReplicasWithRG spawns replicas in rgs one by one for given collection.
+func SpawnReplicasWithRG(ctx context.Context, m *meta.Meta, collection int64, resourceGroups []string,
+	replicaNumber int32, channels []string, loadPriority commonpb.LoadPriority,
+) ([]*meta.Replica, error) {
+	replicaNumInRG, err := AssignReplica(ctx, m, resourceGroups, replicaNumber, true)
+	if err != nil {
+		return nil, err
+	}
+	// Spawn it in replica manager.
+	replicas, err := m.Spawn(ctx, collection, replicaNumInRG, channels, loadPriority)
+	if err != nil {
+		return nil, err
+	}
+	// Active recover it.
+	RecoverReplicaOfCollection(ctx, m, collection)
+	if streamingutil.IsStreamingServiceEnabled() {
+		m.RecoverSQNodesInCollection(ctx, collection, snmanager.StaticStreamingNodeManager.GetStreamingQueryNodeIDsByResourceGroup())
+	}
+	return replicas, nil
+}
 
-	for _, partitionID := range partitions {
-		log.Debug("get recovery info...",
-			zap.Int64("collectionID", collection),
-			zap.Int64("partitionID", partitionID))
-		vChannelInfos, binlogs, err := broker.GetRecoveryInfo(ctx, collection, partitionID)
-		if err != nil {
-			return err
-		}
+func ReassignReplicaToRG(
+	ctx context.Context,
+	m *meta.Meta,
+	collectionID int64,
+	newReplicaNumber int32,
+	newResourceGroups []string,
+) (map[string]int, map[string][]*meta.Replica, []int64, error) {
+	// assign all replicas to newResourceGroups, got each rg's replica number
+	newAssignment, err := AssignReplica(ctx, m, newResourceGroups, newReplicaNumber, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
-		// Register segments
-		for _, segmentBinlogs := range binlogs {
-			targetMgr.AddSegment(SegmentBinlogs2SegmentInfo(
-				collection,
-				partitionID,
-				segmentBinlogs))
-		}
+	replicas := m.GetByCollection(context.TODO(), collectionID)
+	replicasInRG := lo.GroupBy(replicas, func(replica *meta.Replica) string {
+		return replica.GetResourceGroup()
+	})
 
-		for _, info := range vChannelInfos {
-			channelName := info.GetChannelName()
-			dmChannels[channelName] = append(dmChannels[channelName], info)
+	// if rg doesn't exist in newResourceGroups, add all replicas to candidateToRelease
+	// Sort outRg in reverse lexicographic order so that replicas from lexicographically larger RGs
+	// are added first (released first during scale-down), preserving replicas from smaller RGs.
+	candidateToRelease := make([]*meta.Replica, 0)
+	outRg, _ := lo.Difference(lo.Keys(replicasInRG), newResourceGroups)
+	sort.Sort(sort.Reverse(sort.StringSlice(outRg)))
+	if len(outRg) > 0 {
+		for _, rgName := range outRg {
+			candidateToRelease = append(candidateToRelease, replicasInRG[rgName]...)
 		}
 	}
-	// Merge and register channels
-	for _, channels := range dmChannels {
-		dmChannel := MergeDmChannelInfo(channels)
-		targetMgr.AddDmChannel(dmChannel)
+
+	// if rg has more replicas than newAssignment's replica number, add the rest replicas to candidateToMove
+	// also set the lacked replica number as rg's replicaToSpawn value
+	// Sort newAssignment keys for deterministic behavior.
+	replicaToSpawn := make(map[string]int, len(newAssignment))
+	sortedAssignmentRGs := lo.Keys(newAssignment)
+	sort.Strings(sortedAssignmentRGs)
+	for _, rgName := range sortedAssignmentRGs {
+		count := newAssignment[rgName]
+		if len(replicasInRG[rgName]) > count {
+			candidateToRelease = append(candidateToRelease, replicasInRG[rgName][count:]...)
+		} else {
+			lack := count - len(replicasInRG[rgName])
+			if lack > 0 {
+				replicaToSpawn[rgName] = lack
+			}
+		}
 	}
-	return nil
+
+	candidateIdx := 0
+	// if newReplicaNumber is small than current replica num, pick replica from candidate and add it to replicasToRelease
+	replicasToRelease := make([]int64, 0)
+	replicaReleaseCounter := len(replicas) - int(newReplicaNumber)
+	for replicaReleaseCounter > 0 {
+		replicasToRelease = append(replicasToRelease, candidateToRelease[candidateIdx].GetID())
+		replicaReleaseCounter -= 1
+		candidateIdx += 1
+	}
+
+	// if candidateToMove is not empty, pick replica from candidate add add it to replicaToTransfer
+	// which means if rg has less replicas than expected, we transfer some existed replica to it.
+	// Sort RGs in lexicographic order so that existing replicas are preferentially transferred to
+	// the lexicographically smallest RG, maintaining QN assignment stability during scale-up.
+	replicaToTransfer := make(map[string][]*meta.Replica)
+	sortedSpawnRGs := lo.Keys(replicaToSpawn)
+	sort.Strings(sortedSpawnRGs)
+	if candidateIdx < len(candidateToRelease) {
+		for _, rg := range sortedSpawnRGs {
+			for replicaToSpawn[rg] > 0 && candidateIdx < len(candidateToRelease) {
+				if replicaToTransfer[rg] == nil {
+					replicaToTransfer[rg] = make([]*meta.Replica, 0)
+				}
+				replicaToTransfer[rg] = append(replicaToTransfer[rg], candidateToRelease[candidateIdx])
+				candidateIdx += 1
+				replicaToSpawn[rg] -= 1
+			}
+
+			if replicaToSpawn[rg] == 0 {
+				delete(replicaToSpawn, rg)
+			}
+		}
+	}
+
+	return replicaToSpawn, replicaToTransfer, replicasToRelease, nil
 }

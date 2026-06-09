@@ -14,13 +14,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <stdio.h>
+#include <string.h>
+#include <exception>
 #include <mutex>
 
 #include "ConfigKnowhere.h"
-#include "exceptions/EasyAssert.h"
-#include "easyloggingpp/easylogging++.h"
+#include "common/EasyAssert.h"
+#include "common/logging_c.h"
+#include "gflags/gflags.h"
+#include "glog/logging.h"
+#include "knowhere/comp/knowhere_config.h"
+#include "knowhere/version.h"
 #include "log/Log.h"
-#include "knowhere/archive/KnowhereConfig.h"
 
 namespace milvus::config {
 
@@ -31,21 +37,18 @@ KnowhereInitImpl(const char* conf_file) {
     auto init = [&]() {
         knowhere::KnowhereConfig::SetBlasThreshold(16384);
         knowhere::KnowhereConfig::SetEarlyStopThreshold(0);
-        knowhere::KnowhereConfig::SetLogHandler();
-        knowhere::KnowhereConfig::SetStatisticsLevel(0);
+        knowhere::KnowhereConfig::ShowVersion();
+        InitGoogleLoggingWithZapSink();
 
 #ifdef EMBEDDED_MILVUS
-        // always disable all logs for embedded milvus.
-        el::Configurations el_conf;
-        el_conf.setGlobally(el::ConfigurationType::Enabled, "false");
-        el::Loggers::reconfigureAllLoggers(el_conf);
+        // always disable all logs for embedded milvus
+        google::SetCommandLineOption("minloglevel", "4");
 #else
         if (conf_file != nullptr) {
-            el::Configurations el_conf(conf_file);
-            el::Loggers::reconfigureAllLoggers(el_conf);
-            LOG_SERVER_DEBUG_ << "Config easylogging with yaml file: " << conf_file;
+            gflags::SetCommandLineOption("flagfile", conf_file);
         }
 #endif
+        setbuf(stdout, NULL);
     };
 
     std::call_once(init_knowhere_once_, init);
@@ -63,24 +66,71 @@ KnowhereSetSimdType(const char* value) {
     } else if (strcmp(value, "avx") == 0 || strcmp(value, "sse4_2") == 0) {
         simd_type = knowhere::KnowhereConfig::SimdType::SSE4_2;
     } else {
-        PanicInfo("invalid SIMD type: " + std::string(value));
+        ThrowInfo(ConfigInvalid, "invalid SIMD type: {}", value);
     }
     try {
         return knowhere::KnowhereConfig::SetSimdType(simd_type);
     } catch (std::exception& e) {
-        LOG_SERVER_ERROR_ << e.what();
-        PanicInfo(e.what());
+        LOG_ERROR("{}", e.what());
+        ThrowInfo(ConfigInvalid, e.what());
     }
 }
 
 void
-KnowhereSetIndexSliceSize(const int64_t size) {
-    knowhere::KnowhereConfig::SetIndexFileSliceSize(size);
+EnableKnowhereScoreConsistency() {
+    knowhere::KnowhereConfig::EnablePatchForComputeFP32AsBF16();
 }
 
-int64_t
-KnowhereGetIndexSliceSize() {
-    return knowhere::KnowhereConfig::GetIndexFileSliceSize();
+void
+KnowhereInitBuildThreadPool(const uint32_t num_threads) {
+    knowhere::KnowhereConfig::SetBuildThreadPoolSize(num_threads);
+}
+
+void
+KnowhereInitSearchThreadPool(const uint32_t num_threads) {
+    knowhere::KnowhereConfig::SetSearchThreadPoolSize(num_threads);
+    if (!knowhere::KnowhereConfig::SetAioContextPool(num_threads)) {
+        ThrowInfo(ConfigInvalid,
+                  "Failed to set aio context pool with num_threads {}",
+                  num_threads);
+    }
+}
+
+void
+KnowhereInitFetchThreadPool(const uint32_t num_threads) {
+    knowhere::KnowhereConfig::SetFetchThreadPoolSize(num_threads);
+}
+
+void
+KnowhereInitGPUMemoryPool(const uint32_t init_size, const uint32_t max_size) {
+    if (init_size == 0 && max_size == 0) {
+        knowhere::KnowhereConfig::SetRaftMemPool();
+        return;
+    } else if (init_size > max_size) {
+        ThrowInfo(ConfigInvalid,
+                  "Error Gpu memory pool params: init_size {} can't not large "
+                  "than max_size {}.",
+                  init_size,
+                  max_size);
+    } else {
+        knowhere::KnowhereConfig::SetRaftMemPool(size_t{init_size},
+                                                 size_t{max_size});
+    }
+}
+
+int32_t
+GetMinimalIndexVersion() {
+    return knowhere::Version::GetMinimalVersion().VersionNumber();
+}
+
+int32_t
+GetCurrentIndexVersion() {
+    return knowhere::Version::GetCurrentVersion().VersionNumber();
+}
+
+int32_t
+GetMaximumIndexVersion() {
+    return knowhere::Version::GetMaximumVersion().VersionNumber();
 }
 
 }  // namespace milvus::config

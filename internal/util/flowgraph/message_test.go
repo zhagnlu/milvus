@@ -20,11 +20,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 )
 
 type MockMsg struct {
+	*msgstream.BaseMsg
 	Ctx context.Context
 }
 
@@ -38,6 +40,13 @@ func (bm *MockMsg) SetTraceCtx(ctx context.Context) {
 
 func (bm *MockMsg) ID() msgstream.UniqueID {
 	return 0
+}
+
+func (bm *MockMsg) SetID(id msgstream.UniqueID) {
+	// do nothing
+}
+
+func (bm *MockMsg) SetTs(ts uint64) {
 }
 
 func (bm *MockMsg) BeginTs() Timestamp {
@@ -73,7 +82,10 @@ func (bm *MockMsg) Position() *MsgPosition {
 }
 
 func (bm *MockMsg) SetPosition(position *MsgPosition) {
+}
 
+func (bm *MockMsg) Size() int {
+	return 0
 }
 
 func Test_GenerateMsgStreamMsg(t *testing.T) {

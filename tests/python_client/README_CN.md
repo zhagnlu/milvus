@@ -13,8 +13,8 @@
 Milvus 支持4种部署方式，请根据需求选择部署方式，PyMilvus 支持任意部署下的 Milvus。
 
 * [源码编译部署](https://github.com/milvus-io/milvus/blob/master/DEVELOPMENT.md)
-* Docker Compose 部署([单机版本](https://milvus.io/cn/docs/v2.0.0/install_standalone-docker.md) [分布式版本](https://milvus.io/cn/docs/v2.0.0/install_cluster-docker.md))
-* Kubernetes 部署([单机版本](https://milvus.io/cn/docs/v2.0.0/install_standalone-helm.md) [分布式版本](https://milvus.io/cn/docs/v2.0.0/install_cluster-helm.md))
+* Docker Compose 部署([单机版本](https://milvus.io/docs/zh/install_standalone-docker.md) [分布式版本](https://milvus.io/docs/zh/install-overview.md))
+* Kubernetes 部署([单机版本](https://milvus.io/docs/zh/install-overview.md) [分布式版本](https://milvus.io/docs/zh/install_cluster-helm.md))
 * KinD 部署
 
     KinD部署提供一键安装部署：最新的Milvus服务和测试客户端。KinD部署非常适合开发/调试测试用例，功能验证等对数据规模要求不大的场景，但并不适合性能或压力等有较大数据规模的场景。
@@ -65,7 +65,7 @@ Milvus 支持4种部署方式，请根据需求选择部署方式，PyMilvus 支
 
 ### PyMilvus 测试环境部署及用例执行
 
-推荐使用 **Python 3(>= 3.8)** ，与 **[PyMilvus](https://pymilvus.readthedocs.io/en/latest/install.html)** 支持的 Python 版本保持一致。
+推荐使用 **Python 3.12**，与 Python client CI 运行环境保持一致。
 
 > **_NOTE:_**  如选择KinD部署方式，以下步骤可以自动完成
 

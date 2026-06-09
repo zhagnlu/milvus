@@ -30,19 +30,21 @@
 package tso
 
 import (
-	"log"
 	"sync/atomic"
 	"time"
 
-	"errors"
-
-	"github.com/milvus-io/milvus/internal/kv"
-	"github.com/milvus-io/milvus/internal/util/tsoutil"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/pkg/v3/kv"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 // Allocator is a Timestamp Oracle allocator.
+//
+//go:generate mockery --name=Allocator --outpkg=mocktso
 type Allocator interface {
 	// Initialize is used to initialize a TSO allocator.
 	// It will synchronize TSO with etcd and initialize the
@@ -117,15 +119,15 @@ func (gta *GlobalTSOAllocator) GenerateTSO(count uint32) (uint64, error) {
 		current := (*atomicObject)(atomic.LoadPointer(&gta.tso.TSO))
 		if current == nil || current.physical.Equal(typeutil.ZeroTime) {
 			// If it's leader, maybe SyncTimestamp hasn't completed yet
-			log.Println("sync hasn't completed yet, wait for a while")
+			log.Info("sync hasn't completed yet, wait for a while")
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
 
-		physical = current.physical.UnixNano() / int64(time.Millisecond)
+		physical = current.physical.UnixMilli()
 		logical = atomic.AddInt64(&current.logical, int64(count))
 		if logical >= maxLogical && gta.LimitMaxLogic {
-			log.Println("logical part outside of max logical interval, please check ntp time",
+			log.Info("logical part outside of max logical interval, please check ntp time",
 				zap.Int("retry-count", i))
 			time.Sleep(UpdateTimestampStep)
 			continue
@@ -137,7 +139,7 @@ func (gta *GlobalTSOAllocator) GenerateTSO(count uint32) (uint64, error) {
 
 // Alloc allocates a batch of timestamps. What is returned is the starting timestamp.
 func (gta *GlobalTSOAllocator) Alloc(count uint32) (typeutil.Timestamp, error) {
-	//return gta.tso.SyncTimestamp()
+	// return gta.tso.SyncTimestamp()
 	start, err := gta.GenerateTSO(count)
 	if err != nil {
 		return typeutil.ZeroTimestamp, err

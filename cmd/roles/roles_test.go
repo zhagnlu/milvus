@@ -17,28 +17,67 @@
 package roles
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func TestRoles(t *testing.T) {
-	r := MilvusRoles{}
-
-	assert.True(t, r.EnvValue("1"))
-	assert.True(t, r.EnvValue(" 1 "))
-	assert.True(t, r.EnvValue("True"))
-	assert.True(t, r.EnvValue(" True "))
-	assert.True(t, r.EnvValue(" TRue "))
-	assert.False(t, r.EnvValue("0"))
-	assert.False(t, r.EnvValue(" 0 "))
-	assert.False(t, r.EnvValue(" false "))
-	assert.False(t, r.EnvValue(" False "))
-	assert.False(t, r.EnvValue(" abc "))
-
 	ss := strings.SplitN("abcdef", "=", 2)
 	assert.Equal(t, len(ss), 1)
 	ss = strings.SplitN("adb=def", "=", 2)
 	assert.Equal(t, len(ss), 2)
+
+	paramtable.Init()
+	rootPath := paramtable.Get().LocalStorageCfg.Path.GetValue()
+	localPath := filepath.Join(rootPath, "test-dir")
+
+	err := os.RemoveAll(localPath)
+	assert.NoError(t, err)
+
+	err = os.MkdirAll(localPath, os.ModeDir)
+	assert.NoError(t, err)
+	_, err = os.Create(filepath.Join(localPath, "child"))
+	assert.NoError(t, err)
+
+	err = os.RemoveAll(localPath)
+	assert.NoError(t, err)
+	_, err = os.Stat(localPath)
+	assert.Error(t, err)
+	assert.Equal(t, true, os.IsNotExist(err))
+}
+
+func TestCleanLocalDir(t *testing.T) {
+	paramtable.Init()
+	rootPath := paramtable.Get().LocalStorageCfg.Path.GetValue()
+	localPath := filepath.Join(rootPath, "test-dir")
+
+	// clean data
+	assert.NotPanics(t, func() {
+		cleanLocalDir(localPath)
+	})
+
+	// create dir and file
+	err := os.MkdirAll(localPath, os.ModeDir)
+	assert.NoError(t, err)
+	_, err = os.Create(filepath.Join(localPath, "child"))
+	assert.NoError(t, err)
+
+	// clean with path exist
+	assert.NotPanics(t, func() {
+		cleanLocalDir(localPath)
+	})
+
+	_, err = os.Stat(localPath)
+	assert.Error(t, err)
+	assert.Equal(t, true, os.IsNotExist(err))
+	// clean with path not exist
+	assert.NotPanics(t, func() {
+		cleanLocalDir(localPath)
+	})
 }

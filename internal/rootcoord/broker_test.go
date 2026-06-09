@@ -1,27 +1,43 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package rootcoord
 
 import (
 	"context"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/proto/indexpb"
-
-	"github.com/milvus-io/milvus/internal/proto/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/mocks"
+	mockrootcoord "github.com/milvus-io/milvus/internal/rootcoord/mocks"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
+	pb "github.com/milvus-io/milvus/pkg/v3/proto/etcdpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 func TestServerBroker_ReleaseCollection(t *testing.T) {
-	t.Run("not healthy", func(t *testing.T) {
-		c := newTestCore(withUnhealthyQueryCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.ReleaseCollection(ctx, 1)
-		assert.Error(t, err)
-	})
-
 	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidQueryCoord())
+		c := newTestCore(withInvalidMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		err := b.ReleaseCollection(ctx, 1)
@@ -29,7 +45,7 @@ func TestServerBroker_ReleaseCollection(t *testing.T) {
 	})
 
 	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedQueryCoord())
+		c := newTestCore(withFailedMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		err := b.ReleaseCollection(ctx, 1)
@@ -37,7 +53,7 @@ func TestServerBroker_ReleaseCollection(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidQueryCoord())
+		c := newTestCore(withValidMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		err := b.ReleaseCollection(ctx, 1)
@@ -47,7 +63,7 @@ func TestServerBroker_ReleaseCollection(t *testing.T) {
 
 func TestServerBroker_GetSegmentInfo(t *testing.T) {
 	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidQueryCoord())
+		c := newTestCore(withInvalidMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		_, err := b.GetQuerySegmentInfo(ctx, 1, []int64{1, 2})
@@ -55,7 +71,7 @@ func TestServerBroker_GetSegmentInfo(t *testing.T) {
 	})
 
 	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedQueryCoord())
+		c := newTestCore(withFailedMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		resp, err := b.GetQuerySegmentInfo(ctx, 1, []int64{1, 2})
@@ -64,7 +80,7 @@ func TestServerBroker_GetSegmentInfo(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidQueryCoord())
+		c := newTestCore(withValidMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		resp, err := b.GetQuerySegmentInfo(ctx, 1, []int64{1, 2})
@@ -74,18 +90,10 @@ func TestServerBroker_GetSegmentInfo(t *testing.T) {
 }
 
 func TestServerBroker_WatchChannels(t *testing.T) {
-	t.Run("unhealthy", func(t *testing.T) {
-		c := newTestCore(withUnhealthyDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.WatchChannels(ctx, &watchInfo{})
-		assert.Error(t, err)
-	})
-
 	t.Run("failed to execute", func(t *testing.T) {
 		defer cleanTestEnv()
 
-		c := newTestCore(withInvalidDataCoord(), withRocksMqTtSynchronizer())
+		c := newTestCore(withInvalidMixCoord(), withRocksMqTtSynchronizer())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		err := b.WatchChannels(ctx, &watchInfo{})
@@ -95,7 +103,7 @@ func TestServerBroker_WatchChannels(t *testing.T) {
 	t.Run("non success error code on execute", func(t *testing.T) {
 		defer cleanTestEnv()
 
-		c := newTestCore(withFailedDataCoord(), withRocksMqTtSynchronizer())
+		c := newTestCore(withFailedMixCoord(), withRocksMqTtSynchronizer())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		err := b.WatchChannels(ctx, &watchInfo{})
@@ -105,7 +113,7 @@ func TestServerBroker_WatchChannels(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		defer cleanTestEnv()
 
-		c := newTestCore(withValidDataCoord(), withRocksMqTtSynchronizer())
+		c := newTestCore(withValidMixCoord(), withRocksMqTtSynchronizer())
 		b := newServerBroker(c)
 		ctx := context.Background()
 		err := b.WatchChannels(ctx, &watchInfo{})
@@ -120,183 +128,265 @@ func TestServerBroker_UnwatchChannels(t *testing.T) {
 	b.UnwatchChannels(ctx, &watchInfo{})
 }
 
-func TestServerBroker_AddSegRefLock(t *testing.T) {
-	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.AddSegRefLock(ctx, 1, []int64{1, 2})
-		assert.Error(t, err)
-	})
-
-	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.AddSegRefLock(ctx, 1, []int64{1, 2})
-		assert.Error(t, err)
-	})
-
-	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.AddSegRefLock(ctx, 1, []int64{1, 2})
-		assert.NoError(t, err)
-	})
-}
-
-func TestServerBroker_ReleaseSegRefLock(t *testing.T) {
-	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.ReleaseSegRefLock(ctx, 1, []int64{1, 2})
-		assert.Error(t, err)
-	})
-
-	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.ReleaseSegRefLock(ctx, 1, []int64{1, 2})
-		assert.Error(t, err)
-	})
-
-	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.ReleaseSegRefLock(ctx, 1, []int64{1, 2})
-		assert.NoError(t, err)
-	})
-}
-
-func TestServerBroker_Flush(t *testing.T) {
-	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.Flush(ctx, 1, []int64{1, 2})
-		assert.Error(t, err)
-	})
-
-	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.Flush(ctx, 1, []int64{1, 2})
-		assert.Error(t, err)
-	})
-
-	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.Flush(ctx, 1, []int64{1, 2})
-		assert.NoError(t, err)
-	})
-}
-
-func TestServerBroker_Import(t *testing.T) {
-	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		resp, err := b.Import(ctx, &datapb.ImportTaskRequest{})
-		assert.Error(t, err)
-		assert.Nil(t, resp)
-	})
-
-	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		resp, err := b.Import(ctx, &datapb.ImportTaskRequest{})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, resp.GetStatus().GetErrorCode())
-	})
-
-	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidDataCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		resp, err := b.Import(ctx, &datapb.ImportTaskRequest{})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
-	})
-}
-
 func TestServerBroker_DropCollectionIndex(t *testing.T) {
-	t.Run("not healthy", func(t *testing.T) {
-		c := newTestCore(withUnhealthyIndexCoord())
-		b := newServerBroker(c)
-		ctx := context.Background()
-		err := b.DropCollectionIndex(ctx, 1)
-		assert.Error(t, err)
-	})
-
 	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidIndexCoord())
+		c := newTestCore(withInvalidMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
-		err := b.DropCollectionIndex(ctx, 1)
+		err := b.DropCollectionIndex(ctx, 1, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedIndexCoord())
+		c := newTestCore(withFailedMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
-		err := b.DropCollectionIndex(ctx, 1)
+		err := b.DropCollectionIndex(ctx, 1, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidIndexCoord())
+		c := newTestCore(withValidMixCoord())
 		b := newServerBroker(c)
 		ctx := context.Background()
-		err := b.DropCollectionIndex(ctx, 1)
+		err := b.DropCollectionIndex(ctx, 1, nil)
 		assert.NoError(t, err)
+	})
+}
+
+func TestServerBroker_BroadcastAlteredCollection(t *testing.T) {
+	collMeta := &model.Collection{
+		CollectionID: 1,
+		StartPositions: []*commonpb.KeyDataPair{
+			{
+				Key:  "0",
+				Data: []byte("0"),
+			},
+		},
+		Partitions: []*model.Partition{
+			{
+				PartitionID:               2,
+				PartitionName:             "test_partition_name_1",
+				PartitionCreatedTimestamp: 0,
+			},
+		},
+	}
+
+	t.Run("get meta fail", func(t *testing.T) {
+		c := newTestCore(withInvalidMixCoord())
+		meta := mockrootcoord.NewIMetaTable(t)
+		meta.On("GetCollectionByID",
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Return(nil, errors.New("err"))
+		c.meta = meta
+		b := newServerBroker(c)
+		ctx := context.Background()
+		err := b.BroadcastAlteredCollection(ctx, 0)
+		assert.Error(t, err)
+	})
+
+	t.Run("failed to execute", func(t *testing.T) {
+		c := newTestCore(withInvalidMixCoord())
+		meta := mockrootcoord.NewIMetaTable(t)
+		meta.On("GetCollectionByID",
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Return(collMeta, nil)
+		mockGetDatabase(meta)
+		c.meta = meta
+		b := newServerBroker(c)
+		ctx := context.Background()
+		err := b.BroadcastAlteredCollection(ctx, 0)
+		assert.Error(t, err)
+	})
+
+	t.Run("non success error code on execute", func(t *testing.T) {
+		c := newTestCore(withFailedMixCoord())
+		meta := mockrootcoord.NewIMetaTable(t)
+		meta.On("GetCollectionByID",
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Return(collMeta, nil)
+		mockGetDatabase(meta)
+		c.meta = meta
+		b := newServerBroker(c)
+		ctx := context.Background()
+		err := b.BroadcastAlteredCollection(ctx, 0)
+		assert.Error(t, err)
+	})
+
+	t.Run("success", func(t *testing.T) {
+		c := newTestCore(withValidMixCoord())
+		meta := mockrootcoord.NewIMetaTable(t)
+		meta.On("GetCollectionByID",
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+			mock.Anything,
+		).Return(collMeta, nil)
+		mockGetDatabase(meta)
+		c.meta = meta
+		b := newServerBroker(c)
+		ctx := context.Background()
+		err := b.BroadcastAlteredCollection(ctx, 1)
+		assert.NoError(t, err)
+	})
+}
+
+func TestServerBroker_GcConfirm(t *testing.T) {
+	t.Run("invalid datacoord", func(t *testing.T) {
+		dc := mocks.NewMixCoord(t)
+		dc.On("GcConfirm",
+			mock.Anything, // context.Context
+			mock.Anything, // *datapb.GcConfirmRequest
+			mock.Anything, // *datapb.GcConfirmRequest
+		).Return(nil, errors.New("error mock GcConfirm"))
+		c := newTestCore(withMixCoord(dc))
+		broker := newServerBroker(c)
+		assert.False(t, broker.GcConfirm(context.Background(), 100, 10000))
+	})
+
+	t.Run("non success", func(t *testing.T) {
+		dc := mocks.NewMixCoord(t)
+		err := errors.New("mock error")
+		dc.On("GcConfirm",
+			mock.Anything, // context.Context
+			mock.Anything, // *datapb.GcConfirmRequest
+			mock.Anything,
+		).Return(
+			&datapb.GcConfirmResponse{Status: merr.Status(err)},
+			nil)
+		c := newTestCore(withMixCoord(dc))
+		broker := newServerBroker(c)
+		assert.False(t, broker.GcConfirm(context.Background(), 100, 10000))
+	})
+
+	t.Run("normal case", func(t *testing.T) {
+		dc := mocks.NewMixCoord(t)
+		dc.On("GcConfirm",
+			mock.Anything, // context.Context
+			mock.Anything, // *datapb.GcConfirmRequest
+			mock.Anything,
+		).Return(
+			&datapb.GcConfirmResponse{Status: merr.Success(), GcFinished: true},
+			nil)
+		c := newTestCore(withMixCoord(dc))
+		broker := newServerBroker(c)
+		assert.True(t, broker.GcConfirm(context.Background(), 100, 10000))
+	})
+}
+
+func TestServerBroker_ShowResourceGroups(t *testing.T) {
+	t.Run("rpc error", func(t *testing.T) {
+		mixc := mocks.NewMixCoord(t)
+		mixc.On("ListResourceGroups", mock.Anything, mock.Anything).Return(nil, errors.New("rpc error"))
+
+		c := newTestCore(withMixCoord(mixc))
+		b := newServerBroker(c)
+		_, err := b.ShowResourceGroups(context.Background())
+		assert.Error(t, err)
+	})
+
+	t.Run("non success status", func(t *testing.T) {
+		mixc := mocks.NewMixCoord(t)
+		mixc.On("ListResourceGroups", mock.Anything, mock.Anything).Return(
+			&milvuspb.ListResourceGroupsResponse{Status: merr.Status(errors.New("mock error"))},
+			nil,
+		)
+
+		c := newTestCore(withMixCoord(mixc))
+		b := newServerBroker(c)
+		_, err := b.ShowResourceGroups(context.Background())
+		assert.Error(t, err)
+	})
+
+	t.Run("success", func(t *testing.T) {
+		mixc := mocks.NewMixCoord(t)
+		mixc.On("ListResourceGroups", mock.Anything, mock.Anything).Return(
+			&milvuspb.ListResourceGroupsResponse{
+				Status:         merr.Success(),
+				ResourceGroups: []string{"rg1", "rg2"},
+			},
+			nil,
+		)
+
+		c := newTestCore(withMixCoord(mixc))
+		b := newServerBroker(c)
+		rgs, err := b.ShowResourceGroups(context.Background())
+		assert.NoError(t, err)
+		assert.ElementsMatch(t, []string{"rg1", "rg2"}, rgs)
 	})
 }
 
 func TestServerBroker_GetSegmentIndexState(t *testing.T) {
-	t.Run("failed to execute", func(t *testing.T) {
-		c := newTestCore(withInvalidIndexCoord())
+	t.Run("rpc error", func(t *testing.T) {
+		mixc := mocks.NewMixCoord(t)
+		mixc.On("GetSegmentIndexState", mock.Anything, mock.Anything).Return(nil, errors.New("rpc error"))
+
+		c := newTestCore(withMixCoord(mixc))
 		b := newServerBroker(c)
-		ctx := context.Background()
-		_, err := b.GetSegmentIndexState(ctx, 1, "index_name", []UniqueID{1, 2})
+		_, err := b.GetSegmentIndexState(context.Background(), 1, "idx", []UniqueID{1, 2})
 		assert.Error(t, err)
 	})
 
-	t.Run("non success error code on execute", func(t *testing.T) {
-		c := newTestCore(withFailedIndexCoord())
+	t.Run("non success status", func(t *testing.T) {
+		mixc := mocks.NewMixCoord(t)
+		mixc.On("GetSegmentIndexState", mock.Anything, mock.Anything).Return(
+			&indexpb.GetSegmentIndexStateResponse{Status: merr.Status(errors.New("mock error"))},
+			nil,
+		)
+
+		c := newTestCore(withMixCoord(mixc))
 		b := newServerBroker(c)
-		ctx := context.Background()
-		_, err := b.GetSegmentIndexState(ctx, 1, "index_name", []UniqueID{1, 2})
+		_, err := b.GetSegmentIndexState(context.Background(), 1, "idx", []UniqueID{1, 2})
 		assert.Error(t, err)
 	})
 
 	t.Run("success", func(t *testing.T) {
-		c := newTestCore(withValidIndexCoord())
-		c.indexCoord.(*mockIndexCoord).GetSegmentIndexStateFunc = func(ctx context.Context, req *indexpb.GetSegmentIndexStateRequest) (*indexpb.GetSegmentIndexStateResponse, error) {
-			return &indexpb.GetSegmentIndexStateResponse{
-				Status: succStatus(),
-				States: []*indexpb.SegmentIndexState{
-					{
-						SegmentID:  1,
-						State:      commonpb.IndexState_Finished,
-						FailReason: "",
-					},
-				},
-			}, nil
-		}
+		mixc := mocks.NewMixCoord(t)
+		mixc.On("GetSegmentIndexState", mock.Anything, mock.Anything).Return(
+			&indexpb.GetSegmentIndexStateResponse{
+				Status: merr.Success(),
+				States: []*indexpb.SegmentIndexState{{SegmentID: 1}},
+			},
+			nil,
+		)
+
+		c := newTestCore(withMixCoord(mixc))
 		b := newServerBroker(c)
-		ctx := context.Background()
-		states, err := b.GetSegmentIndexState(ctx, 1, "index_name", []UniqueID{1})
+		states, err := b.GetSegmentIndexState(context.Background(), 1, "idx", []UniqueID{1, 2})
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(states))
-		assert.Equal(t, commonpb.IndexState_Finished, states[0].GetState())
+		assert.Len(t, states, 1)
+		assert.Equal(t, int64(1), states[0].SegmentID)
 	})
+}
+
+func TestKeyDataPairsConversions(t *testing.T) {
+	m := map[string][]byte{
+		"k1": []byte("v1"),
+		"k2": []byte("v2"),
+	}
+
+	pairs := toKeyDataPairs(m)
+	roundTrip := toMap(pairs)
+	assert.Equal(t, m, roundTrip)
+}
+
+func mockGetDatabase(meta *mockrootcoord.IMetaTable) {
+	db := model.NewDatabase(1, "default", pb.DatabaseState_DatabaseCreated, nil)
+	meta.EXPECT().GetDatabaseByName(mock.Anything, mock.Anything, mock.Anything).
+		Return(db, nil).Maybe()
+	meta.EXPECT().GetDatabaseByID(mock.Anything, mock.Anything, mock.Anything).
+		Return(db, nil).Maybe()
 }

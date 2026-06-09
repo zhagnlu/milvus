@@ -17,12 +17,15 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
+	"github.com/cockroachdb/errors"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/json"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type PrimaryKey interface {
@@ -36,6 +39,7 @@ type PrimaryKey interface {
 	SetValue(interface{}) error
 	GetValue() interface{}
 	Type() schemapb.DataType
+	Size() int64
 }
 
 type Int64PrimaryKey struct {
@@ -137,7 +141,7 @@ func (ip *Int64PrimaryKey) UnmarshalJSON(data []byte) error {
 func (ip *Int64PrimaryKey) SetValue(data interface{}) error {
 	value, ok := data.(int64)
 	if !ok {
-		return fmt.Errorf("wrong type value when setValue for Int64PrimaryKey")
+		return errors.New("wrong type value when setValue for Int64PrimaryKey")
 	}
 
 	ip.Value = value
@@ -152,71 +156,17 @@ func (ip *Int64PrimaryKey) GetValue() interface{} {
 	return ip.Value
 }
 
-type BaseStringPrimaryKey struct {
-	Value string
-}
-
-func (sp *BaseStringPrimaryKey) GT(key BaseStringPrimaryKey) bool {
-	return strings.Compare(sp.Value, key.Value) > 0
-}
-
-func (sp *BaseStringPrimaryKey) GE(key BaseStringPrimaryKey) bool {
-	return strings.Compare(sp.Value, key.Value) >= 0
-}
-
-func (sp *BaseStringPrimaryKey) LT(key BaseStringPrimaryKey) bool {
-	return strings.Compare(sp.Value, key.Value) < 0
-}
-
-func (sp *BaseStringPrimaryKey) LE(key BaseStringPrimaryKey) bool {
-	return strings.Compare(sp.Value, key.Value) <= 0
-}
-
-func (sp *BaseStringPrimaryKey) EQ(key BaseStringPrimaryKey) bool {
-	return strings.Compare(sp.Value, key.Value) == 0
-}
-
-func (sp *BaseStringPrimaryKey) MarshalJSON() ([]byte, error) {
-	ret, err := json.Marshal(sp.Value)
-	if err != nil {
-		return nil, err
-	}
-
-	return ret, nil
-}
-
-func (sp *BaseStringPrimaryKey) UnmarshalJSON(data []byte) error {
-	err := json.Unmarshal(data, &sp.Value)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (sp *BaseStringPrimaryKey) SetValue(data interface{}) error {
-	value, ok := data.(string)
-	if !ok {
-		return fmt.Errorf("wrong type value when setValue for StringPrimaryKey")
-	}
-
-	sp.Value = value
-	return nil
-}
-
-func (sp *BaseStringPrimaryKey) GetValue() interface{} {
-	return sp.Value
+func (ip *Int64PrimaryKey) Size() int64 {
+	return 16
 }
 
 type VarCharPrimaryKey struct {
-	BaseStringPrimaryKey
+	Value string
 }
 
 func NewVarCharPrimaryKey(v string) *VarCharPrimaryKey {
 	return &VarCharPrimaryKey{
-		BaseStringPrimaryKey: BaseStringPrimaryKey{
-			Value: v,
-		},
+		Value: strings.Clone(v),
 	}
 }
 
@@ -227,7 +177,7 @@ func (vcp *VarCharPrimaryKey) GT(key PrimaryKey) bool {
 		return false
 	}
 
-	return vcp.BaseStringPrimaryKey.GT(pk.BaseStringPrimaryKey)
+	return strings.Compare(vcp.Value, pk.Value) > 0
 }
 
 func (vcp *VarCharPrimaryKey) GE(key PrimaryKey) bool {
@@ -237,7 +187,7 @@ func (vcp *VarCharPrimaryKey) GE(key PrimaryKey) bool {
 		return false
 	}
 
-	return vcp.BaseStringPrimaryKey.GE(pk.BaseStringPrimaryKey)
+	return strings.Compare(vcp.Value, pk.Value) >= 0
 }
 
 func (vcp *VarCharPrimaryKey) LT(key PrimaryKey) bool {
@@ -247,7 +197,7 @@ func (vcp *VarCharPrimaryKey) LT(key PrimaryKey) bool {
 		return false
 	}
 
-	return vcp.BaseStringPrimaryKey.LT(pk.BaseStringPrimaryKey)
+	return strings.Compare(vcp.Value, pk.Value) < 0
 }
 
 func (vcp *VarCharPrimaryKey) LE(key PrimaryKey) bool {
@@ -257,7 +207,7 @@ func (vcp *VarCharPrimaryKey) LE(key PrimaryKey) bool {
 		return false
 	}
 
-	return vcp.BaseStringPrimaryKey.LE(pk.BaseStringPrimaryKey)
+	return strings.Compare(vcp.Value, pk.Value) <= 0
 }
 
 func (vcp *VarCharPrimaryKey) EQ(key PrimaryKey) bool {
@@ -267,11 +217,47 @@ func (vcp *VarCharPrimaryKey) EQ(key PrimaryKey) bool {
 		return false
 	}
 
-	return vcp.BaseStringPrimaryKey.EQ(pk.BaseStringPrimaryKey)
+	return strings.Compare(vcp.Value, pk.Value) == 0
+}
+
+func (vcp *VarCharPrimaryKey) MarshalJSON() ([]byte, error) {
+	ret, err := json.Marshal(vcp.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	return ret, nil
+}
+
+func (vcp *VarCharPrimaryKey) UnmarshalJSON(data []byte) error {
+	err := json.Unmarshal(data, &vcp.Value)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (vcp *VarCharPrimaryKey) SetValue(data interface{}) error {
+	value, ok := data.(string)
+	if !ok {
+		return errors.New("wrong type value when setValue for VarCharPrimaryKey")
+	}
+
+	vcp.Value = value
+	return nil
+}
+
+func (vcp *VarCharPrimaryKey) GetValue() interface{} {
+	return vcp.Value
 }
 
 func (vcp *VarCharPrimaryKey) Type() schemapb.DataType {
 	return schemapb.DataType_VarChar
+}
+
+func (vcp *VarCharPrimaryKey) Size() int64 {
+	return int64(len(vcp.Value) + 8)
 }
 
 func GenPrimaryKeyByRawData(data interface{}, pkType schemapb.DataType) (PrimaryKey, error) {
@@ -283,25 +269,47 @@ func GenPrimaryKeyByRawData(data interface{}, pkType schemapb.DataType) (Primary
 		}
 	case schemapb.DataType_VarChar:
 		result = &VarCharPrimaryKey{
-			BaseStringPrimaryKey: BaseStringPrimaryKey{
-				Value: data.(string),
-			},
+			Value: data.(string),
 		}
 	default:
-		return nil, fmt.Errorf("not supported primary data type")
+		return nil, errors.New("not supported primary data type")
 	}
 
 	return result, nil
 }
 
+func GenInt64PrimaryKeys(data ...int64) ([]PrimaryKey, error) {
+	pks := make([]PrimaryKey, len(data))
+	var err error
+	for i := range data {
+		pks[i], err = GenPrimaryKeyByRawData(data[i], schemapb.DataType_Int64)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return pks, nil
+}
+
+func GenVarcharPrimaryKeys(data ...string) ([]PrimaryKey, error) {
+	pks := make([]PrimaryKey, len(data))
+	var err error
+	for i := range data {
+		pks[i], err = GenPrimaryKeyByRawData(data[i], schemapb.DataType_VarChar)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return pks, nil
+}
+
 func ParseFieldData2PrimaryKeys(data *schemapb.FieldData) ([]PrimaryKey, error) {
 	ret := make([]PrimaryKey, 0)
 	if data == nil {
-		return ret, fmt.Errorf("failed to parse pks from nil field data")
+		return ret, errors.New("failed to parse pks from nil field data")
 	}
 	scalarData := data.GetScalars()
 	if scalarData == nil {
-		return ret, fmt.Errorf("failed to parse pks from nil scalar data")
+		return ret, errors.New("failed to parse pks from nil scalar data")
 	}
 
 	switch data.Type {
@@ -316,7 +324,7 @@ func ParseFieldData2PrimaryKeys(data *schemapb.FieldData) ([]PrimaryKey, error) 
 			ret = append(ret, pk)
 		}
 	default:
-		return ret, fmt.Errorf("not supported primary data type")
+		return ret, errors.New("not supported primary data type")
 	}
 
 	return ret, nil
@@ -338,10 +346,56 @@ func ParseIDs2PrimaryKeys(ids *schemapb.IDs) []PrimaryKey {
 			ret = append(ret, pk)
 		}
 	default:
-		//TODO::
+		// TODO::
 	}
 
 	return ret
+}
+
+func ParseIDs2PrimaryKeysBatch(ids *schemapb.IDs) PrimaryKeys {
+	var result PrimaryKeys
+	switch ids.IdField.(type) {
+	case *schemapb.IDs_IntId:
+		int64Pks := ids.GetIntId().GetData()
+		pks := NewInt64PrimaryKeys(int64(len(int64Pks)))
+		pks.AppendRaw(int64Pks...)
+		result = pks
+	case *schemapb.IDs_StrId:
+		stringPks := ids.GetStrId().GetData()
+		pks := NewVarcharPrimaryKeys(int64(len(stringPks)))
+		pks.AppendRaw(stringPks...)
+		result = pks
+	default:
+		panic(fmt.Sprintf("unexpected schema id field type %T", ids.IdField))
+	}
+	return result
+}
+
+func ParsePrimaryKeysBatch2IDs(pks PrimaryKeys) (*schemapb.IDs, error) {
+	ret := &schemapb.IDs{}
+	if pks.Len() == 0 {
+		return ret, nil
+	}
+	switch pks.Type() {
+	case schemapb.DataType_Int64:
+		int64Pks := pks.(*Int64PrimaryKeys)
+		ret.IdField = &schemapb.IDs_IntId{
+			IntId: &schemapb.LongArray{
+				Data: int64Pks.values,
+			},
+		}
+	case schemapb.DataType_VarChar:
+		varcharPks := pks.(*VarcharPrimaryKeys)
+		ret.IdField = &schemapb.IDs_StrId{
+			StrId: &schemapb.StringArray{
+				Data: varcharPks.values,
+			},
+		}
+	default:
+		return nil, merr.WrapErrServiceInternal("parsing unsupported pk type", pks.Type().String())
+	}
+
+	return ret, nil
 }
 
 func ParsePrimaryKeys2IDs(pks []PrimaryKey) *schemapb.IDs {
@@ -371,7 +425,22 @@ func ParsePrimaryKeys2IDs(pks []PrimaryKey) *schemapb.IDs {
 			},
 		}
 	default:
-		//TODO::
+		// TODO::
+	}
+
+	return ret
+}
+
+func ParseInt64s2IDs(pks ...int64) *schemapb.IDs {
+	ret := &schemapb.IDs{}
+	if len(pks) == 0 {
+		return ret
+	}
+
+	ret.IdField = &schemapb.IDs_IntId{
+		IntId: &schemapb.LongArray{
+			Data: pks,
+		},
 	}
 
 	return ret

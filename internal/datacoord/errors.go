@@ -17,20 +17,17 @@
 package datacoord
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/cockroachdb/errors"
 )
 
-// errNilKvClient stands for a nil kv client is detected when initialized
-var errNilKvClient = errors.New("kv client not initialized")
-
-// serverNotServingErrMsg used for Status Reason when DataCoord is not healthy
-const serverNotServingErrMsg = "DataCoord is not serving"
-
 // errors for VerifyResponse
-var errNilResponse = errors.New("response is nil")
-var errNilStatusResponse = errors.New("response has nil status")
-var errUnknownResponseType = errors.New("unknown response type")
+var (
+	errNilResponse         = errors.New("response is nil")
+	errNilStatusResponse   = errors.New("response has nil status")
+	errUnknownResponseType = errors.New("unknown response type")
+)
 
 func msgDataCoordIsUnhealthy(coordID UniqueID) string {
 	return fmt.Sprintf("DataCoord %d is not ready", coordID)
@@ -42,4 +39,8 @@ func errDataCoordIsUnhealthy(coordID UniqueID) error {
 
 func msgSegmentNotFound(segID UniqueID) string {
 	return fmt.Sprintf("failed to get segment %d", segID)
+}
+
+func msgAmbiguousIndexName() string {
+	return "there are multiple indexes, please specify the index_name"
 }

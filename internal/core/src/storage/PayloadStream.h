@@ -16,30 +16,30 @@
 
 #pragma once
 
-#include <vector>
-#include <memory>
-
 #include <arrow/api.h>
-#include <arrow/io/api.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <vector>
 
+#include "arrow/io/interfaces.h"
 #include "storage/Types.h"
 
 namespace milvus::storage {
 
-class PayloadOutputStream;
-class PayloadInputStream;
-
 struct Payload {
     DataType data_type;
     const uint8_t* raw_data;
-    int rows;
+    const uint8_t* valid_data;
+    const int64_t rows;
     std::optional<int> dimension;
+    bool nullable;
 };
 
 class PayloadOutputStream : public arrow::io::OutputStream {
  public:
     PayloadOutputStream();
-    ~PayloadOutputStream();
+    ~PayloadOutputStream() noexcept;
 
     arrow::Status
     Close() override;
@@ -64,7 +64,7 @@ class PayloadOutputStream : public arrow::io::OutputStream {
 class PayloadInputStream : public arrow::io::RandomAccessFile {
  public:
     PayloadInputStream(const uint8_t* data, int64_t size);
-    ~PayloadInputStream();
+    ~PayloadInputStream() noexcept;
 
     arrow::Status
     Close() override;

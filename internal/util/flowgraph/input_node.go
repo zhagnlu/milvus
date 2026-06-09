@@ -17,20 +17,47 @@
 package flowgraph
 
 import (
-	"github.com/milvus-io/milvus/internal/log"
-	"github.com/milvus-io/milvus/internal/mq/msgstream"
-	"github.com/milvus-io/milvus/internal/util/trace"
-	"github.com/opentracing/opentracing-go"
-	oplog "github.com/opentracing/opentracing-go/log"
+	"context"
+	"fmt"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/metrics"
+	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
+)
+
+const (
+	CloseGracefully  bool = true
+	CloseImmediately bool = false
 )
 
 // InputNode is the entry point of flowgragh
 type InputNode struct {
 	BaseNode
-	inStream     msgstream.MsgStream
-	name         string
-	closeMsgChan chan struct{}
+	input           <-chan *msgstream.MsgPack
+	lastMsg         *msgstream.MsgPack
+	name            string
+	role            string
+	nodeID          int64
+	nodeIDStr       string
+	collectionID    int64
+	collectionIDStr string
+	dataType        string
+
+	closeGracefully *atomic.Bool
+
+	skipMode            bool
+	skipCount           int
+	lastNotTimetickTime time.Time
 }
 
 // IsInputNode returns whether Node is InputNode
@@ -38,22 +65,8 @@ func (inNode *InputNode) IsInputNode() bool {
 	return true
 }
 
-// Start is used to start input msgstream
-func (inNode *InputNode) Start() {
-	inNode.inStream.Start()
-}
-
-// Close implements node
-func (inNode *InputNode) Close() {
-	select {
-	case <-inNode.closeMsgChan:
-		return
-	default:
-		close(inNode.closeMsgChan)
-		log.Debug("message stream closed",
-			zap.String("node name", inNode.name),
-		)
-	}
+func (inNode *InputNode) IsValidInMsg(in []Msg) bool {
+	return true
 }
 
 // Name returns node name
@@ -61,63 +74,132 @@ func (inNode *InputNode) Name() string {
 	return inNode.name
 }
 
-// InStream returns the internal MsgStream
-func (inNode *InputNode) InStream() msgstream.MsgStream {
-	return inNode.inStream
+func (inNode *InputNode) SetCloseMethod(gracefully bool) {
+	inNode.closeGracefully.Store(gracefully)
+	log.Info("input node close method set",
+		zap.String("node", inNode.Name()),
+		zap.Int64("collection", inNode.collectionID),
+		zap.Bool("gracefully", gracefully))
 }
 
 // Operate consume a message pack from msgstream and return
 func (inNode *InputNode) Operate(in []Msg) []Msg {
-	select {
-	case <-inNode.closeMsgChan:
-		inNode.inStream.Close()
+	msgPack, ok := <-inNode.input
+	if !ok {
+		log := log.With(
+			zap.String("node", inNode.Name()),
+			zap.Int64("collection", inNode.collectionID),
+		)
+		log.Info("input node message stream closed",
+			zap.Bool("closeGracefully", inNode.closeGracefully.Load()),
+		)
+		if inNode.lastMsg != nil && inNode.closeGracefully.Load() {
+			log.Info("input node trigger force sync",
+				zap.Any("position", inNode.lastMsg.EndPositions))
+			return []Msg{&MsgStreamMsg{
+				BaseMsg:        NewBaseMsg(true),
+				tsMessages:     []msgstream.TsMsg{},
+				timestampMin:   inNode.lastMsg.BeginTs,
+				timestampMax:   inNode.lastMsg.EndTs,
+				startPositions: inNode.lastMsg.StartPositions,
+				endPositions:   inNode.lastMsg.EndPositions,
+			}}
+		}
 		return []Msg{&MsgStreamMsg{
-			isCloseMsg: true,
+			BaseMsg: NewBaseMsg(true),
 		}}
-	case msgPack, ok := <-inNode.inStream.Chan():
-		if !ok {
-			log.Warn("MsgStream closed", zap.Any("input node", inNode.Name()))
-			return []Msg{}
-		}
-
-		// TODO: add status
-		if msgPack == nil {
-			return nil
-		}
-		var spans []opentracing.Span
-		for _, msg := range msgPack.Msgs {
-			sp, ctx := trace.StartSpanFromContext(msg.TraceCtx())
-			sp.LogFields(oplog.String("input_node name", inNode.Name()))
-			spans = append(spans, sp)
-			msg.SetTraceCtx(ctx)
-		}
-
-		var msgStreamMsg Msg = &MsgStreamMsg{
-			tsMessages:     msgPack.Msgs,
-			timestampMin:   msgPack.BeginTs,
-			timestampMax:   msgPack.EndTs,
-			startPositions: msgPack.StartPositions,
-			endPositions:   msgPack.EndPositions,
-		}
-
-		for _, span := range spans {
-			span.Finish()
-		}
-
-		return []Msg{msgStreamMsg}
 	}
+
+	// TODO: add status
+	if msgPack == nil {
+		return []Msg{}
+	}
+
+	inNode.lastMsg = msgPack
+	sub := tsoutil.SubByNow(msgPack.EndTs)
+	if inNode.role == typeutil.DataNodeRole {
+		metrics.DataNodeConsumeMsgCount.
+			WithLabelValues(inNode.nodeIDStr, inNode.dataType, inNode.collectionIDStr).
+			Inc()
+
+		metrics.DataNodeConsumeTimeTickLag.
+			WithLabelValues(inNode.nodeIDStr, inNode.dataType, inNode.collectionIDStr).
+			Set(float64(sub))
+	}
+
+	var spans []trace.Span
+	defer func() {
+		for _, span := range spans {
+			span.End()
+		}
+	}()
+	for _, msg := range msgPack.Msgs {
+		ctx := msg.TraceCtx()
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		ctx, sp := otel.Tracer(inNode.role).Start(ctx, "Operate")
+		sp.AddEvent("input_node name" + inNode.Name())
+		spans = append(spans, sp)
+		msg.SetTraceCtx(ctx)
+	}
+
+	// skip timetick message feature
+	if inNode.role == typeutil.DataNodeRole &&
+		len(msgPack.Msgs) > 0 &&
+		paramtable.Get().DataNodeCfg.FlowGraphSkipModeEnable.GetAsBool() {
+		if msgPack.Msgs[0].Type() == commonpb.MsgType_TimeTick {
+			if inNode.skipMode {
+				// if empty timetick message and in skipMode, will skip some of the timetick messages to reduce downstream work
+				if inNode.skipCount == paramtable.Get().DataNodeCfg.FlowGraphSkipModeSkipNum.GetAsInt() {
+					inNode.skipCount = 0
+				} else {
+					inNode.skipCount = inNode.skipCount + 1
+					return []Msg{}
+				}
+			} else {
+				cd := paramtable.Get().DataNodeCfg.FlowGraphSkipModeColdTime.GetAsInt()
+				if time.Since(inNode.lastNotTimetickTime) > time.Second*time.Duration(cd) {
+					inNode.skipMode = true
+				}
+			}
+		} else {
+			// if non empty message, refresh the lastNotTimetickTime and close skip mode
+			inNode.skipMode = false
+			inNode.skipCount = 0
+			inNode.lastNotTimetickTime = time.Now()
+		}
+	}
+
+	var msgStreamMsg Msg = &MsgStreamMsg{
+		tsMessages:     msgPack.Msgs,
+		timestampMin:   msgPack.BeginTs,
+		timestampMax:   msgPack.EndTs,
+		startPositions: msgPack.StartPositions,
+		endPositions:   msgPack.EndPositions,
+	}
+
+	return []Msg{msgStreamMsg}
 }
 
-// NewInputNode composes an InputNode with provided MsgStream, name and parameters
-func NewInputNode(inStream msgstream.MsgStream, nodeName string, maxQueueLength int32, maxParallelism int32) *InputNode {
+// NewInputNode composes an InputNode with provided input channel, name and parameters
+func NewInputNode(input <-chan *msgstream.MsgPack, nodeName string, maxQueueLength int32, maxParallelism int32, role string, nodeID int64, collectionID int64, dataType string) *InputNode {
 	baseNode := BaseNode{}
 	baseNode.SetMaxQueueLength(maxQueueLength)
 	baseNode.SetMaxParallelism(maxParallelism)
 
 	return &InputNode{
-		BaseNode:     baseNode,
-		inStream:     inStream,
-		name:         nodeName,
-		closeMsgChan: make(chan struct{}),
+		BaseNode:            baseNode,
+		input:               input,
+		name:                nodeName,
+		role:                role,
+		nodeID:              nodeID,
+		nodeIDStr:           fmt.Sprint(nodeID),
+		collectionID:        collectionID,
+		collectionIDStr:     fmt.Sprint(collectionID),
+		dataType:            dataType,
+		closeGracefully:     atomic.NewBool(CloseImmediately),
+		skipCount:           0,
+		lastNotTimetickTime: time.Now(),
 	}
 }

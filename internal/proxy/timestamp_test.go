@@ -21,18 +21,17 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/util/uniquegenerator"
-
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus/pkg/v3/util/uniquegenerator"
 )
 
 func TestNewTimestampAllocator(t *testing.T) {
-	ctx := context.Background()
 	tso := newMockTimestampAllocatorInterface()
 	peerID := UniqueID(uniquegenerator.GetUniqueIntGeneratorIns().GetInt())
 
-	tsAllocator, err := newTimestampAllocator(ctx, tso, peerID)
-	assert.Nil(t, err)
+	tsAllocator, err := newTimestampAllocator(tso, peerID)
+	assert.NoError(t, err)
 	assert.NotNil(t, tsAllocator)
 }
 
@@ -41,13 +40,13 @@ func TestTimestampAllocator_alloc(t *testing.T) {
 	tso := newMockTimestampAllocatorInterface()
 	peerID := UniqueID(uniquegenerator.GetUniqueIntGeneratorIns().GetInt())
 
-	tsAllocator, err := newTimestampAllocator(ctx, tso, peerID)
-	assert.Nil(t, err)
+	tsAllocator, err := newTimestampAllocator(tso, peerID)
+	assert.NoError(t, err)
 	assert.NotNil(t, tsAllocator)
 
 	count := rand.Uint32()%100 + 1
-	ret, err := tsAllocator.alloc(count)
-	assert.Nil(t, err)
+	ret, err := tsAllocator.alloc(ctx, count)
+	assert.NoError(t, err)
 	assert.Equal(t, int(count), len(ret))
 }
 
@@ -56,10 +55,10 @@ func TestTimestampAllocator_AllocOne(t *testing.T) {
 	tso := newMockTimestampAllocatorInterface()
 	peerID := UniqueID(uniquegenerator.GetUniqueIntGeneratorIns().GetInt())
 
-	tsAllocator, err := newTimestampAllocator(ctx, tso, peerID)
-	assert.Nil(t, err)
+	tsAllocator, err := newTimestampAllocator(tso, peerID)
+	assert.NoError(t, err)
 	assert.NotNil(t, tsAllocator)
 
-	_, err = tsAllocator.AllocOne()
-	assert.Nil(t, err)
+	_, err = tsAllocator.AllocOne(ctx)
+	assert.NoError(t, err)
 }

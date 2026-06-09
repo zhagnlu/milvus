@@ -3,10 +3,12 @@ package indexparamcheck
 import (
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 )
 
 func TestCheckIndexValid(t *testing.T) {
-	assert.NoError(t, CheckIndexValid(schemapb.DataType_Int64, "inverted_index", nil))
+	scalarIndexChecker := &scalarIndexChecker{}
+	assert.NoError(t, scalarIndexChecker.CheckTrain(schemapb.DataType_Bool, schemapb.DataType_None, map[string]string{}))
 }

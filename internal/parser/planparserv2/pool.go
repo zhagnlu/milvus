@@ -3,7 +3,8 @@ package planparserv2
 import (
 	"sync"
 
-	"github.com/antlr/antlr4/runtime/Go/antlr"
+	"github.com/antlr4-go/antlr/v4"
+
 	antlrparser "github.com/milvus-io/milvus/internal/parser/planparserv2/generated"
 )
 
@@ -13,6 +14,7 @@ var (
 			return antlrparser.NewPlanLexer(nil)
 		},
 	}
+
 	parserPool = sync.Pool{
 		New: func() interface{} {
 			return antlrparser.NewPlanParser(nil)
@@ -21,10 +23,7 @@ var (
 )
 
 func getLexer(stream *antlr.InputStream, listeners ...antlr.ErrorListener) *antlrparser.PlanLexer {
-	lexer, ok := lexerPool.Get().(*antlrparser.PlanLexer)
-	if !ok {
-		lexer = antlrparser.NewPlanLexer(nil)
-	}
+	lexer := lexerPool.Get().(*antlrparser.PlanLexer)
 	for _, listener := range listeners {
 		lexer.AddErrorListener(listener)
 	}
@@ -34,10 +33,7 @@ func getLexer(stream *antlr.InputStream, listeners ...antlr.ErrorListener) *antl
 
 func getParser(lexer *antlrparser.PlanLexer, listeners ...antlr.ErrorListener) *antlrparser.PlanParser {
 	tokenStream := antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel)
-	parser, ok := parserPool.Get().(*antlrparser.PlanParser)
-	if !ok {
-		parser = antlrparser.NewPlanParser(nil)
-	}
+	parser := parserPool.Get().(*antlrparser.PlanParser)
 	for _, listener := range listeners {
 		parser.AddErrorListener(listener)
 	}
@@ -48,10 +44,30 @@ func getParser(lexer *antlrparser.PlanLexer, listeners ...antlr.ErrorListener) *
 
 func putLexer(lexer *antlrparser.PlanLexer) {
 	lexer.SetInputStream(nil)
+	lexer.RemoveErrorListeners()
 	lexerPool.Put(lexer)
 }
 
 func putParser(parser *antlrparser.PlanParser) {
 	parser.SetInputStream(nil)
+	parser.RemoveErrorListeners()
 	parserPool.Put(parser)
+}
+
+// resetLexerPool resets the lexer pool (for testing)
+func resetLexerPool() {
+	lexerPool = sync.Pool{
+		New: func() interface{} {
+			return antlrparser.NewPlanLexer(nil)
+		},
+	}
+}
+
+// resetParserPool resets the parser pool (for testing)
+func resetParserPool() {
+	parserPool = sync.Pool{
+		New: func() interface{} {
+			return antlrparser.NewPlanParser(nil)
+		},
+	}
 }

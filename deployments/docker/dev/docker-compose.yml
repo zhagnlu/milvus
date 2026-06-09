@@ -2,7 +2,12 @@ version: '3.5'
 
 services:
   etcd:
-    image: quay.io/coreos/etcd:v3.5.0
+    image: quay.io/coreos/etcd:v3.5.25
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
     command: etcd -listen-peer-urls=http://127.0.0.1:2380 -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379,http://0.0.0.0:4001 -initial-advertise-peer-urls=http://127.0.0.1:2380 --initial-cluster default=http://127.0.0.1:2380 --data-dir /etcd
@@ -33,7 +38,7 @@ services:
       - "18080:8080"
 
   minio:
-    image: minio/minio:RELEASE.2022-03-17T06-34-49Z
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -44,16 +49,33 @@ services:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test:
+        [
+          "CMD",
+          "mc",
+          "ready",
+          "local"
+        ]
       interval: 30s
       timeout: 20s
       retries: 3
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/azurite:/data
+    command: azurite-blob --blobHost 0.0.0.0
+    ports:
+      - "10000:10000"
 
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports:
       - "6831:6831/udp"
-      - "16686:16686"
+      - "4317:4317" # OLTP over gRPC
+      - "4318:4318" # OLTP over HTTP
+      - "16686:16686" # frontent
+      - "14268:14268" # jaeger.thirft
 
   zookeeper:
     image: wurstmeister/zookeeper:latest
@@ -61,7 +83,7 @@ services:
       - "2181:2181"
 
   kafka:
-    image: 'bitnami/kafka:3.1.0'
+    image: 'bitnamilegacy/kafka:3.1.0'
     ports:
       - '9092:9092'
     environment:
@@ -79,6 +101,12 @@ services:
       - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
     depends_on:
       - zookeeper
+
+  gcpnative:
+    image: fsouza/fake-gcs-server
+    command: -scheme http -public-host storage.gcs.127.0.0.1.nip.io:4443
+    ports:
+      - "4443:4443"
 
 networks:
   default:
