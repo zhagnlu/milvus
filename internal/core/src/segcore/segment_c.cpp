@@ -86,6 +86,7 @@
 #include "milvus-storage/filesystem/fs.h"
 #include "milvus-storage/common/constants.h"
 #include "milvus-storage/common/config.h"
+#include "milvus-storage/common/extend_status.h"
 #include "milvus-storage/properties.h"
 
 // Arrow headers for FlushGrowingSegmentData
@@ -959,6 +960,28 @@ struct FieldInfo {
     // For TEXT fields with spillover: reader for temp LOB file
     milvus::segcore::TextLobSpillover* text_lob_spillover = nullptr;
 };
+
+milvus::ErrorCode
+ClassifyMilvusStorageCommitStatus(const arrow::Status& status) {
+    auto detail = milvus_storage::ExtendStatusDetail::UnwrapStatus(status);
+    if (detail) {
+        switch (detail->code()) {
+            case milvus_storage::ExtendStatusCode::TxnExhaustedRetry:
+            case milvus_storage::ExtendStatusCode::TxnResolutionFailed:
+                return milvus::FileWriteFailed;
+            default:
+                break;
+        }
+    }
+
+    if (status.IsInvalid()) {
+        return milvus::DataFormatBroken;
+    }
+    if (status.IsIOError()) {
+        return milvus::FileWriteFailed;
+    }
+    return milvus::UnexpectedError;
+}
 
 struct BM25StatsAccumulator {
     std::unordered_map<uint32_t, int32_t> rows_with_token;
@@ -2213,8 +2236,9 @@ FlushGrowingSegmentData(CSegmentInterface c_segment,
         // commit
         auto commit_result = transaction->Commit();
         if (!commit_result.ok()) {
-            return milvus::FailureCStatus(milvus::UnexpectedError,
-                                          commit_result.status().ToString());
+            auto status = commit_result.status();
+            return milvus::FailureCStatus(
+                ClassifyMilvusStorageCommitStatus(status), status.ToString());
         }
         auto committed_version = commit_result.ValueOrDie();
 
