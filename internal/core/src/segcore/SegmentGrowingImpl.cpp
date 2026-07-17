@@ -392,15 +392,6 @@ SegmentGrowingImpl::mask_with_delete(BitsetTypeView& bitset,
 
 void
 SegmentGrowingImpl::try_remove_chunks(FieldId fieldId) {
-    if (retain_insert_record_chunks_for_flush_) {
-        // StorageV3 TEXT and growing-source flush persist growing segments
-        // through milvus-storage. Interim indexes may also contain raw vector
-        // data, but FlushGrowingSegmentData reads directly from insert_record_
-        // chunks. Keep raw chunks until the flush path can reliably export from
-        // indexes too.
-        return;
-    }
-
     //remove the chunk data to reduce memory consumption
     auto& field_meta = schema_->operator[](fieldId);
     auto data_type = field_meta.get_data_type();
