@@ -1,0 +1,3 @@
+type,rows,chunks,shape,mode,batch,samples,old_prepare_us,new_prepare_us,old_lookup_us,new_lookup_us,old_total_us,new_total_us,speedup,round_min_speedup,round_max_speedup
+int64,2000000,12,uniform_unique,stream_same,1500000,3,743013.011,648779.850,373112.427,25933.791,1113800.055,674713.641,1.6265,1.5961,1.6619
+int64,2000000,12,uniform_unique,load,1500000,3,0.261,640300.578,533192.627,25771.741,533192.888,666017.017,0.7946,0.7866,0.8068

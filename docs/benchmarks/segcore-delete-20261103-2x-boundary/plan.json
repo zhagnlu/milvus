@@ -1,0 +1,175 @@
+{
+  "created_at": "2026-11-03T19:54:11.079331+08:00",
+  "objective": "Find a conservative, measured region with at least 2x total preparation+lookup speedup for actual pairs <= 10000. This is a component benchmark, not end-to-end Milvus latency.",
+  "acceptance": "Require every tested configuration at the chosen gate to reach paired median speedup >= 2 in independent confirmation runs; also inspect the minimum recorded round and prefer a gate with all recorded rounds >= 2. Do not interpret tested-record frequency as production probability.",
+  "discovery": {
+    "command": [
+      "/home/zhanglu/anaconda3/bin/python3",
+      "internal/core/benchmark/run_delete_batch_benchmark.py",
+      "--output",
+      "docs/benchmarks/segcore-delete-20261103-2x-boundary/discovery.csv",
+      "--rows",
+      "1000000,44000000",
+      "--chunks",
+      "16,32,64,128",
+      "--batches",
+      "100,1024,10000",
+      "--types",
+      "int64,varchar16",
+      "--shapes",
+      "uniform_unique,repeated,miss",
+      "--modes",
+      "stream_same,stream_mixed,load",
+      "--rounds",
+      "7",
+      "--seed",
+      "110301",
+      "--cpu",
+      "2"
+    ],
+    "expected_records": 432,
+    "rounds": 7,
+    "seed": 110301,
+    "status": "completed_exit_0"
+  },
+  "confirmation_intent": {
+    "independent_seeds": [
+      110317,
+      110331
+    ],
+    "rounds": 21,
+    "rows": [
+      100000,
+      1000000,
+      8000000,
+      44000000
+    ],
+    "batches": [
+      100,
+      1000,
+      1024,
+      4096,
+      8192,
+      10000
+    ],
+    "types": [
+      "int64",
+      "varchar16"
+    ],
+    "shapes": [
+      "uniform_unique",
+      "dense",
+      "repeated",
+      "repeated_half",
+      "miss"
+    ],
+    "modes": [
+      "stream_same",
+      "stream_mixed",
+      "load"
+    ],
+    "chunks": "Chosen after discovery; test gate and a larger chunk count, plus a lower failing/weak comparison. Keep all discovery results."
+  },
+  "status": "measurements_and_validation_completed",
+  "candidate_chunks": 64,
+  "confirmation_runs": [
+    {
+      "seed": 110317,
+      "rounds": 21,
+      "expected_records": 720,
+      "command": [
+        "/home/zhanglu/anaconda3/bin/python3",
+        "internal/core/benchmark/run_delete_batch_benchmark.py",
+        "--output",
+        "docs/benchmarks/segcore-delete-20261103-2x-boundary/confirmation-110317.csv",
+        "--rows",
+        "100000,1000000,8000000,44000000",
+        "--chunks",
+        "64",
+        "--batches",
+        "100,1000,1024,4096,8192,10000",
+        "--types",
+        "int64,varchar16",
+        "--shapes",
+        "uniform_unique,dense,repeated,repeated_half,miss",
+        "--modes",
+        "stream_same,stream_mixed,load",
+        "--rounds",
+        "21",
+        "--seed",
+        "110317",
+        "--cpu",
+        "2"
+      ],
+      "status": "completed_exit_0"
+    },
+    {
+      "seed": 110331,
+      "rounds": 21,
+      "expected_records": 720,
+      "command": [
+        "/home/zhanglu/anaconda3/bin/python3",
+        "internal/core/benchmark/run_delete_batch_benchmark.py",
+        "--output",
+        "docs/benchmarks/segcore-delete-20261103-2x-boundary/confirmation-110331.csv",
+        "--rows",
+        "100000,1000000,8000000,44000000",
+        "--chunks",
+        "64",
+        "--batches",
+        "100,1000,1024,4096,8192,10000",
+        "--types",
+        "int64,varchar16",
+        "--shapes",
+        "uniform_unique,dense,repeated,repeated_half,miss",
+        "--modes",
+        "stream_same,stream_mixed,load",
+        "--rounds",
+        "21",
+        "--seed",
+        "110331",
+        "--cpu",
+        "2"
+      ],
+      "status": "completed_exit_0"
+    }
+  ],
+  "larger_chunk_run": {
+    "seed": 110331,
+    "rounds": 21,
+    "expected_records": 120,
+    "command": [
+      "/home/zhanglu/anaconda3/bin/python3",
+      "internal/core/benchmark/run_delete_batch_benchmark.py",
+      "--output",
+      "docs/benchmarks/segcore-delete-20261103-2x-boundary/larger-chunks-110331.csv",
+      "--rows",
+      "1000000,44000000",
+      "--chunks",
+      "128",
+      "--batches",
+      "1024,10000",
+      "--types",
+      "int64,varchar16",
+      "--shapes",
+      "uniform_unique,dense,repeated,repeated_half,miss",
+      "--modes",
+      "stream_same,stream_mixed,load",
+      "--rounds",
+      "21",
+      "--seed",
+      "110331",
+      "--cpu",
+      "2"
+    ],
+    "status": "completed_exit_0"
+  },
+  "selected_gate": {
+    "min_pk_chunks": 64,
+    "min_actual_pairs": 1024,
+    "max_actual_pairs": 10000,
+    "requires_sorted_pk_column_lookup": true,
+    "implemented_in_production": false
+  },
+  "confirmation_acceptance": "All configuration paired medians >=2 in both confirmation seeds. Three target-range records include a round below2; the stronger all-round preference was not met. All raw records retained."
+}

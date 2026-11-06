@@ -1,0 +1,123 @@
+{
+  "created_at": "2026-11-05T13:54:11.025404+00:00",
+  "rows": [
+    1000000,
+    5000000,
+    44000000
+  ],
+  "chunks": [
+    16,
+    32
+  ],
+  "batches": [
+    1,
+    10,
+    100,
+    500
+  ],
+  "types": [
+    "int64",
+    "varchar16"
+  ],
+  "shapes": [
+    "uniform_unique",
+    "repeated",
+    "miss"
+  ],
+  "modes": [
+    "stream_same",
+    "stream_mixed",
+    "load"
+  ],
+  "seeds": [
+    110501,
+    110517
+  ],
+  "rounds": 21,
+  "cpu": 2,
+  "expected_per_seed": 432,
+  "source_before": {
+    "internal/core/src/segcore/ChunkedSegmentSealedImpl.cpp": "3dcf677d3210bd618c5fd7f60d124039f75b5c24710d27010a6472df68f013c1",
+    "internal/core/src/common/GallopingSearch.h": "732aacf0954a8e08ed77250a50e8a36f92d482d755c872e03fb252939995394b",
+    "internal/core/benchmark/DeleteBatchBenchmark.cpp": "3d955b5b6b2df515d1e15f8e0aad80f99c0645d24be768b798467a5f8e716550",
+    "internal/core/benchmark/run_delete_batch_benchmark.py": "d24f72c1792f27c881c989042d814ab8b423ba24eead0e74b2ea9889f9a99780"
+  },
+  "status": "completed",
+  "runs": [
+    {
+      "seed": 110501,
+      "output": "seed-110501.csv",
+      "command": [
+        "/home/zhanglu/anaconda3/bin/python3",
+        "/mnt/2.6/milvus/internal/core/benchmark/run_delete_batch_benchmark.py",
+        "--output",
+        "/mnt/2.6/milvus/docs/benchmarks/segcore-delete-20261105-small-pairs/seed-110501.csv",
+        "--rows",
+        "1000000,5000000,44000000",
+        "--chunks",
+        "16,32",
+        "--batches",
+        "1,10,100,500",
+        "--types",
+        "int64,varchar16",
+        "--shapes",
+        "uniform_unique,repeated,miss",
+        "--modes",
+        "stream_same,stream_mixed,load",
+        "--rounds",
+        "21",
+        "--seed",
+        "110501",
+        "--cpu",
+        "2"
+      ],
+      "status": "completed",
+      "started_at": "2026-11-05T13:54:11.027068+00:00",
+      "exit_code": 0,
+      "records": 432,
+      "completed_at": "2026-11-05T13:54:42.792379+00:00",
+      "csv_sha256": "e5cf3e9d460993c515a11fb7370a1730a1769dd0afc859e4a0b18916a75698d0"
+    },
+    {
+      "seed": 110517,
+      "output": "seed-110517.csv",
+      "command": [
+        "/home/zhanglu/anaconda3/bin/python3",
+        "/mnt/2.6/milvus/internal/core/benchmark/run_delete_batch_benchmark.py",
+        "--output",
+        "/mnt/2.6/milvus/docs/benchmarks/segcore-delete-20261105-small-pairs/seed-110517.csv",
+        "--rows",
+        "1000000,5000000,44000000",
+        "--chunks",
+        "16,32",
+        "--batches",
+        "1,10,100,500",
+        "--types",
+        "int64,varchar16",
+        "--shapes",
+        "uniform_unique,repeated,miss",
+        "--modes",
+        "stream_same,stream_mixed,load",
+        "--rounds",
+        "21",
+        "--seed",
+        "110517",
+        "--cpu",
+        "2"
+      ],
+      "status": "completed",
+      "started_at": "2026-11-05T13:54:42.792758+00:00",
+      "exit_code": 0,
+      "records": 432,
+      "completed_at": "2026-11-05T13:55:14.743791+00:00",
+      "csv_sha256": "42c7c875bdde4f088f24d74e7d3943b260703d82c3cc60ba86328a5e6dc97b0c"
+    }
+  ],
+  "source_after": {
+    "internal/core/src/segcore/ChunkedSegmentSealedImpl.cpp": "3dcf677d3210bd618c5fd7f60d124039f75b5c24710d27010a6472df68f013c1",
+    "internal/core/src/common/GallopingSearch.h": "732aacf0954a8e08ed77250a50e8a36f92d482d755c872e03fb252939995394b",
+    "internal/core/benchmark/DeleteBatchBenchmark.cpp": "3d955b5b6b2df515d1e15f8e0aad80f99c0645d24be768b798467a5f8e716550",
+    "internal/core/benchmark/run_delete_batch_benchmark.py": "d24f72c1792f27c881c989042d814ab8b423ba24eead0e74b2ea9889f9a99780"
+  },
+  "completed_at": "2026-11-05T13:55:14.745493+00:00"
+}

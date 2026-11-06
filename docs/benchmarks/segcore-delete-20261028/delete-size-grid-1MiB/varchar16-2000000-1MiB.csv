@@ -1,0 +1,5 @@
+type,rows,chunks,shape,mode,batch,samples,old_prepare_us,new_prepare_us,old_lookup_us,new_lookup_us,old_total_us,new_total_us,speedup,round_min_speedup,round_max_speedup
+varchar16,2000000,69,uniform_unique,stream_same,1024,12,154.436,159.512,5506.562,644.039,5663.166,803.551,6.9937,6.9158,7.0672
+varchar16,2000000,69,uniform_unique,stream_same,65536,3,19706.631,19099.370,321350.505,10859.105,341060.404,29958.475,11.3757,10.7959,11.3844
+varchar16,2000000,69,uniform_unique,load,1024,12,0.029,145.168,5420.267,643.263,5420.313,787.287,6.7913,6.7828,7.1754
+varchar16,2000000,69,uniform_unique,load,65536,3,0.060,18219.733,318616.324,10702.674,318616.373,28936.824,10.9462,10.9141,11.0936

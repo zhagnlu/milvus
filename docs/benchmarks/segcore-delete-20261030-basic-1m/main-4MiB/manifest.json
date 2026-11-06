@@ -1,0 +1,78 @@
+{
+  "output_dir": "docs/benchmarks/segcore-delete-20261030-basic-1m/main-4MiB",
+  "rows": [
+    1000000
+  ],
+  "batches": [
+    100,
+    1000,
+    1024,
+    2000
+  ],
+  "cell_mib": [
+    4
+  ],
+  "types": "int64,varchar16",
+  "modes": "stream_same,stream_mixed,load",
+  "rounds": 21,
+  "seed": 103001,
+  "cpu": 2,
+  "runs": [
+    {
+      "command": [
+        "/home/zhanglu/anaconda3/bin/python3",
+        "internal/core/benchmark/run_delete_batch_benchmark.py",
+        "--output",
+        "docs/benchmarks/segcore-delete-20261030-basic-1m/main-4MiB/int64-1000000-4MiB.csv",
+        "--rows",
+        "1000000",
+        "--batches",
+        "100,1000,1024,2000",
+        "--chunks",
+        "6",
+        "--types",
+        "int64",
+        "--shapes",
+        "uniform_unique",
+        "--modes",
+        "stream_same,stream_mixed,load",
+        "--rounds",
+        "21",
+        "--seed",
+        "103001",
+        "--cpu",
+        "2"
+      ],
+      "chunks": 6,
+      "skipped_batches": []
+    },
+    {
+      "command": [
+        "/home/zhanglu/anaconda3/bin/python3",
+        "internal/core/benchmark/run_delete_batch_benchmark.py",
+        "--output",
+        "docs/benchmarks/segcore-delete-20261030-basic-1m/main-4MiB/varchar16-1000000-4MiB.csv",
+        "--rows",
+        "1000000",
+        "--batches",
+        "100,1000,1024,2000",
+        "--chunks",
+        "9",
+        "--types",
+        "varchar16",
+        "--shapes",
+        "uniform_unique",
+        "--modes",
+        "stream_same,stream_mixed,load",
+        "--rounds",
+        "21",
+        "--seed",
+        "103001",
+        "--cpu",
+        "2"
+      ],
+      "chunks": 9,
+      "skipped_batches": []
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "observed_at": "2026-11-04T12:46:47.156142+00:00",
+  "loadavg": "7.57 5.78 4.57 9/2381 4",
+  "note": "One host load snapshot during measurements; CPU affinity does not reserve an exclusive CPU. Do not infer the cause of timing outliers from this snapshot.",
+  "later_observation": {
+    "time": "2026-11-04T12:55:27.890273+00:00",
+    "loadavg": "22.28 19.08 11.67 23/2482 7",
+    "cpu_pressure": "some avg10=78.49 avg60=76.23 avg300=59.94 total=88616548319\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0",
+    "memory_pressure": "some avg10=0.00 avg60=0.01 avg300=0.01 total=628393652\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=555326463",
+    "observed_all_logical_cpus_busy_percent": 100,
+    "host_process_observation": "Read-only host ps identified multiple concurrent cc1plus and rustc processes in addition to the single-thread delete benchmark. No other jobs were modified."
+  }
+}

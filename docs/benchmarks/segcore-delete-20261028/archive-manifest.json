@@ -1,0 +1,1004 @@
+[
+  {
+    "file": "initial/delete-threshold-all.csv",
+    "source": "/tmp/delete-threshold-all.csv",
+    "bytes": 204078,
+    "sha256": "4e6ed22c54bde5bf7be0d0c52926b441e3b63514c82e7226d80e6494e7ec6d8c"
+  },
+  {
+    "file": "initial/delete-threshold-boundary.csv",
+    "source": "/tmp/delete-threshold-boundary.csv",
+    "bytes": 35560,
+    "sha256": "896d84f53e9d392805ea51811160d4eca7c8af24577e2ef14aad33f808128314"
+  },
+  {
+    "file": "initial/delete-threshold-large-sparse.csv",
+    "source": "/tmp/delete-threshold-large-sparse.csv",
+    "bytes": 2671,
+    "sha256": "abb2e65eb6c18b5fbc7cfa622601ea0995fbc86f3a1b53e8dff2fab3ef8afc63"
+  },
+  {
+    "file": "initial/delete-threshold-pk-cell-layout.csv",
+    "source": "/tmp/delete-threshold-pk-cell-layout.csv",
+    "bytes": 2976,
+    "sha256": "8659497bf9286572c285688f742de7ae0dee0de03accbd5ddeb33d6e7b9f907c"
+  },
+  {
+    "file": "initial/delete-threshold-smoke.csv",
+    "source": "/tmp/delete-threshold-smoke.csv",
+    "bytes": 12653,
+    "sha256": "ecbb92146ecb54799c3b72e62a569278afa754438ce300aa093a8056676fecd1"
+  },
+  {
+    "file": "initial/delete-threshold-sweep.csv",
+    "source": "/tmp/delete-threshold-sweep.csv",
+    "bytes": 141073,
+    "sha256": "80b39e3ac7880c43cd8cc65953a0c9138d458b42a2fb5e4e46143d0fe9f37a34"
+  },
+  {
+    "file": "initial/delete-threshold-system-group-layout.csv",
+    "source": "/tmp/delete-threshold-system-group-layout.csv",
+    "bytes": 1177,
+    "sha256": "2d47016b570e5fa83632f82e5d59254c49fb09302ebcd15232c19d65316dabd3"
+  },
+  {
+    "file": "initial/delete-threshold-boundary.metadata.txt",
+    "source": "/tmp/delete-threshold-boundary.metadata.txt",
+    "bytes": 4331,
+    "sha256": "a56a4ddecaf77463fac2412e03bb84597470b650f3740177112d7b7c5a9dcf6d"
+  },
+  {
+    "file": "initial/delete-threshold-large-sparse.metadata.txt",
+    "source": "/tmp/delete-threshold-large-sparse.metadata.txt",
+    "bytes": 4303,
+    "sha256": "e36dddd4a4f084da92920e63209da2c31f9d48000e106115988f437bc66111ed"
+  },
+  {
+    "file": "initial/delete-threshold-pk-cell-layout.metadata.txt",
+    "source": "/tmp/delete-threshold-pk-cell-layout.metadata.txt",
+    "bytes": 4289,
+    "sha256": "d155518d4ad73b4c2f828d1fa618b75b26819eb18177491ef7d0ace4dccc8e19"
+  },
+  {
+    "file": "initial/delete-threshold-smoke.metadata.txt",
+    "source": "/tmp/delete-threshold-smoke.metadata.txt",
+    "bytes": 4315,
+    "sha256": "c3ae3d0978b807bab5327c34c4e20ecc1e9b39fd96df8ccea53b54cf6831d6e8"
+  },
+  {
+    "file": "initial/delete-threshold-sweep.metadata.txt",
+    "source": "/tmp/delete-threshold-sweep.metadata.txt",
+    "bytes": 4358,
+    "sha256": "770e97b896526686f26e8cfe494549a91d242decd641a1f1ac11585d91526ae4"
+  },
+  {
+    "file": "initial/delete-threshold-system-group-layout.metadata.txt",
+    "source": "/tmp/delete-threshold-system-group-layout.metadata.txt",
+    "bytes": 4286,
+    "sha256": "9f34cbfc07e0c7857606a10fbcecfc3495f7074af45c2a26f4f21307b313cea9"
+  },
+  {
+    "file": "lookup-only/delete-opt-lookup-bench.log",
+    "source": "/tmp/delete-opt-lookup-bench.log",
+    "bytes": 4165,
+    "sha256": "720fe08dfecf8eea4c64300276bf08b1b70d2e2309de384d17cfaeb77b6b0b5d"
+  },
+  {
+    "file": "lookup-only/delete_opt_lookup_bench.cpp",
+    "source": "/tmp/delete_opt_lookup_bench.cpp",
+    "bytes": 3950,
+    "sha256": "83d3a21b2d00616d37491d02851ca81296546e4bb59284a4df9f1ae622f507f9"
+  },
+  {
+    "file": "lookup-only/delete_opt_lookup_bench.py",
+    "source": "/tmp/delete_opt_lookup_bench.py",
+    "bytes": 2028,
+    "sha256": "7632bf4a891dcf47a179c2f6109ddf6b451f24dd0221efb5ecc3c5fc64b10ff9"
+  },
+  {
+    "file": "layouts/delete-real-layout-bridge-int.csv",
+    "source": "/tmp/delete-real-layout-bridge-int.csv",
+    "bytes": 16369,
+    "sha256": "d2609b4074f1425f610d3772d706d67ce935ebd8015d5c5d0fb9040a4ac29a38"
+  },
+  {
+    "file": "layouts/delete-real-layout-bridge-str.csv",
+    "source": "/tmp/delete-real-layout-bridge-str.csv",
+    "bytes": 17265,
+    "sha256": "957ff863d3e91814af2df239f57d0a3346651d02e1953167a901ce28c58aaf64"
+  },
+  {
+    "file": "layouts/delete-real-layout-bulk-int.csv",
+    "source": "/tmp/delete-real-layout-bulk-int.csv",
+    "bytes": 3804,
+    "sha256": "ebe24608d8878aa6d52247834b8db334c4b4052672b8bd0849396baafd92683d"
+  },
+  {
+    "file": "layouts/delete-real-layout-bulk-str.csv",
+    "source": "/tmp/delete-real-layout-bulk-str.csv",
+    "bytes": 4049,
+    "sha256": "b5c2f56e613d70e058403964258f44ecf5b7f888ab5042a2aa60f4623bbe332d"
+  },
+  {
+    "file": "layouts/delete-real-layout-edge-int.csv",
+    "source": "/tmp/delete-real-layout-edge-int.csv",
+    "bytes": 22923,
+    "sha256": "20513cc05469fe9c7afc1595abe6a245ac9c71ab2b9ad2559ccce5fdd267719a"
+  },
+  {
+    "file": "layouts/delete-real-layout-edge-str.csv",
+    "source": "/tmp/delete-real-layout-edge-str.csv",
+    "bytes": 24230,
+    "sha256": "784b9ec6c39b5a9ff0ed24510781973eb619b38a9d4076177cd664e42c09c9bd"
+  },
+  {
+    "file": "layouts/delete-real-layout-fragmented-small.csv",
+    "source": "/tmp/delete-real-layout-fragmented-small.csv",
+    "bytes": 2808,
+    "sha256": "54edc229b139c065eecf9c33327e3e511b1420fab5957ba412d34473d3a1ca4d"
+  },
+  {
+    "file": "layouts/delete-real-layout-gate-boundary.csv",
+    "source": "/tmp/delete-real-layout-gate-boundary.csv",
+    "bytes": 3562,
+    "sha256": "5bc3331128d054557d3c80cfc7476242371dc8adcaf25e5dc24e0980455d3068"
+  },
+  {
+    "file": "layouts/delete-real-layout-large-int.csv",
+    "source": "/tmp/delete-real-layout-large-int.csv",
+    "bytes": 30842,
+    "sha256": "4ec19c2c600891bddd2a0c1486438b5cc6bf5b03f3eb32cc0a9453f7f0214895"
+  },
+  {
+    "file": "layouts/delete-real-layout-large-str.csv",
+    "source": "/tmp/delete-real-layout-large-str.csv",
+    "bytes": 32975,
+    "sha256": "2b1b1bbe00ed26a35027223d4a2dbd1b04e6e46f4d1a95a9c9b94374dbe2e443"
+  },
+  {
+    "file": "layouts/delete-real-layout-medium-int.csv",
+    "source": "/tmp/delete-real-layout-medium-int.csv",
+    "bytes": 42686,
+    "sha256": "4b7325cdfce7a13f19d4525def4e46d7be0cdae826402d995ea90c1010e7fb0e"
+  },
+  {
+    "file": "layouts/delete-real-layout-medium-str.csv",
+    "source": "/tmp/delete-real-layout-medium-str.csv",
+    "bytes": 45566,
+    "sha256": "5dfd0bc7bfa9f169e503ce4b4885b1c7a6d379f87cde466f21a2ca3c21fb932f"
+  },
+  {
+    "file": "layouts/delete-real-layout-small.csv",
+    "source": "/tmp/delete-real-layout-small.csv",
+    "bytes": 28098,
+    "sha256": "9f71cb8a95199eb8a90efd785860d89d39b50d96fb5dff8f54954cb49966249b"
+  },
+  {
+    "file": "layouts/delete-real-layout-wide-int.csv",
+    "source": "/tmp/delete-real-layout-wide-int.csv",
+    "bytes": 16967,
+    "sha256": "f7b4b825ca8bf1c51aaa0e6261b01d51226a48c9ba2c8a5d3c7045e189f390b8"
+  },
+  {
+    "file": "layouts/delete-real-layout-wide-str.csv",
+    "source": "/tmp/delete-real-layout-wide-str.csv",
+    "bytes": 21414,
+    "sha256": "6ad298bcd662a0e9f936cd2a4d25c8e63696d5a9accc6c033a66c33c2af41065"
+  },
+  {
+    "file": "layouts/delete-real-layout-bridge-int.metadata.txt",
+    "source": "/tmp/delete-real-layout-bridge-int.metadata.txt",
+    "bytes": 4332,
+    "sha256": "63c96c716c582e61aa2f00a1c7bdac688a89598d27586bf99f5d5a2b7c230aa1"
+  },
+  {
+    "file": "layouts/delete-real-layout-bridge-str.metadata.txt",
+    "source": "/tmp/delete-real-layout-bridge-str.metadata.txt",
+    "bytes": 4336,
+    "sha256": "98ec2fa3d52973f43ea22dbe1b1afbcacd717c66a138f4d8981e677f685fdd97"
+  },
+  {
+    "file": "layouts/delete-real-layout-bulk-int.metadata.txt",
+    "source": "/tmp/delete-real-layout-bulk-int.metadata.txt",
+    "bytes": 4315,
+    "sha256": "b5b706f3b9d198ed8c51bed914ac73d592a26bf8dd9bed001d1063eae10b0135"
+  },
+  {
+    "file": "layouts/delete-real-layout-bulk-str.metadata.txt",
+    "source": "/tmp/delete-real-layout-bulk-str.metadata.txt",
+    "bytes": 4319,
+    "sha256": "b1814b088226dbb9002bd9a4e82c306a94a710eadf6b8ad620d1c3305ce952da"
+  },
+  {
+    "file": "layouts/delete-real-layout-edge-int.metadata.txt",
+    "source": "/tmp/delete-real-layout-edge-int.metadata.txt",
+    "bytes": 4339,
+    "sha256": "eabe5fdeed7fb1578700a78a11d6139cd79d46223ebffbaef3761bbaff454d27"
+  },
+  {
+    "file": "layouts/delete-real-layout-edge-str.metadata.txt",
+    "source": "/tmp/delete-real-layout-edge-str.metadata.txt",
+    "bytes": 4343,
+    "sha256": "8d9c9ffef3b4e05b8accabee5474dfe75adf40c0a4fb7ca0bf7c0bd0c960d4bc"
+  },
+  {
+    "file": "layouts/delete-real-layout-fragmented-small.metadata.txt",
+    "source": "/tmp/delete-real-layout-fragmented-small.metadata.txt",
+    "bytes": 4299,
+    "sha256": "d3e6f914523344c824efbfaefee9f0fb14b128c4087610eed6649143502dc6a1"
+  },
+  {
+    "file": "layouts/delete-real-layout-gate-boundary.metadata.txt",
+    "source": "/tmp/delete-real-layout-gate-boundary.metadata.txt",
+    "bytes": 4290,
+    "sha256": "1c98a1db7061eceb83b0be6accfe411231d7ab9e18791e2efa264beacfd91b1c"
+  },
+  {
+    "file": "layouts/delete-real-layout-large-int.metadata.txt",
+    "source": "/tmp/delete-real-layout-large-int.metadata.txt",
+    "bytes": 4347,
+    "sha256": "89b24b6b03e7e117f76e19428d6968397227319e06f00a6f29fcd31569f80cac"
+  },
+  {
+    "file": "layouts/delete-real-layout-large-str.metadata.txt",
+    "source": "/tmp/delete-real-layout-large-str.metadata.txt",
+    "bytes": 4351,
+    "sha256": "21bfe96ab61cd953b3af124282e9bc913a72066c851281dcd9bc0a938716d794"
+  },
+  {
+    "file": "layouts/delete-real-layout-medium-int.metadata.txt",
+    "source": "/tmp/delete-real-layout-medium-int.metadata.txt",
+    "bytes": 4346,
+    "sha256": "1d52cbccd1cdc05953d5003cd55ceb05954979f213ec4cf858a6aceb23215fad"
+  },
+  {
+    "file": "layouts/delete-real-layout-medium-str.metadata.txt",
+    "source": "/tmp/delete-real-layout-medium-str.metadata.txt",
+    "bytes": 4351,
+    "sha256": "1010034c5a688f75b32564931aed03476dc0fafb0489b59e58953e73e7092d91"
+  },
+  {
+    "file": "layouts/delete-real-layout-small.metadata.txt",
+    "source": "/tmp/delete-real-layout-small.metadata.txt",
+    "bytes": 4343,
+    "sha256": "5f2943ad5aa2f008c43fab777786380729874f1ccacabc1cc44312b82217b93b"
+  },
+  {
+    "file": "layouts/delete-real-layout-wide-int.metadata.txt",
+    "source": "/tmp/delete-real-layout-wide-int.metadata.txt",
+    "bytes": 4333,
+    "sha256": "fe4032940d58e19d597729bfaacfc795c23d671514fbd83d206d939a71a3e0a0"
+  },
+  {
+    "file": "layouts/delete-real-layout-wide-str.metadata.txt",
+    "source": "/tmp/delete-real-layout-wide-str.metadata.txt",
+    "bytes": 4341,
+    "sha256": "977af478f5b8c5dd385980651c4c64ea05711344cc7cbe5ce63b60d0db606b29"
+  },
+  {
+    "file": "layouts/delete-layout-analysis.json",
+    "source": "/tmp/delete-layout-analysis.json",
+    "bytes": 104636,
+    "sha256": "bc59520ce58bc9165c32f0d34b2e9180f7d13aa9a4597ad61804754dc4cab162"
+  },
+  {
+    "file": "layouts/delete-layout-benchmark-sources.json",
+    "source": "/tmp/delete-layout-benchmark-sources.json",
+    "bytes": 251,
+    "sha256": "2953a63886c40105bd7391abb39e1af1003e722c88c902dc56fb4cf384f53471"
+  },
+  {
+    "file": "layouts/delete-layout-results.csv",
+    "source": "/tmp/delete-layout-results.csv",
+    "bytes": 341345,
+    "sha256": "0d4d9ca61864905f15dd60c6a4bfbe9121996dfad1579cea41ac3adb0a9879fe"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-100000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/int64-100000-4MiB.csv",
+    "bytes": 1086,
+    "sha256": "e05b59f80857e700ed3b159b1ffa5c77b2c1c6725538b985d3d633a4b9e5a2c1"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-100000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/int64-100000-4MiB.metadata.txt",
+    "bytes": 4378,
+    "sha256": "cf498ec65aa0201ac84cce804fb45132c2d5e78c883a69bf73f8fb26060d7edd"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-1000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/int64-1000000-4MiB.csv",
+    "bytes": 1621,
+    "sha256": "0d7fb85e89e2c0c7d636058b4113560912fcebee48e50e5f3cd957f420341db4"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-1000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/int64-1000000-4MiB.metadata.txt",
+    "bytes": 4394,
+    "sha256": "50be86273d9c18c93557aefa60c109b972582230c193ea1997ec01daccfd93e6"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-2000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/int64-2000000-4MiB.csv",
+    "bytes": 1636,
+    "sha256": "58462578e9a2567d39ad1cba52b98fc62000d16f6b67a0e0b35a2d6eb1eb193d"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-2000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/int64-2000000-4MiB.metadata.txt",
+    "bytes": 4395,
+    "sha256": "fe115ad13c16af03ac473deda969a3ddb5f5ad79b39f6ac1e08ca563d15a2e2e"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-44000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/int64-44000000-4MiB.csv",
+    "bytes": 1710,
+    "sha256": "381f2a194afde511a6d8d782f9a2899085134975af3bb57d2d53b7ff65eb8b38"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-44000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/int64-44000000-4MiB.metadata.txt",
+    "bytes": 4398,
+    "sha256": "e92ce63a880583a97621c5c734ced08c7fc9bff11e5d2eead0ef01fa03246454"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-500000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/int64-500000-4MiB.csv",
+    "bytes": 1600,
+    "sha256": "553030c8d519fe8952c9590a1291d85aa25eb48f26e1558fa0097bcb8f08ee2d"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-500000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/int64-500000-4MiB.metadata.txt",
+    "bytes": 4392,
+    "sha256": "c19c3c349ff4d3f509c4cd1cce5551074095b03844c48169ee69045041a7507d"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-8000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/int64-8000000-4MiB.csv",
+    "bytes": 1649,
+    "sha256": "84cf2cd204758cbf551728ca9fbc695f9c958844fef24233ca4e9c4931362dfe"
+  },
+  {
+    "file": "delete-size-grid-4MiB/int64-8000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/int64-8000000-4MiB.metadata.txt",
+    "bytes": 4395,
+    "sha256": "4222f9e0b88774310a753e955d5a7cc4c5051753b42b2dc34706e158d8c0e6c1"
+  },
+  {
+    "file": "delete-size-grid-4MiB/manifest.json",
+    "source": "/tmp/delete-size-grid-4MiB/manifest.json",
+    "bytes": 8533,
+    "sha256": "423a575a02c0b92de261acfa0e0bfe7ae68edf8831d4df98d3cf059509af9bb1"
+  },
+  {
+    "file": "delete-size-grid-4MiB/matrix.csv",
+    "source": "/tmp/delete-size-grid-4MiB/matrix.csv",
+    "bytes": 19447,
+    "sha256": "5e7f211ee41592f74be5d046e8ed229bbb9c969c3b80bcb0a93c159e3ff7d18a"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-100000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-100000-4MiB.csv",
+    "bytes": 1131,
+    "sha256": "c12ffd40903ae9efb007d40a8b966d4ca3e8c323bfc341199ac96094976cadc4"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-100000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-100000-4MiB.metadata.txt",
+    "bytes": 4386,
+    "sha256": "66239f00751ffcb7129a48bf551748ce059a3450645119cd58381b8d9a1509a5"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-1000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-1000000-4MiB.csv",
+    "bytes": 1691,
+    "sha256": "9045dbeb05f48531e05277d991b7440811bfaab8c70ace8e0bc42e89bf69d6a8"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-1000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-1000000-4MiB.metadata.txt",
+    "bytes": 4402,
+    "sha256": "17a22081c1c90eed94d6fa5127508a9dca99ead1add72d4d526f3f8134e147cc"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-2000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-2000000-4MiB.csv",
+    "bytes": 1720,
+    "sha256": "02de53fa196bfb8a8926c110d93a4c11d01dd83e976fd0026a10b81c2c47f016"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-2000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-2000000-4MiB.metadata.txt",
+    "bytes": 4403,
+    "sha256": "0258827ed4d8ea19960a916ecbb5ddce23ba0c81d3a07cc3c384f7ca3b8ba21a"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-44000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-44000000-4MiB.csv",
+    "bytes": 1817,
+    "sha256": "fda4f7ecab67a89ac9c70a3542d3fecf459e481f449e79fb06aeee3413161613"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-44000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-44000000-4MiB.metadata.txt",
+    "bytes": 4406,
+    "sha256": "d255d90020a06f96969d317689161bc3c94eed903ff7de5595ba80f5fa487023"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-500000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-500000-4MiB.csv",
+    "bytes": 1674,
+    "sha256": "5a9a6f03422a2014abd7510a36e760e3592b8b07c78d9c037163b67e47d902fb"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-500000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-500000-4MiB.metadata.txt",
+    "bytes": 4400,
+    "sha256": "6dc91a7ccf285779ada1ce2e10f5b7c87ce57b0d2b0875106f655b4fd9dfc8d0"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-8000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-8000000-4MiB.csv",
+    "bytes": 1737,
+    "sha256": "8c98ed248f43a70605239428990e130746a3595efb08da50a5824a9b0780ee3f"
+  },
+  {
+    "file": "delete-size-grid-4MiB/varchar16-8000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-4MiB/varchar16-8000000-4MiB.metadata.txt",
+    "bytes": 4403,
+    "sha256": "a131fb3e82fb1bfb5f591fd2d3c032f7d7ea74434e1c6f2de478b07ab3ba712d"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-1000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/int64-1000000-1MiB.csv",
+    "bytes": 654,
+    "sha256": "7b7e7231e9b64aad23f42eb2c810f80ee14c771db4bbf31efed90f7fbee31510"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-1000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/int64-1000000-1MiB.metadata.txt",
+    "bytes": 4372,
+    "sha256": "2ceac77eb0693a69616b81bec182e61541f0b03cf2a73cd4d3033c80ef293a81"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-2000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/int64-2000000-1MiB.csv",
+    "bytes": 657,
+    "sha256": "8b524ff172c0795eeb372b0dcf2149ba152cfaf51f01e424a18545d64c3306e6"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-2000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/int64-2000000-1MiB.metadata.txt",
+    "bytes": 4372,
+    "sha256": "ecf6c2ef314885eb8209165caa3ebc4500e4764e6d5edbcf347da131eb0b4d15"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-44000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/int64-44000000-1MiB.csv",
+    "bytes": 696,
+    "sha256": "4edeb73ea7d06204a4ac44e939de260cf10be14917a74447620cedecf8d60d14"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-44000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/int64-44000000-1MiB.metadata.txt",
+    "bytes": 4376,
+    "sha256": "b11399f8daad728c3e15ec4614a0e654212aa0b6b4c5e02cedf894ef50ff4cf7"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-8000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/int64-8000000-1MiB.csv",
+    "bytes": 673,
+    "sha256": "d64125a62f758557344627c3f6e48a57dc11790d658a41d381a53632cffb8e29"
+  },
+  {
+    "file": "delete-size-grid-1MiB/int64-8000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/int64-8000000-1MiB.metadata.txt",
+    "bytes": 4373,
+    "sha256": "1b7ef90dc692f40cbb66ae8f5f32889b40a2fa643b2a8d99a0e9c9a1cf69ccfc"
+  },
+  {
+    "file": "delete-size-grid-1MiB/manifest.json",
+    "source": "/tmp/delete-size-grid-1MiB/manifest.json",
+    "bytes": 5554,
+    "sha256": "23bc9265f6be0b8229cce2a9239d0261acb3383b8c99dbb685b40cd15b431464"
+  },
+  {
+    "file": "delete-size-grid-1MiB/matrix.csv",
+    "source": "/tmp/delete-size-grid-1MiB/matrix.csv",
+    "bytes": 4925,
+    "sha256": "3bf7fd6f6e150a6bd21d272effbab0cf6a04997148a0be7b0a7f4608ef1d3412"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-1000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-1000000-1MiB.csv",
+    "bytes": 680,
+    "sha256": "c34f6ba778f3091fe4a1e3d9daaed3162d6d00d617a2518816b9b459f81f444f"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-1000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-1000000-1MiB.metadata.txt",
+    "bytes": 4380,
+    "sha256": "59c659b626faff10033b04801676a12ba3f059f10cfdd8c50700ebf5a57de00c"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-2000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-2000000-1MiB.csv",
+    "bytes": 688,
+    "sha256": "0753ad797125bd609aafa27c3f649197d404fa646a4811614eb1543b0fe5b287"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-2000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-2000000-1MiB.metadata.txt",
+    "bytes": 4380,
+    "sha256": "9bdbda881927beded8ce5ea887cee232a57709c7daf4b084f2a51e9670bcf6d3"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-44000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-44000000-1MiB.csv",
+    "bytes": 728,
+    "sha256": "bb09807966fa5d77991ef8cf7a5c387f97a740da8f42c3963e6e7f9ab56d17a3"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-44000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-44000000-1MiB.metadata.txt",
+    "bytes": 4384,
+    "sha256": "b05e28569728af0737742e1b5acee271b61879953e41644f88959743324e7ef0"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-8000000-1MiB.csv",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-8000000-1MiB.csv",
+    "bytes": 710,
+    "sha256": "a2cd4741049da1ce654924a795aa3dcda60883577949698acf5cd79d99b1e060"
+  },
+  {
+    "file": "delete-size-grid-1MiB/varchar16-8000000-1MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-1MiB/varchar16-8000000-1MiB.metadata.txt",
+    "bytes": 4381,
+    "sha256": "787e0b915a7d36e525d78d99b5766808d9fb04615d835b135da8d744343551cc"
+  },
+  {
+    "file": "delete-size-grid-bulk/int64-2000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-bulk/int64-2000000-4MiB.csv",
+    "bytes": 439,
+    "sha256": "23909cde4f9cf9cdcad58a030d41ec06a34e8fb3cab86a5e813ac726b1cb22b6"
+  },
+  {
+    "file": "delete-size-grid-bulk/int64-2000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-bulk/int64-2000000-4MiB.metadata.txt",
+    "bytes": 4369,
+    "sha256": "122711105464ec866415615135b32e471bba4597c953fada8107f2143f01af19"
+  },
+  {
+    "file": "delete-size-grid-bulk/int64-44000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-bulk/int64-44000000-4MiB.csv",
+    "bytes": 452,
+    "sha256": "0d11d93d15f381de5bfcb96518dd668eaf429d460069433adb815c9e848d3958"
+  },
+  {
+    "file": "delete-size-grid-bulk/int64-44000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-bulk/int64-44000000-4MiB.metadata.txt",
+    "bytes": 4372,
+    "sha256": "49e67df6884c36dc3b3875d671d8157acb1da5442e120f3e26d910d314a70164"
+  },
+  {
+    "file": "delete-size-grid-bulk/int64-8000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-bulk/int64-8000000-4MiB.csv",
+    "bytes": 442,
+    "sha256": "9355da441695cb6b12eb512741ef61487632628251f56e826f6be07b46d7f59b"
+  },
+  {
+    "file": "delete-size-grid-bulk/int64-8000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-bulk/int64-8000000-4MiB.metadata.txt",
+    "bytes": 4369,
+    "sha256": "9703e4c87c96362996e691dabb4bfff238b357453fb34ff6fea7a152e4a87975"
+  },
+  {
+    "file": "delete-size-grid-bulk/manifest.json",
+    "source": "/tmp/delete-size-grid-bulk/manifest.json",
+    "bytes": 4199,
+    "sha256": "5cb7834dfe09c9bb49e28c67614831c8b849077c75c974be6e9d98b345bd12c4"
+  },
+  {
+    "file": "delete-size-grid-bulk/matrix.csv",
+    "source": "/tmp/delete-size-grid-bulk/matrix.csv",
+    "bytes": 2114,
+    "sha256": "4754e69508c45359acfbac025f5fc0e374eeb9891d42f0c26733c88f84aedf6c"
+  },
+  {
+    "file": "delete-size-grid-bulk/varchar16-2000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-bulk/varchar16-2000000-4MiB.csv",
+    "bytes": 457,
+    "sha256": "75969bf2fb7398f789f71b3e96b21c060285be4e7ab8e35507357149c192d38a"
+  },
+  {
+    "file": "delete-size-grid-bulk/varchar16-2000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-bulk/varchar16-2000000-4MiB.metadata.txt",
+    "bytes": 4377,
+    "sha256": "3307fe706fc002de180ed41013a6fcd79b2c31a988f1510f330a1f080c72a1fd"
+  },
+  {
+    "file": "delete-size-grid-bulk/varchar16-44000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-bulk/varchar16-44000000-4MiB.csv",
+    "bytes": 471,
+    "sha256": "4106eb95781c556ad7f15e8573baf32feb58af564c28220d7fcfb7b315a44164"
+  },
+  {
+    "file": "delete-size-grid-bulk/varchar16-44000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-bulk/varchar16-44000000-4MiB.metadata.txt",
+    "bytes": 4380,
+    "sha256": "70f205380d2980d03f608a8affcca88d8ee228246a53709a5457a2244f1f7cbf"
+  },
+  {
+    "file": "delete-size-grid-bulk/varchar16-8000000-4MiB.csv",
+    "source": "/tmp/delete-size-grid-bulk/varchar16-8000000-4MiB.csv",
+    "bytes": 462,
+    "sha256": "500838152a415ebb35c58be377f98abadd799ef2f947dc9506a34d4eb0d77972"
+  },
+  {
+    "file": "delete-size-grid-bulk/varchar16-8000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-grid-bulk/varchar16-8000000-4MiB.metadata.txt",
+    "bytes": 4377,
+    "sha256": "549be492a18e30b8eac9ab2ecf31e15a33660cd4734c3e149e91eaed44bc8eab"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/heatmap.png",
+    "source": "/tmp/delete-size-midpoints-20261027/heatmap.png",
+    "bytes": 501815,
+    "sha256": "e455eba726c03355066e7659a18f49e3de8d90feb515119296d9652a5f53a868"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/heatmap.svg",
+    "source": "/tmp/delete-size-midpoints-20261027/heatmap.svg",
+    "bytes": 216374,
+    "sha256": "2f2581f5ed63a04d6b0f5771508f5a2d7e9fd5b1656214be10c4bfa857615066"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-100000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-100000-4MiB.csv",
+    "bytes": 2049,
+    "sha256": "3663df3c98027880d20865e0d389d6969b538f69c53826828e1c0668546ca633"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-100000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-100000-4MiB.metadata.txt",
+    "bytes": 4411,
+    "sha256": "cbeac738047d85d440f70c589ebf12073fb7b3cf5c4698b3c40e886e2ac53e20"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-1000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-1000000-4MiB.csv",
+    "bytes": 2091,
+    "sha256": "17c4d52bdb1e077a0dbd1b85724638869d134ded23b805ea949e1df82e983edf"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-1000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-1000000-4MiB.metadata.txt",
+    "bytes": 4413,
+    "sha256": "15eadcb9bfd4d6e500db81611774fcc770599330c9f6e43fa1d8e2c7ed2a058b"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-2000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-2000000-4MiB.csv",
+    "bytes": 2115,
+    "sha256": "9bcd644199d2a6cf718ec29b2dc54252c5ff109f22737bd64473edd512a369d5"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-2000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-2000000-4MiB.metadata.txt",
+    "bytes": 4414,
+    "sha256": "9d675452b5de8d2a326819df2f9e12c66e5884adc8b1a5fb7fb1d1768018cfc3"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-44000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-44000000-4MiB.csv",
+    "bytes": 2209,
+    "sha256": "153b5e7a9b79e8a43cec89d86e9195e2c2c2316f6743bd71e4b7415ba6443e2d"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-44000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-44000000-4MiB.metadata.txt",
+    "bytes": 4417,
+    "sha256": "d02d07f527b684e20c4cc1cb441f4123240c5caf4708e56f8a26e08e932b769c"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-500000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-500000-4MiB.csv",
+    "bytes": 2067,
+    "sha256": "886f9766b8e8bd3b0aab247cd7ec1783b7dd0773ebf28118506b757226cd622f"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-500000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-500000-4MiB.metadata.txt",
+    "bytes": 4411,
+    "sha256": "8d4755b2d61e2a88e75037f66ab5c4ed83a0a74389a01f6ef6b27c201e264999"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-8000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-8000000-4MiB.csv",
+    "bytes": 2132,
+    "sha256": "123c5bfe947b09e0405d8b09ba38b1f8c2d88283aa8c475daf89ad27bc9e9cf6"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/int64-8000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/int64-8000000-4MiB.metadata.txt",
+    "bytes": 4414,
+    "sha256": "aac545d1af6c2098389020ac70b1835b79979628a25c1e71aa2f065c5f182629"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/manifest.json",
+    "source": "/tmp/delete-size-midpoints-20261027/manifest.json",
+    "bytes": 8742,
+    "sha256": "75f06270ccb7efa076cddcbc4f63f4c20c409d388cf4dc5a895f9b76fc8f5db0"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/matrix.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/matrix.csv",
+    "bytes": 27403,
+    "sha256": "83d51d1f638fa28e086c28e836cd9b57e02ed5b447a8ec547a30e2b205fbf744"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/results.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/results.csv",
+    "bytes": 29591,
+    "sha256": "8ef5574808b1f583e8147e1e6ad5179ce8a0bdf9b5c2365afe17198fa936a6a0"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-100000-stream_same.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-100000-stream_same.csv",
+    "bytes": 406,
+    "sha256": "b9555fa0649ec4e7deaef79c6ec602505e36a798453a819799c3f3825eefc589"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-100000-stream_same.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-100000-stream_same.metadata.txt",
+    "bytes": 4387,
+    "sha256": "6b0a0df492cecd408770ab4fca33702e36b6f485ffad72a834fa4e044123e992"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-1000000-load.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-1000000-load.csv",
+    "bytes": 281,
+    "sha256": "7259f8d0b42a50219764290630a15ef68e73e748f22d693e8bf3f6596d502774"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-1000000-load.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-1000000-load.metadata.txt",
+    "bytes": 4370,
+    "sha256": "22592c2c622abc5ffda795a7a0681a78ae8b1a4827952514978d5575e1ba8a54"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-500000-load.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-500000-load.csv",
+    "bytes": 285,
+    "sha256": "3d2c66e35f2470ad8f66b95f668ccf3dd33cc0a7519a45f0b43770132ad6b67b"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-500000-load.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-500000-load.metadata.txt",
+    "bytes": 4368,
+    "sha256": "9b197329cc30c8b8f7677c791e1fccdb2403d553ebcff31f08fa8ced175386fa"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-500000-stream_same.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-500000-stream_same.csv",
+    "bytes": 662,
+    "sha256": "64056032b93141f9e6d03f018cd1fbc5970e9d08c3e36358056f770d3f35b4e0"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-int64-500000-stream_same.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-int64-500000-stream_same.metadata.txt",
+    "bytes": 4398,
+    "sha256": "f278de96732cf62ce5bd7cf418d4abe2e2277eb2a472e13d0728de00ff597888"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-plan.json",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-plan.json",
+    "bytes": 1245,
+    "sha256": "a41953763cd2d77afec6d0ca13927cf4f5e76a47c7f746bef39c8a0fa920ce61"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-varchar16-100000-load.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-varchar16-100000-load.csv",
+    "bytes": 287,
+    "sha256": "5292aa29f8f87291a4dc2f9f69530a82361f374b5a29d9e612deb7d9316f7d5f"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-varchar16-100000-load.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-varchar16-100000-load.metadata.txt",
+    "bytes": 4376,
+    "sha256": "638f7838714bbaa61ba26b15ffe25e8704002a3002311bf296f4a09c24849b75"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-varchar16-100000-stream_same.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-varchar16-100000-stream_same.csv",
+    "bytes": 418,
+    "sha256": "97cb2051b5a8186a5233667e3c6834f640b0b029bc085abddc5e3c3cdc7d0b1f"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-varchar16-100000-stream_same.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-varchar16-100000-stream_same.metadata.txt",
+    "bytes": 4395,
+    "sha256": "e966dd42ac7745fd14a48dc0e3c7ce944dcb994d18fa9b3b68e4c1ec0ceed4a2"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-varchar16-500000-load.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-varchar16-500000-load.csv",
+    "bytes": 294,
+    "sha256": "798a8bff1763729d50e3566804e150c945515c61a27b8732cd55617e1897321d"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/retest-varchar16-500000-load.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/retest-varchar16-500000-load.metadata.txt",
+    "bytes": 4377,
+    "sha256": "decaa495164a2d3b42f98d0b122e55177c741261b137458bd07fa13474664715"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/validation.json",
+    "source": "/tmp/delete-size-midpoints-20261027/validation.json",
+    "bytes": 417,
+    "sha256": "3694cf1ee2b05da0f05e25e71881c46fb3d0900c5048b2340228bed7521b12b5"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-100000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-100000-4MiB.csv",
+    "bytes": 2142,
+    "sha256": "a3b8ce10d34032bbbd07205d5b6aa568c1ceaf09d5e0e64b1a4f89e4daa85dc6"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-100000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-100000-4MiB.metadata.txt",
+    "bytes": 4419,
+    "sha256": "a89b1a315339e5540deaf4a5aa8d35f6156287f8a1da7f15ba29b9c5bca8b083"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-1000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-1000000-4MiB.csv",
+    "bytes": 2189,
+    "sha256": "741bb7cf6db5fcbf6faa9211da7d8266959f7d20919b1d88f2e6eadd238fd5f1"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-1000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-1000000-4MiB.metadata.txt",
+    "bytes": 4421,
+    "sha256": "961f4d826b0b694deac0504884acb2a286a8c6120c23d0ef3d0c4b8b3de769c0"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-2000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-2000000-4MiB.csv",
+    "bytes": 2218,
+    "sha256": "3d5ccf3ec396c892f1cf07aabbcad2e2f6bbe0d545f623a2030f0b4a41e212e3"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-2000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-2000000-4MiB.metadata.txt",
+    "bytes": 4422,
+    "sha256": "4ac4d7285b3e223f0319434f313e8561c8276141aa99c843a21c435634dc651d"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-44000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-44000000-4MiB.csv",
+    "bytes": 2348,
+    "sha256": "3bdc18625ba05b887df4ecdb191779ad65810cb5a2a7830ac8811d398704f52d"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-44000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-44000000-4MiB.metadata.txt",
+    "bytes": 4425,
+    "sha256": "62c8e896d5efdde7fb66230add3105d79dccd38506200241c98c7d1a9fe39979"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-500000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-500000-4MiB.csv",
+    "bytes": 2164,
+    "sha256": "b40d8028b732fb14a5227574b8544ccbc5a6d4f5209631c35e06636a1d5a975b"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-500000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-500000-4MiB.metadata.txt",
+    "bytes": 4419,
+    "sha256": "f2fb72753a4f97ec32896a96ffe9799bc8122464ed622175fba04e76d4f2a650"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-8000000-4MiB.csv",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-8000000-4MiB.csv",
+    "bytes": 2244,
+    "sha256": "0647966eecaaffceaf140518525ababfdd6c5189c4874f56a0a36c2bc1ca3b74"
+  },
+  {
+    "file": "delete-size-midpoints-20261027/varchar16-8000000-4MiB.metadata.txt",
+    "source": "/tmp/delete-size-midpoints-20261027/varchar16-8000000-4MiB.metadata.txt",
+    "bytes": 4422,
+    "sha256": "fd7be9ad977fb6352196c1cc64537d46aea19fb80ed56a960cf4d8c25ae20cb1"
+  },
+  {
+    "file": "sizes/delete-size-gate-bulk.csv",
+    "source": "/tmp/delete-size-gate-bulk.csv",
+    "bytes": 1759,
+    "sha256": "fb40ca399225c9892d162915d5af86f88b849db17dd092bff999c0e8ed0fdf8d"
+  },
+  {
+    "file": "sizes/delete-size-gate-bulk.metadata.txt",
+    "source": "/tmp/delete-size-gate-bulk.metadata.txt",
+    "bytes": 4367,
+    "sha256": "0e1b58078a435f336b62a15b265a53d713f323d3a0015490367facdadc01beb4"
+  },
+  {
+    "file": "sizes/delete-size-smoke.csv",
+    "source": "/tmp/delete-size-smoke.csv",
+    "bytes": 2608,
+    "sha256": "109330c9052240dc81c7a9e38e250089ae5836afc42ee3dc3d46cbd716f0555f"
+  },
+  {
+    "file": "sizes/delete-size-smoke.metadata.txt",
+    "source": "/tmp/delete-size-smoke.metadata.txt",
+    "bytes": 4353,
+    "sha256": "c3a87e30be7c5224879e41d5c657fb458099dea5f055099520fa55bb055ed1e2"
+  },
+  {
+    "file": "sizes/delete-size-results.csv",
+    "source": "/tmp/delete-size-results.csv",
+    "bytes": 31909,
+    "sha256": "b6927c115578b4da65bbebfba25f1b9be7327c1ce15c7008abbecb774084542f"
+  },
+  {
+    "file": "sizes/delete-size-validation.json",
+    "source": "/tmp/delete-size-validation.json",
+    "bytes": 1589,
+    "sha256": "0bbb71d91d383cefd7c9bfd1aecf79dc26b65aefdf8914be162390991ebe3411"
+  },
+  {
+    "file": "sizes/delete-size-heatmap.png",
+    "source": "/tmp/delete-size-heatmap.png",
+    "bytes": 443835,
+    "sha256": "dc6cfb1eed5c278f104d55bcad79203fcc843cea296a44a21a4e7624ca6852ad"
+  },
+  {
+    "file": "sizes/delete-size-heatmap.svg",
+    "source": "/tmp/delete-size-heatmap.svg",
+    "bytes": 197860,
+    "sha256": "a639a52d2c56d67f621375a891d25da020004283e3377d83836077e70ace9b6c"
+  },
+  {
+    "file": "historical-tools/analyze_delete_real_layout.py",
+    "source": "/tmp/analyze_delete_real_layout.py",
+    "bytes": 1847,
+    "sha256": "532f8b43a5035aa43a00e1ed157d02bdc2b2772e288846af58076fe5a20c89a7"
+  },
+  {
+    "file": "historical-tools/analyze_delete_size_results.py",
+    "source": "/tmp/analyze_delete_size_results.py",
+    "bytes": 2682,
+    "sha256": "ba9af4966966724ec9d773e5aa0fdc03f3a925a65dcb9c11569909bba639812f"
+  },
+  {
+    "file": "historical-tools/plot_delete_size_matrix.py",
+    "source": "/tmp/plot_delete_size_matrix.py",
+    "bytes": 4783,
+    "sha256": "ff00d5c211e092f5eb1c21da65106d1a0899075f129f4357dc3009c524dde9e8"
+  },
+  {
+    "file": "historical-tools/plot_delete_midpoints.py",
+    "source": "/tmp/plot_delete_midpoints.py",
+    "bytes": 4997,
+    "sha256": "d80582f7385abdb8baf42ddf720a2f05e7634269d7dd4b89254f3edc7b04b71c"
+  },
+  {
+    "file": "benchmark-snapshot/DeleteBatchBenchmark.cpp",
+    "source": "/mnt/2.6/milvus/internal/core/benchmark/DeleteBatchBenchmark.cpp",
+    "bytes": 16253,
+    "sha256": "19f7e0242f6bdee50475168d4d4b910b71c378dd5c720c5e2853b607449d44d8"
+  },
+  {
+    "file": "benchmark-snapshot/run_delete_batch_benchmark.py",
+    "source": "/mnt/2.6/milvus/internal/core/benchmark/run_delete_batch_benchmark.py",
+    "bytes": 7195,
+    "sha256": "0f74d9489652f2fa73f1248c30e1a385928da75ab93fb4e05256c0e481823aac"
+  },
+  {
+    "file": "benchmark-snapshot/run_delete_size_matrix.py",
+    "source": "/mnt/2.6/milvus/internal/core/benchmark/run_delete_size_matrix.py",
+    "bytes": 4929,
+    "sha256": "259af64cdde75307229c9a0af444fd277f9d6b78aa2e93a6029a0941edfc42b8"
+  }
+]

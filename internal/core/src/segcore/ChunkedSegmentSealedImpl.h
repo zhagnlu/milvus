@@ -112,6 +112,7 @@ enum class VortexColumnGroupLocalFormat {
 
 class ChunkedSegmentSealedImpl : public SegmentSealed {
     friend class CommitTimestampV2TestAccess;
+    friend class ChunkedDeleteTestAccess;
 
  public:
     explicit ChunkedSegmentSealedImpl(SchemaPtr schema,
@@ -1492,6 +1493,20 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
 
     std::shared_ptr<const PublishedSegmentState>
     CapturePublishedState() const;
+
+    bool
+    UseSortedDeleteSearch(const PublishedSegmentState& snapshot,
+                          bool load_replay) const;
+
+    void
+    search_batch_pks_from_state(
+        const std::shared_ptr<const PublishedSegmentState>& snapshot,
+        bool use_sorted_search,
+        const std::vector<PkType>& pks,
+        const std::function<Timestamp(const size_t idx)>& get_timestamp,
+        bool include_same_ts,
+        const std::function<void(const SegOffset offset, const Timestamp ts)>&
+            callback) const;
 
     std::shared_ptr<const RuntimeResourceState>
     CaptureRuntimeResourceState() const;

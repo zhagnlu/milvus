@@ -1,0 +1,5 @@
+type,rows,chunks,shape,mode,batch,samples,old_prepare_us,new_prepare_us,old_lookup_us,new_lookup_us,old_total_us,new_total_us,speedup,round_min_speedup,round_max_speedup
+int64,1000000,23,uniform_unique,stream_same,1024,12,102.993,99.703,500.428,141.644,603.422,240.680,2.5560,2.3253,2.5890
+int64,1000000,23,uniform_unique,stream_same,65536,3,11792.630,11328.238,27499.944,2785.141,39178.685,14113.379,2.7760,2.7657,2.8026
+int64,1000000,23,uniform_unique,load,1024,12,0.026,96.680,563.056,149.038,563.077,252.676,2.2213,2.1157,2.2285
+int64,1000000,23,uniform_unique,load,65536,3,0.037,11254.750,35123.512,2810.437,35123.557,14065.187,2.4972,2.4760,2.5716

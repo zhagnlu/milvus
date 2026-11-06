@@ -1,0 +1,55 @@
+{
+  "validated_at": "2026-11-05T13:59:32.337220+00:00",
+  "records": 864,
+  "configurations": 432,
+  "timed_old_new_pairs": 145152,
+  "source_unchanged_during_run": true,
+  "matrix_complete": true,
+  "per_call_oracle_passed": true,
+  "kernel_matches_20261104": true,
+  "by_batch": {
+    "1": {
+      "records": 216,
+      "min_paired_median_speedup": 1.0405,
+      "min_round_speedup": 0.1183,
+      "median_cost_increases": 1
+    },
+    "10": {
+      "records": 216,
+      "min_paired_median_speedup": 1.2174,
+      "min_round_speedup": 0.5519,
+      "median_cost_increases": 0
+    },
+    "100": {
+      "records": 216,
+      "min_paired_median_speedup": 1.0353,
+      "min_round_speedup": 0.8995,
+      "median_cost_increases": 0
+    },
+    "500": {
+      "records": 216,
+      "min_paired_median_speedup": 1.1174,
+      "min_round_speedup": 1.0528,
+      "median_cost_increases": 0
+    }
+  },
+  "requested_batches_configurations": 324,
+  "requested_batches_both_cost_medians_lower": true,
+  "environment": {
+    "samples": 13,
+    "max_cpu_some_avg10": 0.0,
+    "median_other_cpu_busy_pct": 1.1285071727487725,
+    "max_other_cpu_busy_pct": 6.057849736219756
+  },
+  "files": {
+    "analyze.py": "0c9afb408f185532a7dff017694ca5bebbb5b8e6dfdb60899c87322a3ebac8dc",
+    "environment.jsonl": "d9444f39c1fb254ce632f9fcf002c54bded4f4e3716408a1d46518e618beb7bb",
+    "matrix.csv": "fa270132d765141152d2b37a28ba5de70b9415fde19091fd72001ddf364b6e28",
+    "run.py": "6fe82c129a685fcc931ee3c2d02976cf4e899a0944a98c041bfa310a3ec37025",
+    "seed-110501.csv": "e5cf3e9d460993c515a11fb7370a1730a1769dd0afc859e4a0b18916a75698d0",
+    "seed-110501.metadata.txt": "fb0a6b15943ef6ba4e491ce4a1f5ebe09f7dd91d33a21b50ad5356cd1d019c19",
+    "seed-110517.csv": "42c7c875bdde4f088f24d74e7d3943b260703d82c3cc60ba86328a5e6dc97b0c",
+    "seed-110517.metadata.txt": "f2b98754a1ed6ecdc4b97a87f76a40f82548eee20dc623124aa01d8b3e125630",
+    "summary.csv": "a44a606eccb39429d0f8e12375fa7c428dfab9886eb7d03367f725c8612901d4"
+  }
+}

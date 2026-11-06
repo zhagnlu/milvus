@@ -10,6 +10,7 @@
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
 #include <gtest/gtest.h>
+#include <folly/ScopeGuard.h>
 #include <stddef.h>
 #include <algorithm>
 #include <atomic>
@@ -44,6 +45,86 @@
 using namespace milvus;
 using namespace milvus::segcore;
 using namespace milvus::exec;
+
+TEST(DeleteMVCC, PerBatchLookupDoesNotReplaceDefaultLookup) {
+    std::vector<int64_t> selected;
+    auto lookup = [&](int64_t row,
+                      const std::vector<PkType>&,
+                      const Timestamp* timestamps,
+                      const auto& callback) {
+        selected.push_back(row);
+        callback(SegOffset(row), timestamps[0]);
+    };
+    DeletedRecord<true> record(
+        nullptr,
+        [&](const auto& pks, const Timestamp* ts, const auto& cb) {
+            lookup(0, pks, ts, cb);
+        },
+        0);
+    record.set_sealed_row_count(3);
+    const std::vector<PkType> pks{int64_t{7}};
+    const Timestamp timestamps[]{50};
+    record.LoadPush(
+        pks,
+        timestamps,
+        [&](const auto& batch, const Timestamp* ts, const auto& cb) {
+            lookup(1, batch, ts, cb);
+        });
+    record.StreamPush(
+        pks,
+        timestamps,
+        [&](const auto& batch, const Timestamp* ts, const auto& cb) {
+            lookup(2, batch, ts, cb);
+        });
+    record.StreamPush(pks, timestamps);
+    EXPECT_EQ(selected, (std::vector<int64_t>{1, 2, 0}));
+    EXPECT_EQ(record.size(), 3);
+    BitsetType bitmap(3, false);
+    BitsetTypeView view(bitmap);
+    record.Query(view, 3, 50);
+    EXPECT_EQ(bitmap.count(), 3);
+}
+
+TEST(DeleteMVCC, PkOrderedBatchUsesMinimumTimestampForSnapshotGate) {
+    const auto old_batch_size = DELETE_DUMP_BATCH_SIZE.exchange(2);
+    auto restore =
+        folly::makeGuard([&] { DELETE_DUMP_BATCH_SIZE.store(old_batch_size); });
+    DeletedRecord<true> record(
+        nullptr,
+        [](const std::vector<PkType>& pks,
+           const Timestamp* timestamps,
+           std::function<void(SegOffset, Timestamp)> callback) {
+            for (size_t i = 0; i < pks.size(); ++i) {
+                callback(SegOffset(std::get<int64_t>(pks[i])), timestamps[i]);
+            }
+        },
+        0);
+    record.set_sealed_row_count(8);
+    const std::vector<PkType> loaded_pks{int64_t{5}};
+    const Timestamp loaded_ts[]{50};
+    record.LoadPush(loaded_pks, loaded_ts);
+
+    const std::vector<PkType> pks{int64_t{0}, int64_t{1}, int64_t{2}};
+    const Timestamp timestamps[]{60, 20, 30};
+    record.StreamPush(pks, timestamps);
+    EXPECT_EQ(record.size(), 4);
+    EXPECT_TRUE(record.get_snapshots().empty());
+
+    const std::vector<PkType> next_pks{int64_t{3}};
+    const Timestamp next_ts[]{70};
+    record.StreamPush(next_pks, next_ts);
+    EXPECT_FALSE(record.get_snapshots().empty());
+    const std::vector<Timestamp> expected{60, 20, 30, 70, 0, 50, 0, 0};
+    for (Timestamp ts = 0; ts <= 80; ++ts) {
+        BitsetType bitmap(8, false);
+        BitsetTypeView view(bitmap);
+        record.Query(view, 8, ts);
+        for (size_t row = 0; row < expected.size(); ++row) {
+            EXPECT_EQ(bitmap[row], expected[row] != 0 && expected[row] <= ts)
+                << "query_ts=" << ts << " row=" << row;
+        }
+    }
+}
 
 TEST(DeleteMVCC, common_case) {
     milvus::exec::expression::FunctionFactory& factory =

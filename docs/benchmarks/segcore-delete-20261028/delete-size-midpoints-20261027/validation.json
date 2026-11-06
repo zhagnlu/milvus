@@ -1,0 +1,10 @@
+{
+  "matrix_cases": 192,
+  "retested_cases": 12,
+  "hashes": {
+    "source_sha256": "1cc52aaeac3c7ebf992b45085ec138debbee97a7520751efe14f279102a57ff7",
+    "kernel_sha256": "34ffe043463300266fb63c248e0949e47ef50bab7e177f5a8df9bfb3b090e4f4",
+    "benchmark_sha256": "19f7e0242f6bdee50475168d4d4b910b71c378dd5c720c5e2853b607449d44d8"
+  },
+  "retest_rule": "0.85 <= median speedup <= 1.3 AND round_min < 1 < round_max"
+}

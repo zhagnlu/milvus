@@ -98,11 +98,21 @@ class DeletedRecord {
 
     void
     LoadPush(const std::vector<PkType>& pks, const Timestamp* timestamps) {
+        LoadPush(pks, timestamps, search_pk_func_);
+    }
+
+    // A sealed caller can bind lookup to the same published state and search
+    // mode it used to order this batch. The callback is only used synchronously.
+    template <typename SearchPk>
+    void
+    LoadPush(const std::vector<PkType>& pks,
+             const Timestamp* timestamps,
+             const SearchPk& search_pk) {
         if (pks.empty()) {
             return;
         }
 
-        auto max_deleted_ts = InternalPush(pks, timestamps);
+        auto max_deleted_ts = InternalPush(pks, timestamps, search_pk).second;
 
         if (max_deleted_ts > max_load_timestamp_) {
             max_load_timestamp_ = max_deleted_ts;
@@ -111,40 +121,58 @@ class DeletedRecord {
         //TODO: add support for dump snapshot when load finished
     }
 
-    // stream push delete timestamps should be sorted outside of the interface
-    // considering concurrent query and push
+    // Streaming timestamps must be ascending within each PK. Different PK
+    // groups need not be ordered by timestamp.
     void
     StreamPush(const std::vector<PkType>& pks, const Timestamp* timestamps) {
+        StreamPush(pks, timestamps, search_pk_func_);
+    }
+
+    template <typename SearchPk>
+    void
+    StreamPush(const std::vector<PkType>& pks,
+               const Timestamp* timestamps,
+               const SearchPk& search_pk) {
         if (pks.empty()) {
             return;
         }
 
-        auto max_ts = InternalPush(pks, timestamps);
+        auto [min_ts, max_ts] = InternalPush(pks, timestamps, search_pk);
 
         if (ENABLE_LATEST_DELETE_SNAPSHOT_OPTIMIZATION.load()) {
             UpdateLatestSnapshot(max_ts);
         }
 
-        bool can_dump = timestamps[0] >= max_load_timestamp_;
+        bool can_dump = min_ts >= max_load_timestamp_;
         if (can_dump) {
             DumpSnapshot();
         }
     }
 
-    Timestamp
+    std::pair<Timestamp, Timestamp>
     InternalPush(const std::vector<PkType>& pks, const Timestamp* timestamps) {
+        return InternalPush(pks, timestamps, search_pk_func_);
+    }
+
+    template <typename SearchPk>
+    std::pair<Timestamp, Timestamp>
+    InternalPush(const std::vector<PkType>& pks,
+                 const Timestamp* timestamps,
+                 const SearchPk& search_pk) {
         int64_t removed_num = 0;
         int64_t mem_add = 0;
         Timestamp max_timestamp = 0;
+        Timestamp min_timestamp = std::numeric_limits<Timestamp>::max();
 
         SortedDeleteList::Accessor accessor(deleted_lists_);
         for (size_t i = 0; i < pks.size(); ++i) {
             auto deleted_ts = timestamps[i];
+            min_timestamp = std::min(min_timestamp, deleted_ts);
             if (deleted_ts > max_timestamp) {
                 max_timestamp = deleted_ts;
             }
         }
-        search_pk_func_(
+        search_pk(
             pks,
             timestamps,
             [&](const SegOffset offset, const Timestamp delete_ts) {
@@ -209,7 +237,7 @@ class DeletedRecord {
             // within the growing segment.
         }
 
-        return max_timestamp;
+        return {min_timestamp, max_timestamp};
     }
 
     // update the atomic snapshot with current deleted_mask_ and max timestamp
