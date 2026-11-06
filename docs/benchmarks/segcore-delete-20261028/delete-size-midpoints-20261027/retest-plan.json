@@ -1,0 +1,74 @@
+{
+  "criterion": "0.85 <= median speedup <= 1.3 AND round_min < 1 < round_max",
+  "rounds": 15,
+  "groups": [
+    {
+      "type": "int64",
+      "rows": "100000",
+      "chunks": "1",
+      "mode": "stream_same",
+      "batches": [
+        "1024",
+        "4096"
+      ]
+    },
+    {
+      "type": "int64",
+      "rows": "500000",
+      "chunks": "3",
+      "mode": "stream_same",
+      "batches": [
+        "1024",
+        "4096",
+        "8192",
+        "16384"
+      ]
+    },
+    {
+      "type": "int64",
+      "rows": "500000",
+      "chunks": "3",
+      "mode": "load",
+      "batches": [
+        "8192"
+      ]
+    },
+    {
+      "type": "int64",
+      "rows": "1000000",
+      "chunks": "6",
+      "mode": "load",
+      "batches": [
+        "2048"
+      ]
+    },
+    {
+      "type": "varchar16",
+      "rows": "100000",
+      "chunks": "1",
+      "mode": "stream_same",
+      "batches": [
+        "1024",
+        "4096"
+      ]
+    },
+    {
+      "type": "varchar16",
+      "rows": "100000",
+      "chunks": "1",
+      "mode": "load",
+      "batches": [
+        "4096"
+      ]
+    },
+    {
+      "type": "varchar16",
+      "rows": "500000",
+      "chunks": "5",
+      "mode": "load",
+      "batches": [
+        "65536"
+      ]
+    }
+  ]
+}

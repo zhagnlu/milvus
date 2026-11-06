@@ -1,0 +1,2 @@
+type,rows,chunks,shape,mode,batch,samples,old_prepare_us,new_prepare_us,old_lookup_us,new_lookup_us,old_total_us,new_total_us,speedup,round_min_speedup,round_max_speedup
+varchar16,100000,1,uniform_unique,load,4096,15,0.050,767.235,1182.294,565.839,1182.320,1328.630,0.8896,0.8463,0.9744

@@ -1,0 +1,265 @@
+{
+  "validated_at": "2026-11-04T16:00:38.157074+00:00",
+  "records": 600,
+  "distinct_configurations": 300,
+  "rounds": 21,
+  "seeds": [
+    110401,
+    110417
+  ],
+  "timed_old_new_pairs": 37800,
+  "timed_paired_rounds": 12600,
+  "source_unchanged": true,
+  "matrix_complete": true,
+  "raw_aggregate_match": true,
+  "all_oracles_passed": true,
+  "environment": {
+    "samples": 292,
+    "max_cpu_some_avg10": 0.0,
+    "median_non_benchmark_cpu_busy_percent": 0.6906579425663395,
+    "max_non_benchmark_cpu_busy_percent": 7.066108177016937,
+    "note": "Other CPU usage includes this runner's compilation/tool activity; affinity is not exclusive CPU reservation."
+  },
+  "harness_checks": {
+    "smoke": {
+      "configurations": 36,
+      "complete": true,
+      "note": "Each CSV row is emitted only after all invocation oracle checks pass"
+    },
+    "default-layout-smoke": {
+      "configurations": 72,
+      "complete": true,
+      "note": "Each CSV row is emitted only after all invocation oracle checks pass"
+    }
+  },
+  "note": "Oracle checks match count/hash per call; not end-to-end MVCC or memory verification",
+  "groups": {
+    "v2_stats_on:stream_same": {
+      "configurations": 50,
+      "verdicts": {
+        "提升": 50,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.7384,
+      "minimum_round_speedup": 1.472
+    },
+    "v2_stats_on:stream_mixed": {
+      "configurations": 50,
+      "verdicts": {
+        "提升": 50,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.843,
+      "minimum_round_speedup": 1.3852
+    },
+    "v2_stats_on:load": {
+      "configurations": 50,
+      "verdicts": {
+        "提升": 50,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.6092,
+      "minimum_round_speedup": 1.2202
+    },
+    "v2_stats_off:stream_same": {
+      "configurations": 50,
+      "verdicts": {
+        "提升": 50,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.1043,
+      "minimum_round_speedup": 0.2683
+    },
+    "v2_stats_off:stream_mixed": {
+      "configurations": 50,
+      "verdicts": {
+        "提升": 50,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.1094,
+      "minimum_round_speedup": 0.6889
+    },
+    "v2_stats_off:load": {
+      "configurations": 50,
+      "verdicts": {
+        "提升": 45,
+        "退化": 5,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 0.865,
+      "minimum_round_speedup": 0.5937
+    }
+  },
+  "active_groups": {
+    "v2_stats_on:stream_same": {
+      "configurations": 30,
+      "verdicts": {
+        "提升": 30,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 2.0365,
+      "minimum_round_speedup": 1.674
+    },
+    "v2_stats_on:stream_mixed": {
+      "configurations": 30,
+      "verdicts": {
+        "提升": 30,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 2.1513,
+      "minimum_round_speedup": 1.9097
+    },
+    "v2_stats_on:load": {
+      "configurations": 30,
+      "verdicts": {
+        "提升": 30,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.6092,
+      "minimum_round_speedup": 1.4587
+    },
+    "v2_stats_off:stream_same": {
+      "configurations": 30,
+      "verdicts": {
+        "提升": 30,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.2982,
+      "minimum_round_speedup": 0.2683
+    },
+    "v2_stats_off:stream_mixed": {
+      "configurations": 30,
+      "verdicts": {
+        "提升": 30,
+        "退化": 0,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 1.46,
+      "minimum_round_speedup": 1.2374
+    },
+    "v2_stats_off:load": {
+      "configurations": 30,
+      "verdicts": {
+        "提升": 27,
+        "退化": 3,
+        "接近或跨 seed 不稳定": 0
+      },
+      "minimum_paired_median_speedup": 0.8659,
+      "minimum_round_speedup": 0.7922
+    }
+  },
+  "candidate_gate": {
+    "configurations": 15,
+    "verdicts": {
+      "提升": 15,
+      "退化": 0,
+      "接近或跨 seed 不稳定": 0
+    },
+    "minimum_paired_median_speedup": 5.5283,
+    "minimum_round_speedup": 4.9645
+  },
+  "files": {
+    "110401/int64-1000000-v2_stats_off.csv": "9dc096d8f4e68d07f737a9f25a58539a493d393fd5abf506360ea69bb51709bb",
+    "110401/int64-1000000-v2_stats_off.metadata.txt": "560846987bdde095440330297c33a6785cd120063b36901b89d9b35df6fbca8a",
+    "110401/int64-1000000-v2_stats_on.csv": "5208b0a82d624a188e2fe00aaf2e58b29e48359c3073d1f173fce2b036b2ca52",
+    "110401/int64-1000000-v2_stats_on.metadata.txt": "609f557c66de2f188be316bc97f4db01dd148424709d7276b9409bb14987503c",
+    "110401/int64-2000000-v2_stats_off.csv": "16d50713d278f122655dd11694f7f0ef56fd6e2d2f122bee7ad1722038b0a2de",
+    "110401/int64-2000000-v2_stats_off.metadata.txt": "a2108ee8a916b7e99b3e5cb494721bf5525013a6270414f01ae028e2822e3755",
+    "110401/int64-2000000-v2_stats_on.csv": "51a733ed3f6b76ce98f180db02b65e370a5d54d3a3f99848f2b4376c6ff12719",
+    "110401/int64-2000000-v2_stats_on.metadata.txt": "38400584783f4e90296261fee182e0018654834900ad7f11adb818cafd30dd4b",
+    "110401/int64-4000000-v2_stats_off.csv": "7afa249bc2c858d87f8c8cc6041e7a38034f8ef4f5b0ceff316f2d239b9bf16b",
+    "110401/int64-4000000-v2_stats_off.metadata.txt": "1348f07ea464e37ffeba730083c511a0aa4e72e36be0c044856452913c0d3c0f",
+    "110401/int64-4000000-v2_stats_on.csv": "03cfec12f1c3f7784382669356ace98e77f9c9f1b72031e2396497098d4609bb",
+    "110401/int64-4000000-v2_stats_on.metadata.txt": "739ab3654d96b67d48c2cede75e3339ea6bc07a89fd5e3e447f82547484162f6",
+    "110401/int64-500000-v2_stats_off.csv": "bb713da592bbe04bfe532ade326018b9884a7772153eef6cb583ec29531c85cd",
+    "110401/int64-500000-v2_stats_off.metadata.txt": "358088f3f2f2b595eb83b8f1aa829001570baedc4e35159b7b92c532a10bf3af",
+    "110401/int64-500000-v2_stats_on.csv": "bf52265b9715d7ee4e8a2d3c2acdf2a3cc00c3c83631f5577be51b4c5db4971e",
+    "110401/int64-500000-v2_stats_on.metadata.txt": "e80c7cc110938a442ad34eeca6690c14b4766c6217ba74f224d4659379b608cf",
+    "110401/int64-5000000-v2_stats_off.csv": "cb09d3bf292e747b1a088f366c2916e30ee2ed904a630dc9068b1ac3eaf3acdf",
+    "110401/int64-5000000-v2_stats_off.metadata.txt": "da744a13401d873a8b7da8637082dc835cc20d0a54f4daf73a7d4ab7dbc2c566",
+    "110401/int64-5000000-v2_stats_on.csv": "179fcde01f62da04a30519ffdd1fb42945a7e06b1e75704e13078e94ddb0b5fa",
+    "110401/int64-5000000-v2_stats_on.metadata.txt": "d77dd362f0e6c0595751a40a9f5701838be54e72b6e1e8e0f7fe3b4334c6f040",
+    "110401/varchar16-1000000-v2_stats_off.csv": "2c07742db6078f486a59791bdee0c1d107cfa1abc47cf83f2d34136f4ac7a63f",
+    "110401/varchar16-1000000-v2_stats_off.metadata.txt": "cfa9506606d026432a369e2583d81ab2e825bcf451a7e460802eefa8f898a086",
+    "110401/varchar16-1000000-v2_stats_on.csv": "b200af42727886a78cb02bfc5e150de1eb169f0eff5931bdf3582c63ac4964e9",
+    "110401/varchar16-1000000-v2_stats_on.metadata.txt": "3fab2ec727d7424fe07d0e3a5f0a0de6eb837af0782e47c1457fbf3c93afea57",
+    "110401/varchar16-2000000-v2_stats_off.csv": "074f8422bc2d282d16f89e46bc9e6d3b787a46e3cfc0687ce14725a71dccfd7f",
+    "110401/varchar16-2000000-v2_stats_off.metadata.txt": "fe6a50c51d2b64da332222131bf16ff1debd852d75433b150b58d4b6bbad1a3e",
+    "110401/varchar16-2000000-v2_stats_on.csv": "2d8bdf457dd79cda8c42a0caf38cfa93887f65c2fb31be0a9cf475039c1bc8ea",
+    "110401/varchar16-2000000-v2_stats_on.metadata.txt": "b8b2312d6c0b6934b78f26cd854c267c46ec98e0bc4c6c6b27cefe8350ce2a0f",
+    "110401/varchar16-4000000-v2_stats_off.csv": "8577e9d67dd8522c23f952d2fc6289b794ba3583abc372c45dd9595738e5a8a0",
+    "110401/varchar16-4000000-v2_stats_off.metadata.txt": "5057037d48f395d9251a84c788839c7ce5ffa636f2b5aecc44ed111592d018ce",
+    "110401/varchar16-4000000-v2_stats_on.csv": "4ad4ad2e02ee0b63079a33e51f607970df2a47f7e5e732b342e71cecd626e262",
+    "110401/varchar16-4000000-v2_stats_on.metadata.txt": "892020d66fb0a3e3d847798a273039fe3a93b0a877fe36b1bcd297bf9a7c9fb4",
+    "110401/varchar16-500000-v2_stats_off.csv": "b228d229b895b23fc9a2154971e60f65f52044d4f3569e90871861f9e6cf36c0",
+    "110401/varchar16-500000-v2_stats_off.metadata.txt": "a001caa4c06c1a114a7564f3cabc102efaf5b530c17ff959e979704afbfa63a1",
+    "110401/varchar16-500000-v2_stats_on.csv": "80f62c3842a57438cdfef72c6d3b79e39c48edb8703899c0589cdb65e60f869d",
+    "110401/varchar16-500000-v2_stats_on.metadata.txt": "7d9eaad5cdc25745e33e9b551751be13ad6d153046d670ef20565273352b7364",
+    "110401/varchar16-5000000-v2_stats_off.csv": "6f7d00bc78b72b39f02792f71be6e9d730555770898157fa92708c7387debb1d",
+    "110401/varchar16-5000000-v2_stats_off.metadata.txt": "4544230d83a22897548962abbbf5f62cf400ba2bcd79fe473709d3cc83f30bbc",
+    "110401/varchar16-5000000-v2_stats_on.csv": "0fbe7d11a1b5b1ee63a198643a3cff6e569f7c2d03d4dc4305756f53cb5eb48f",
+    "110401/varchar16-5000000-v2_stats_on.metadata.txt": "428997cf9de18e4b5f0bd4e31c8a64bfc83a6c23ee6bb6776cd1a6f67a22d25f",
+    "110417/int64-1000000-v2_stats_off.csv": "181f3fb56f3d286973f5c29a10e06b18d31c9930afb6936b38f67f291c4f17e6",
+    "110417/int64-1000000-v2_stats_off.metadata.txt": "28349a1ebcc2f37f8c8e36b7ab01ed26b384db683cce8d5ad852e4b4405b2bbe",
+    "110417/int64-1000000-v2_stats_on.csv": "af9568d10b4e5f3aa676e7738045626d9fb4f705a02003717e4252b52d73bcbd",
+    "110417/int64-1000000-v2_stats_on.metadata.txt": "3cb2af2a585f0221dfb53fddaa7a69e3fc05461bf2e0c498a1d945287d57f1f6",
+    "110417/int64-2000000-v2_stats_off.csv": "589a4e270d5835adfbbe76cee9abe46c749f00a36a9fb5be900c0e93a96bd416",
+    "110417/int64-2000000-v2_stats_off.metadata.txt": "43ed4fc97b1aafbcfc4d17e7c5df755613b83abf934f3bfd680cdad75276c160",
+    "110417/int64-2000000-v2_stats_on.csv": "69dfc7fbf680c63ff8f98405f0610473c3d2dc5bee45ea861eb743cc338a628e",
+    "110417/int64-2000000-v2_stats_on.metadata.txt": "8e60d1f98705c10be73483a82a8eb61ef97670daa3a49661b0a06ac7fc2676e4",
+    "110417/int64-4000000-v2_stats_off.csv": "9850048031a279525a73f18a396673d18fbc1bec7e8a37cb4503672cc1fef85a",
+    "110417/int64-4000000-v2_stats_off.metadata.txt": "4edb60cd04ca0a8a8e137352f70fafe730f7aa83e3cdc11ca20d713e87640cd8",
+    "110417/int64-4000000-v2_stats_on.csv": "e172f2445be437feed35f36602dd93f9a349be305a513d9b0d10d6138937b83b",
+    "110417/int64-4000000-v2_stats_on.metadata.txt": "cea3238b5a0b37ac8797f3bc3aaf3d8f776ab4504348fe8a8cdd5797624823df",
+    "110417/int64-500000-v2_stats_off.csv": "731ac870f4bdd1610efb04bc77b87fa6fa7b8e29bc1fac697757d94ca503c89f",
+    "110417/int64-500000-v2_stats_off.metadata.txt": "e5e6c8cd2ed48b7c0dfb1328709917f45fbce23a78881c9d4842d5cab8d54faa",
+    "110417/int64-500000-v2_stats_on.csv": "c43214538b689c816e441d01dc2766d5744ed6f61e0e2240c7e5f09c943a01f9",
+    "110417/int64-500000-v2_stats_on.metadata.txt": "aaa62f294a797cdbf859fedb6368b85465bb3b075193ac8879935a5660cb6c81",
+    "110417/int64-5000000-v2_stats_off.csv": "777b496e6a1c4f78ac260dd17925e9553de9cd6057abf184ddfd751b0fd59c54",
+    "110417/int64-5000000-v2_stats_off.metadata.txt": "f03dec5b3946b2971849f40548edd3b30e5e70123c212994d12d0f9387ca7c91",
+    "110417/int64-5000000-v2_stats_on.csv": "835a12d0a5f7761a47dc1e8e1546ca373fd2d766ffbe5c27c36e64267622f34c",
+    "110417/int64-5000000-v2_stats_on.metadata.txt": "7785f8b99acb2fb5afff74a93d30de74d5d8c48bd9194c33b515e4b9323a31e4",
+    "110417/varchar16-1000000-v2_stats_off.csv": "80cf582edbf4c26f3d717eca5152852ccee522a7082a009338ed9e94530e6eca",
+    "110417/varchar16-1000000-v2_stats_off.metadata.txt": "98f2629247259e814836ba146e8a51090c315c963119f18246a50b50d98a0304",
+    "110417/varchar16-1000000-v2_stats_on.csv": "cf512f45a1ff0d919e9db2dce753bf6e5324ad13eddd8e2fb60440df5f031d1c",
+    "110417/varchar16-1000000-v2_stats_on.metadata.txt": "7eb996a4fe62e021448dadc1717f1b5fa0bf3157a4bd7ae7e9ed7307244396b9",
+    "110417/varchar16-2000000-v2_stats_off.csv": "6c7ec82c594d1846eaa9a49c1d69a0b118d9715f0583df9b0b09d4236bc45f7d",
+    "110417/varchar16-2000000-v2_stats_off.metadata.txt": "7820c2a0f090f6631f4dc71d075721790bae3f97651f7bc14487aa9ec7ce2591",
+    "110417/varchar16-2000000-v2_stats_on.csv": "55c11772f859769b8fad790f9642480efec9dea2d25883ef8b519ff4a9691a99",
+    "110417/varchar16-2000000-v2_stats_on.metadata.txt": "dc6ef25cd6f77f03d872b0e1f0ffde4ae4b628082f273f4d5e8d2f8e00bf74b3",
+    "110417/varchar16-4000000-v2_stats_off.csv": "de4059c8ffe837a4f86c0d6370b0c072a09b1e5f4364f73496b117237356a725",
+    "110417/varchar16-4000000-v2_stats_off.metadata.txt": "c94109b81fb1fe1eeec3bd3e31098a55ed4617ff31624ed13b5418a2178c00e5",
+    "110417/varchar16-4000000-v2_stats_on.csv": "bf0d46514311a219e4e96291f6dbf73333e8dc7583f9ff7ba8ed6b2343dea648",
+    "110417/varchar16-4000000-v2_stats_on.metadata.txt": "853e71bb93a743107752ab9b19d807a0804d6e5f64dc5f470841108037dad7c1",
+    "110417/varchar16-500000-v2_stats_off.csv": "d16b4116fba6231af95b8bd36e7a299279de47c473daba16338a196fa0604974",
+    "110417/varchar16-500000-v2_stats_off.metadata.txt": "8f56677fb95014b12f0e011586a64a13e77a576d2e9fab5da4742e2814676188",
+    "110417/varchar16-500000-v2_stats_on.csv": "ca7e8fb23fe2bd4782c7e508c98e9ff6c4a14fa634468e9e38433b4ee74ec7fc",
+    "110417/varchar16-500000-v2_stats_on.metadata.txt": "bb44e90081ac083b3ec9051c9fc33a8419d58d514b5827f131e1aefbecf8b221",
+    "110417/varchar16-5000000-v2_stats_off.csv": "7353f6d09ea29ef871f257257d47765f44eff98a76b89343e57b17772c3ed354",
+    "110417/varchar16-5000000-v2_stats_off.metadata.txt": "c2c188aa31050a23362c69c6533cf99b82d5abb26ecbe3c8865f6598dcb56494",
+    "110417/varchar16-5000000-v2_stats_on.csv": "a9630ee9b3a5e75457c0b909c7a3a63fe6aa08c59850490d6b190308c81a7c3e",
+    "110417/varchar16-5000000-v2_stats_on.metadata.txt": "3858a320e24d94ac4c5f53388d5f28b0bd4bfb2179efe9840edcf71663fde9f8",
+    "benchmark-snapshot/DeleteBatchBenchmark.cpp": "3d955b5b6b2df515d1e15f8e0aad80f99c0645d24be768b798467a5f8e716550",
+    "benchmark-snapshot/common/GallopingSearch.h": "732aacf0954a8e08ed77250a50e8a36f92d482d755c872e03fb252939995394b",
+    "benchmark-snapshot/delete_kernels.h": "34ffe043463300266fb63c248e0949e47ef50bab7e177f5a8df9bfb3b090e4f4",
+    "benchmark-snapshot/run_delete_batch_benchmark.py": "d24f72c1792f27c881c989042d814ab8b423ba24eead0e74b2ea9889f9a99780",
+    "default-layout-smoke.csv": "a9b81a570eecbae0a49040022120a52a0c7a18a350babc624fe824dea646c2ac",
+    "default-layout-smoke.metadata.txt": "13523f85b0b1c139526b2ae017332d19a4854ef9af8ac9b7acfd1026b1d258ad",
+    "environment.jsonl": "4215b675baec4e321e3e9f174106f94014d2fa055619a22b089f7d246f69b33e",
+    "matrix.csv": "3b57a7ff4456d0bb490c55de75f1fb6783cdf1b478c9281c6d785769e3409a3f",
+    "run_matrix.py": "3cd34aab0596074c15b01096761ab7d0190be58707b659fde68c86149bcd0dba",
+    "smoke.csv": "dc0dfb036820563ea8906d5991fd967198e9bb36312d716a4c906305231de170",
+    "smoke.metadata.txt": "c5e18c3d0024353b66fd1cfa660d51a48b6052468ca765ee3c028932cfe3a0bc",
+    "summarize.py": "b43186bb580232a9e6c1fe53a822ae07955c01172b4e698df6ee62fe5931128d",
+    "summary.csv": "e0dcdb236ec0cc1500e6db3b27d8ff13b42ff1656ea148c2fbf036e61cec9108"
+  }
+}

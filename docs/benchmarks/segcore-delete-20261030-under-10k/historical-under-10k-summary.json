@@ -1,0 +1,79 @@
+{
+  "inputs": [
+    "layouts/delete-layout-results.csv",
+    "sizes/delete-size-results.csv",
+    "delete-size-midpoints-20261027/results.csv"
+  ],
+  "batch_range": [
+    1024,
+    10000
+  ],
+  "records_before_chunk_gate": 1076,
+  "note": "Includes repeated configurations. Historical observed batches only; neither independent validation nor all integers through 10000. Excludes initial sweep and later 1M supplemental runs. Gates are analysis, not implemented.",
+  "gates": [
+    {
+      "mode": "stream",
+      "min_chunks": 8,
+      "records": 508,
+      "median_regressions": 2,
+      "min_median_speedup": 0.9285,
+      "min_round_speedup": 0.9006
+    },
+    {
+      "mode": "stream",
+      "min_chunks": 12,
+      "records": 372,
+      "median_regressions": 0,
+      "min_median_speedup": 1.1918,
+      "min_round_speedup": 1.1422
+    },
+    {
+      "mode": "stream",
+      "min_chunks": 16,
+      "records": 336,
+      "median_regressions": 0,
+      "min_median_speedup": 1.1918,
+      "min_round_speedup": 1.1422
+    },
+    {
+      "mode": "stream",
+      "min_chunks": 32,
+      "records": 213,
+      "median_regressions": 0,
+      "min_median_speedup": 1.6922,
+      "min_round_speedup": 1.6015
+    },
+    {
+      "mode": "load",
+      "min_chunks": 8,
+      "records": 283,
+      "median_regressions": 2,
+      "min_median_speedup": 0.9446,
+      "min_round_speedup": 0.9148
+    },
+    {
+      "mode": "load",
+      "min_chunks": 12,
+      "records": 212,
+      "median_regressions": 0,
+      "min_median_speedup": 1.2236,
+      "min_round_speedup": 1.1241
+    },
+    {
+      "mode": "load",
+      "min_chunks": 16,
+      "records": 191,
+      "median_regressions": 0,
+      "min_median_speedup": 1.2236,
+      "min_round_speedup": 1.1241
+    },
+    {
+      "mode": "load",
+      "min_chunks": 32,
+      "records": 123,
+      "median_regressions": 0,
+      "min_median_speedup": 1.7496,
+      "min_round_speedup": 1.6893
+    }
+  ]
+}

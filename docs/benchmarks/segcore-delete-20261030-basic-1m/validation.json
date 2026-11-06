@@ -1,0 +1,86 @@
+{
+  "verified_at": "2026-10-30T16:23:00.485009+08:00",
+  "record_count": 96,
+  "distinct_configurations": 48,
+  "rounds": [
+    21,
+    31
+  ],
+  "seeds": [
+    103001,
+    103017
+  ],
+  "timed_pairs": 11232,
+  "all_four_runner_commands_exit_code": 0,
+  "oracle": "All warmup and timed invocations compare callback count and commutative checksum to an independent oracle; any mismatch throws and fails the command.",
+  "scope": "Component preparation + lookup; forced old/new; excludes full Milvus apply, tSafe, real storage I/O and RSS. Old is current PR binary fallback, not original master.",
+  "current_source_sha256": {
+    "internal/core/src/segcore/ChunkedSegmentSealedImpl.cpp": "1cc52aaeac3c7ebf992b45085ec138debbee97a7520751efe14f279102a57ff7",
+    "internal/core/benchmark/DeleteBatchBenchmark.cpp": "19f7e0242f6bdee50475168d4d4b910b71c378dd5c720c5e2853b607449d44d8",
+    "internal/core/src/common/GallopingSearch.h": "732aacf0954a8e08ed77250a50e8a36f92d482d755c872e03fb252939995394b",
+    "internal/core/benchmark/run_delete_batch_benchmark.py": "0f74d9489652f2fa73f1248c30e1a385928da75ab93fb4e05256c0e481823aac",
+    "internal/core/benchmark/run_delete_size_matrix.py": "259af64cdde75307229c9a0af444fd277f9d6b78aa2e93a6029a0941edfc42b8"
+  },
+  "inputs": [
+    {
+      "path": "main-4MiB/matrix.csv",
+      "sha256": "66aa0e2d2200fdc61b26df427b3ceac3e98aea2bcd4279b2a99f850aaf4e9f30",
+      "layout": "4MiB-model",
+      "rounds": 21,
+      "seed": 103001,
+      "records": 24
+    },
+    {
+      "path": "single-chunk.csv",
+      "sha256": "86fd0d7164a124b7884a620f3ce3829a9a91e7d887ec55a09fc441811bfe7a4e",
+      "layout": "single-chunk",
+      "rounds": 21,
+      "seed": 103001,
+      "records": 24
+    },
+    {
+      "path": "confirmation/main-4MiB/matrix.csv",
+      "sha256": "f4e16345050bab91dd901b08c321cc099479c63cc1f2a029f096c05091320165",
+      "layout": "4MiB-model",
+      "rounds": 31,
+      "seed": 103017,
+      "records": 24
+    },
+    {
+      "path": "confirmation/single-chunk.csv",
+      "sha256": "52d39d8b4beb47355d11814ab11f598a610f998b1b1658386491a0e15aaaee36",
+      "layout": "single-chunk",
+      "rounds": 31,
+      "seed": 103017,
+      "records": 24
+    }
+  ],
+  "result_counts": {
+    "main-4MiB/matrix.csv": {
+      "median_speedup_gt_1": 24,
+      "median_speedup_lt_1": 0
+    },
+    "single-chunk.csv": {
+      "median_speedup_gt_1": 3,
+      "median_speedup_lt_1": 21
+    },
+    "confirmation/main-4MiB/matrix.csv": {
+      "median_speedup_gt_1": 24,
+      "median_speedup_lt_1": 0
+    },
+    "confirmation/single-chunk.csv": {
+      "median_speedup_gt_1": 4,
+      "median_speedup_lt_1": 20
+    }
+  },
+  "direction_changes": [
+    {
+      "layout": "single-chunk",
+      "type": "varchar16",
+      "mode": "stream_mixed",
+      "batch": 2000,
+      "initial_speedup": 0.9182,
+      "confirmation_speedup": 1.013
+    }
+  ]
+}

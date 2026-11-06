@@ -1,0 +1,26 @@
+{
+  "inputs": [
+    "layouts/delete-layout-results.csv",
+    "sizes/delete-size-results.csv",
+    "delete-size-midpoints-20261027/results.csv"
+  ],
+  "note": "Records include repeated configurations across runs; not independent scenario count.",
+  "paths": {
+    "stream": {
+      "records": 464,
+      "min_median_speedup": 1.1918,
+      "min_round_speedup": 1.1422,
+      "regressions": 0,
+      "batch_min": 1024,
+      "batch_max": 1500000
+    },
+    "load": {
+      "records": 175,
+      "min_median_speedup": 1.5686,
+      "min_round_speedup": 1.5493,
+      "regressions": 0,
+      "batch_min": 1024,
+      "batch_max": 1500000
+    }
+  }
+}
