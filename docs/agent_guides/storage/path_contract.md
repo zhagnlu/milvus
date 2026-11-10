@@ -35,6 +35,17 @@ Explore is a separate layout: local temporary manifests live under
 - Cleanup uses the same layout as the producer. Preserve remote keys exactly:
   `.`, `..`, and repeated separators are literal object-key components.
 
+## Expression cache files
+
+Sealed expression caches are disposable local files under
+`<localStorage.path>/cache/<nodeID>/expr_cache/seg_<segment_id>_<generation>.cache`.
+The process-local generation belongs to a published sealed snapshot. Retirement
+uses the file object's original path and unlinks after publication/cache locks
+are released; it must never reconstruct a path from only the segment ID.
+Generation-zero backend/legacy entries retain `seg_<segment_id>.cache`.
+The cache manager removes `.cache` files on rebuild and does not restore them
+across restarts. These files are not manifests or DataCoord GC objects.
+
 ## Local upgrade compatibility
 
 The official Docker Compose and embedded standalone launchers run Milvus as the

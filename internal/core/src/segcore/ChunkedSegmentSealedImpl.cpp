@@ -10,6 +10,7 @@
 // or implied. See the License for the specific language governing permissions and limitations under the License
 
 #include "ChunkedSegmentSealedImpl.h"
+#include "exec/expression/ExprCache.h"
 #include "segcore/default_fs.h"
 
 #include <cxxabi.h>
@@ -1486,6 +1487,11 @@ ChunkedSegmentSealedImpl::CaptureRuntimeResourceState() const {
 class ChunkedSegmentSealedImpl::SealedReadSnapshot
     : public SegmentReadSnapshot {
  public:
+    exec::ExprCacheGenerationPtr
+    GetExprCacheGeneration() const override {
+        return state_->expr_cache_generation;
+    }
+
     explicit SealedReadSnapshot(
         std::shared_ptr<const PublishedSegmentState> state)
         : state_(std::move(state)) {
@@ -2451,11 +2457,20 @@ ChunkedSegmentSealedImpl::PublishStateOnline(
     if (!state) {
         return;
     }
-    auto publish_lease =
-        publish_mode == PublishMode::FailFast
-            ? operation_gate_.AcquirePublishFailFast(op_ctx, id_)
-            : operation_gate_.AcquirePublish(op_ctx, id_);
-    PublishState(publish_lease, state);
+    // Allocate/prepare the next state before entering this function. Retired
+    // resources outlive the PublishLease so destructors/file I/O cannot block
+    // admission of new readers or hold cache-manager locks.
+    auto retired = [&] {
+        auto publish_lease =
+            publish_mode == PublishMode::FailFast
+                ? operation_gate_.AcquirePublishFailFast(op_ctx, id_)
+                : operation_gate_.AcquirePublish(op_ctx, id_);
+        auto current = CapturePublishedState();
+        auto resources = exec::ExprResCacheManager::Instance().RetireGeneration(
+            id_, current->expr_cache_generation);
+        PublishState(publish_lease, state);
+        return resources;
+    }();
 }
 
 void
@@ -5696,6 +5711,12 @@ ChunkedSegmentSealedImpl::ChunkedSegmentSealedImpl(
 }
 
 ChunkedSegmentSealedImpl::~ChunkedSegmentSealedImpl() {
+    // The token scopes cleanup to this incarnation even if another segment
+    // with the same ID has already been loaded in this process.
+    exec::RunExprCacheBestEffort([&] {
+        auto retired = exec::ExprResCacheManager::Instance().RetireGeneration(
+            id_, CapturePublishedState()->expr_cache_generation);
+    });
     if (mmap_descriptor_ != nullptr) {
         auto mm = storage::MmapManager::GetInstance().GetMmapChunkManager();
         mm->UnRegister(mmap_descriptor_);

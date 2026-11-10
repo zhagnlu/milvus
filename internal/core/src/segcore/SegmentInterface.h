@@ -50,6 +50,7 @@
 #include "common/SystemProperty.h"
 #include "common/Tracer.h"
 #include "common/Types.h"
+#include "exec/expression/ExprCacheGeneration.h"
 #include "common/VectorArray.h"
 #include "common/protobuf_utils.h"
 #include "common/type_c.h"
@@ -102,6 +103,11 @@ NextSegmentInstanceUid() {
 class SegmentReadSnapshot {
  public:
     virtual ~SegmentReadSnapshot() = default;
+
+    virtual exec::ExprCacheGenerationPtr
+    GetExprCacheGeneration() const {
+        return nullptr;
+    }
 
     virtual int64_t
     chunk_size(FieldId f, int64_t c) const = 0;

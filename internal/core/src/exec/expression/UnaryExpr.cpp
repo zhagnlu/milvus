@@ -2330,6 +2330,7 @@ PhyUnaryRangeFilterExpr::ExecTextMatch() {
             segment_->type() == SegmentType::Sealed ? segment_ : nullptr;
         auto cached = exec::ExprCacheHelper::GetOrCompute(
             cache_segment,
+            snapshot_,
             [this]() { return this->ToString(); },
             active_count_,
             [&]() -> exec::ExprCacheHelper::ComputeResult {

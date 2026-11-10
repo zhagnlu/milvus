@@ -197,6 +197,7 @@ class RawExprCacheExtendedTest : public ::testing::TestWithParam<Backend> {
             0,
             query::PlanOptions{},
             std::make_shared<QueryConfig>(config_map));
+        query_->set_read_snapshot(segment_->CaptureReadSnapshot());
         exec_ = std::make_unique<ExecContext>(query_.get());
         pool_ = std::make_shared<folly::CPUThreadPoolExecutor>(1);
     }
@@ -395,16 +396,18 @@ class RawExprCacheExtendedTest : public ::testing::TestWithParam<Backend> {
     Observe(const std::shared_ptr<const Logical>& logical,
             const std::shared_ptr<RawCalls>& calls,
             int64_t rows) {
-        return std::make_shared<ObservedRawExpr<Physical>>(
-            calls,
-            std::vector<ExprPtr>{},
-            logical,
-            "observed_raw",
-            nullptr,
-            segment_.get(),
-            rows,
-            kBatch,
-            0);
+        auto input =
+            std::make_shared<ObservedRawExpr<Physical>>(calls,
+                                                        std::vector<ExprPtr>{},
+                                                        logical,
+                                                        "observed_raw",
+                                                        nullptr,
+                                                        segment_.get(),
+                                                        rows,
+                                                        kBatch,
+                                                        0);
+        input->SetSnapshot(query_->get_read_snapshot().get());
+        return input;
     }
 
     std::shared_ptr<SegmentExpr>
