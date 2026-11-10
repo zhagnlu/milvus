@@ -535,6 +535,8 @@ TEST_F(JsonFlatExpressionTest, ReusesValidityAcrossLiteralsAndOperators) {
                     "path=/a:family={}",
                     json_fid_.get(),
                     static_cast<unsigned int>(DataType::DOUBLE))};
+    artifact_key.generation =
+        segment_->CaptureReadSnapshot()->GetExprCacheGeneration();
     exec::ExprResCacheManager::Value artifact;
     artifact.active_count = json_data_.size();
     ASSERT_TRUE(cache.Get(artifact_key, artifact));

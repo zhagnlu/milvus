@@ -47,6 +47,9 @@
 #include "exec/expression/ExprCacheHelper.h"
 #include "monitor/Monitor.h"
 #include "segcore/ChunkedSegmentSealedImpl.h"
+#include "query/ExecPlanNodeVisitor.h"
+#include "test_utils/DataGen.h"
+#include "test_utils/storage_test_utils.h"
 // SegmentCacheFile removed; V2 uses EntryPool (memory) and DiskSlotFile (disk)
 #include "gtest/gtest.h"
 
@@ -184,6 +187,7 @@ TEST(ExprResCacheManagerTest,
     int compute_calls = 0;
     auto cached = milvus::exec::ExprCacheHelper::GetOrCompute(
         segment.get(),
+        segment->CaptureReadSnapshot().get(),
         []() -> std::string { throw std::bad_alloc(); },
         8,
         [&]() -> milvus::exec::ExprCacheHelper::ComputeResult {
@@ -203,6 +207,7 @@ TEST(ExprResCacheManagerTest,
     EXPECT_THROW(
         milvus::exec::ExprCacheHelper::GetOrCompute(
             segment.get(),
+            segment->CaptureReadSnapshot().get(),
             []() { return std::string("evaluation-failure"); },
             8,
             []() -> milvus::exec::ExprCacheHelper::ComputeResult {
@@ -4745,4 +4750,435 @@ TEST(ExprResCacheV2PerfTest, EndToEndBothModes) {
     }
 
     std::filesystem::remove_all(tmpdir);
+}
+
+namespace {
+class ExprCacheGenerationTest
+    : public ::testing::TestWithParam<milvus::exec::CacheMode> {
+ protected:
+    void
+    SetUp() override {
+        path_ =
+            (std::filesystem::temp_directory_path() /
+             ("expr-generation-" +
+              std::to_string(
+                  std::chrono::steady_clock::now().time_since_epoch().count())))
+                .string();
+        config_.mode = GetParam();
+        config_.disk_base_path = path_;
+        config_.mem_max_bytes = 1 << 20;
+        config_.disk_max_bytes = 1 << 20;
+        config_.disk_max_file_size = 4096;
+        config_.compression_enabled = false;
+        config_.admission_threshold = 1;
+        config_.mem_min_eval_duration_us = 0;
+        config_.disk_min_eval_duration_us = 0;
+        ASSERT_TRUE(manager_.SetConfig(config_));
+        ExprResCacheManager::SetEnabled(true);
+        value_.active_count = 64;
+        value_.result = std::make_shared<milvus::TargetBitmap>(64, true);
+        value_.valid_result = std::make_shared<milvus::TargetBitmap>(64, true);
+    }
+    void
+    TearDown() override {
+        manager_.Clear();
+        ExprResCacheManager::SetEnabled(false);
+        EXPECT_TRUE(manager_.SetConfig(milvus::exec::CacheConfig{}));
+        std::filesystem::remove_all(path_);
+    }
+    bool
+    Hit(const ExprResCacheManager::Key& key) {
+        ExprResCacheManager::Value result;
+        result.active_count = 64;
+        return manager_.Get(key, result);
+    }
+    ExprResCacheManager& manager_ = ExprResCacheManager::Instance();
+    milvus::exec::CacheConfig config_;
+    ExprResCacheManager::Value value_;
+    std::string path_;
+};
+
+TEST_P(ExprCacheGenerationTest,
+       RetirementRejectsLateWritesAndPreservesNewGeneration) {
+    auto g1 = std::make_shared<milvus::exec::ExprCacheGeneration>();
+    auto g2 = std::make_shared<milvus::exec::ExprCacheGeneration>();
+    auto g3 = std::make_shared<milvus::exec::ExprCacheGeneration>();
+    ExprResCacheManager::Key old{73001, "x > 0", g1};
+    ExprResCacheManager::Key next{73001, "x > 0", g2};
+    ExprResCacheManager::Key newest{73001, "x > 0", g3};
+    manager_.Put(old, value_);
+    ASSERT_TRUE(Hit(old));
+    EXPECT_FALSE(Hit(next));
+    auto ticket = manager_.ObserveMiss(old, 64, SegmentType::Sealed);
+    ASSERT_TRUE(ticket.admitted);
+    {
+        auto retired = manager_.RetireGeneration(old.segment_id, g1);
+        EXPECT_EQ(manager_.GetEntryCount(), 0);
+        EXPECT_FALSE(Hit(old));
+        manager_.Put(next, value_);
+        ASSERT_TRUE(Hit(next));
+        manager_.Put(old, value_);
+        manager_.PutAdmitted(old, value_, ticket);
+        EXPECT_FALSE(
+            manager_.ObserveMiss(old, 64, SegmentType::Sealed).admitted);
+        EXPECT_EQ(manager_.GetEntryCount(), 1);
+        {
+            auto retired_next = manager_.RetireGeneration(next.segment_id, g2);
+            manager_.Put(newest, value_);
+            ASSERT_TRUE(Hit(newest));
+        }
+        ASSERT_TRUE(Hit(newest));
+    }
+    // Destruction of either old generation must not unlink the newest file.
+    ASSERT_TRUE(Hit(newest));
+    if (GetParam() == milvus::exec::CacheMode::Disk) {
+        auto file = path_ + "/seg_73001_" + std::to_string(g3->id) + ".cache";
+        EXPECT_TRUE(std::filesystem::exists(file));
+        EXPECT_FALSE(std::filesystem::exists(
+            path_ + "/seg_73001_" + std::to_string(g1->id) + ".cache"));
+    }
+}
+
+TEST_P(ExprCacheGenerationTest, RetirementSurvivesClearReconfigureAndDisable) {
+    auto generation = std::make_shared<milvus::exec::ExprCacheGeneration>();
+    ExprResCacheManager::Key old{73002, "x > 0", generation};
+    manager_.Put(old, value_);
+    ExprResCacheManager::SetEnabled(false);
+    { auto retired = manager_.RetireGeneration(old.segment_id, generation); }
+    manager_.Clear();
+    ASSERT_TRUE(manager_.SetConfig(config_));
+    ExprResCacheManager::SetEnabled(true);
+    manager_.Put(old, value_);
+    EXPECT_FALSE(Hit(old));
+    EXPECT_EQ(manager_.GetEntryCount(), 0);
+    ExprResCacheManager::Key reloaded{
+        old.segment_id,
+        old.signature,
+        std::make_shared<milvus::exec::ExprCacheGeneration>()};
+    manager_.Put(reloaded, value_);
+    ASSERT_TRUE(Hit(reloaded));
+    {
+        auto repeated_cleanup =
+            manager_.RetireGeneration(old.segment_id, generation);
+    }
+    EXPECT_TRUE(Hit(reloaded));
+}
+
+TEST_P(ExprCacheGenerationTest,
+       AdmissionTicketCannotAuthorizeAnotherGeneration) {
+    ExprResCacheManager::Key old{
+        73003, "x > 0", std::make_shared<milvus::exec::ExprCacheGeneration>()};
+    ExprResCacheManager::Key next{
+        old.segment_id,
+        old.signature,
+        std::make_shared<milvus::exec::ExprCacheGeneration>()};
+    auto ticket = manager_.ObserveMiss(old, 64, SegmentType::Sealed);
+    ASSERT_TRUE(ticket.admitted);
+    manager_.PutAdmitted(next, value_, ticket);
+    EXPECT_FALSE(Hit(next));
+    manager_.Put(next, value_);
+    EXPECT_TRUE(Hit(next));
+}
+
+TEST_P(ExprCacheGenerationTest, MissingSnapshotBypassesSealedCache) {
+    auto schema = std::make_shared<milvus::Schema>();
+    auto pk = schema->AddDebugField("pk", milvus::DataType::INT64);
+    schema->set_primary_field_id(pk);
+    auto segment = milvus::segcore::CreateSealedSegment(
+        schema, milvus::empty_index_meta, 73004);
+    int calls = 0;
+    for (int i = 0; i < 3; ++i) {
+        auto result = milvus::exec::ExprCacheHelper::GetOrCompute(
+            segment.get(),
+            nullptr,
+            [] { return "x > 0"; },
+            64,
+            [&] {
+                ++calls;
+                return milvus::exec::ExprCacheHelper::ComputeResult{
+                    milvus::TargetBitmap(64, true),
+                    milvus::TargetBitmap(64, true)};
+            });
+        EXPECT_EQ(result.result->count(), 64);
+    }
+    EXPECT_EQ(calls, 3);
+    EXPECT_EQ(manager_.GetEntryCount(), 0);
+}
+
+TEST_P(ExprCacheGenerationTest, NullBackfillRecomputesRawAndWholeFilter) {
+    using namespace milvus;
+    using namespace milvus::segcore;
+    for (bool whole_filter : {false, true}) {
+        manager_.Clear();
+        auto schema = std::make_shared<Schema>();
+        auto pk = schema->AddDebugField("pk", DataType::INT64);
+        auto field = schema->AddDebugField("value", DataType::INT64, true);
+        schema->set_primary_field_id(pk);
+        auto old_data = DataGen(schema, 64);
+        auto new_data = DataGen(schema, 64);
+        for (auto* data : {old_data.raw_, new_data.raw_}) {
+            for (auto& column : *data->mutable_fields_data()) {
+                if (column.field_id() == field.get()) {
+                    auto* scalars = column.mutable_scalars();
+                    auto* values = scalars->mutable_long_data()->mutable_data();
+                    std::fill(values->begin(), values->end(), 42);
+                    scalars->clear_valid_data();
+                    for (int i = 0; i < 64; ++i) {
+                        scalars->add_valid_data(data == new_data.raw_);
+                    }
+                }
+            }
+        }
+        auto segment = CreateSealedWithFieldDataLoaded(schema, old_data);
+        auto replacement = CreateSealedWithFieldDataLoaded(schema, new_data);
+        auto* sealed = dynamic_cast<ChunkedSegmentSealedImpl*>(segment.get());
+        auto* source =
+            dynamic_cast<ChunkedSegmentSealedImpl*>(replacement.get());
+        ASSERT_NE(sealed, nullptr);
+        ASSERT_NE(source, nullptr);
+        proto::plan::GenericValue value;
+        value.set_int64_val(10);
+        auto predicate = std::make_shared<expr::UnaryRangeFilterExpr>(
+            expr::ColumnInfo(field, DataType::INT64),
+            proto::plan::OpType::GreaterThan,
+            value);
+        auto plan = std::make_shared<plan::FilterBitsNode>(DEFAULT_PLANNODE_ID,
+                                                           predicate);
+        auto evaluate = [&] {
+            auto lease = sealed->AcquireReadLease(folly::CancellationToken());
+            auto context = std::make_shared<exec::QueryContext>(
+                "cache-backfill", segment.get(), 64, MAX_TIMESTAMP);
+            context->set_read_snapshot(segment->CaptureReadSnapshot());
+            context->set_enable_expr_cache(whole_filter);
+            context->set_enable_sub_expr_cache_write(!whole_filter);
+            auto fragment = plan::PlanFragment(plan);
+            auto result =
+                query::ExecPlanNodeVisitor::ExecuteTask(fragment, context);
+            auto column =
+                std::dynamic_pointer_cast<ColumnVector>(result->childrens()[0]);
+            return TargetBitmapView(column->GetRawData(), column->size())
+                .count();
+        };
+        EXPECT_EQ(evaluate(), 64);
+        EXPECT_GT(manager_.GetEntryCount(), 0);
+        EXPECT_EQ(evaluate(), 64);
+        auto current = sealed->TestGetPublishedStateSnapshot();
+        const auto old_generation = current->expr_cache_generation;
+        auto runtime = sealed->TestCloneMutableRuntimeResourceState();
+        ChunkedSegmentSealedImpl::StateDelta initial;
+        initial.fields = current->fields;
+        initial.load_info = current->load_info;
+        initial.runtime = sealed->TestFreezeRuntimeResourceState(runtime);
+        initial.commit_ts = current->commit_ts;
+        auto staged = sealed->TestBuildNextPublishedState(current, initial);
+        ChunkedSegmentSealedImpl::StateDelta delta;
+        delta.fields = current->fields;
+        delta.load_info = current->load_info;
+        delta.commit_ts = current->commit_ts;
+        sealed->TestStageLoadFieldDataThenPublish(
+            field,
+            source->TestGetPublishedStateSnapshot()->runtime->fields.at(field),
+            64,
+            DataType::INT64,
+            schema,
+            runtime,
+            staged.get(),
+            current,
+            delta,
+            /*is_proxy_column=*/true,
+            [&] { EXPECT_EQ(evaluate(), 64); });
+        EXPECT_NE(sealed->CaptureReadSnapshot()->GetExprCacheGeneration(),
+                  old_generation);
+        EXPECT_EQ(manager_.GetEntryCount(), 0);
+        EXPECT_EQ(evaluate(), 0);
+        EXPECT_GT(manager_.GetEntryCount(), 0);
+        EXPECT_EQ(evaluate(), 0);
+    }
+}
+
+TEST_P(ExprCacheGenerationTest, FailedSchemaPublishPreservesCurrentGeneration) {
+    using namespace milvus;
+    using namespace milvus::segcore;
+    auto schema = std::make_shared<Schema>();
+    auto pk = schema->AddDebugField("pk", DataType::INT64);
+    schema->set_primary_field_id(pk);
+    schema->set_schema_version(100);
+    auto next_schema = std::make_shared<Schema>();
+    auto next_pk = next_schema->AddDebugField("pk", DataType::INT64);
+    next_schema->set_primary_field_id(next_pk);
+    next_schema->AddDebugField("new_field", DataType::INT64, true);
+    next_schema->set_schema_version(200);
+    auto data = DataGen(schema, 64);
+    auto segment = CreateSealedWithFieldDataLoaded(schema, data);
+    auto* sealed = dynamic_cast<ChunkedSegmentSealedImpl*>(segment.get());
+    ASSERT_NE(sealed, nullptr);
+    auto generation = sealed->CaptureReadSnapshot()->GetExprCacheGeneration();
+    ExprResCacheManager::Key key{
+        segment->get_segment_id(), "pk > 0", generation};
+    manager_.Put(key, value_);
+    ASSERT_TRUE(Hit(key));
+    auto lease = sealed->AcquireReadLease(folly::CancellationToken());
+    EXPECT_THROW(sealed->LazyCheckSchema(next_schema, nullptr), SegcoreError);
+    EXPECT_EQ(sealed->CaptureReadSnapshot()->GetExprCacheGeneration(),
+              generation);
+    EXPECT_TRUE(Hit(key));
+    lease.reset();
+    folly::CancellationSource cancelled;
+    cancelled.requestCancellation();
+    OpContext context;
+    context.cancellation_token = cancelled.getToken();
+    EXPECT_THROW(sealed->LazyCheckSchema(next_schema, &context), SegcoreError);
+    EXPECT_EQ(sealed->CaptureReadSnapshot()->GetExprCacheGeneration(),
+              generation);
+    EXPECT_TRUE(Hit(key));
+    sealed->LazyCheckSchema(next_schema, nullptr);
+    EXPECT_NE(sealed->CaptureReadSnapshot()->GetExprCacheGeneration(),
+              generation);
+    EXPECT_FALSE(Hit(key));
+    EXPECT_EQ(manager_.GetEntryCount(), 0);
+}
+
+TEST_P(ExprCacheGenerationTest, PublishWaitsForReaderBeforeRetiringCache) {
+    using namespace milvus;
+    using namespace milvus::segcore;
+    auto schema = std::make_shared<Schema>();
+    auto pk = schema->AddDebugField("pk", DataType::INT64);
+    schema->set_primary_field_id(pk);
+    schema->set_schema_version(100);
+    auto next = std::make_shared<Schema>();
+    auto next_pk = next->AddDebugField("pk", DataType::INT64);
+    next->set_primary_field_id(next_pk);
+    next->AddDebugField("new_field", DataType::INT64, true);
+    next->set_schema_version(200);
+    auto data = DataGen(schema, 64);
+    auto segment = CreateSealedWithFieldDataLoaded(schema, data);
+    auto* sealed = dynamic_cast<ChunkedSegmentSealedImpl*>(segment.get());
+    ASSERT_NE(sealed, nullptr);
+    auto lease = sealed->AcquireReadLease(folly::CancellationToken());
+    auto generation = sealed->CaptureReadSnapshot()->GetExprCacheGeneration();
+    ExprResCacheManager::Key key{
+        segment->get_segment_id(), "pk > 0", generation};
+    manager_.Put(key, value_);
+    ASSERT_TRUE(Hit(key));
+    auto publisher =
+        std::async(std::launch::async, [&] { sealed->Reopen(next); });
+    // Release the lease before the future is destroyed, even after an assertion.
+    auto release = folly::makeGuard([&] { lease.reset(); });
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!sealed->TestReadGateWriterPending() &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    EXPECT_TRUE(sealed->TestReadGateWriterPending());
+    EXPECT_EQ(sealed->CaptureReadSnapshot()->GetExprCacheGeneration(),
+              generation);
+    EXPECT_TRUE(Hit(key));
+    lease.reset();
+    publisher.get();
+    EXPECT_NE(sealed->CaptureReadSnapshot()->GetExprCacheGeneration(),
+              generation);
+    EXPECT_FALSE(Hit(key));
+    manager_.Put(key, value_);
+    EXPECT_EQ(manager_.GetEntryCount(), 0);
+}
+
+TEST_P(ExprCacheGenerationTest,
+       OldInstanceDestructionPreservesReloadedSegment) {
+    using namespace milvus;
+    using namespace milvus::segcore;
+    auto schema = std::make_shared<Schema>();
+    auto pk = schema->AddDebugField("pk", DataType::INT64);
+    schema->set_primary_field_id(pk);
+    auto old = CreateSealedSegment(schema, empty_index_meta, 73005);
+    auto next = CreateSealedSegment(schema, empty_index_meta, 73005);
+    ExprResCacheManager::Key old_key{
+        73005, "pk > 0", old->CaptureReadSnapshot()->GetExprCacheGeneration()};
+    ExprResCacheManager::Key next_key{
+        73005, "pk > 0", next->CaptureReadSnapshot()->GetExprCacheGeneration()};
+    manager_.Put(old_key, value_);
+    manager_.Put(next_key, value_);
+    ASSERT_EQ(manager_.GetEntryCount(), 2);
+    old.reset();
+    EXPECT_FALSE(Hit(old_key));
+    EXPECT_TRUE(Hit(next_key));
+    EXPECT_EQ(manager_.GetEntryCount(), 1);
+    next.reset();
+    EXPECT_EQ(manager_.GetEntryCount(), 0);
+}
+
+TEST_P(ExprCacheGenerationTest, ReadStateForkAndAdoptionOwnTheirGenerations) {
+    using namespace milvus;
+    using namespace milvus::segcore;
+    auto schema = std::make_shared<Schema>();
+    auto pk = schema->AddDebugField("pk", DataType::INT64);
+    schema->set_primary_field_id(pk);
+    auto segment = CreateSealedSegment(schema, empty_index_meta, 73006);
+    auto* sealed = dynamic_cast<ChunkedSegmentSealedImpl*>(segment.get());
+    ASSERT_NE(sealed, nullptr);
+    auto key_for = [&](const ChunkedSegmentSealedImpl& instance) {
+        return ExprResCacheManager::Key{
+            73006,
+            "pk > 0",
+            instance.CaptureReadSnapshot()->GetExprCacheGeneration()};
+    };
+    auto original = key_for(*sealed);
+    manager_.Put(original, value_);
+    auto fork = sealed->PinReadState();
+    auto fork_key = key_for(*fork);
+    EXPECT_NE(original.generation, fork_key.generation);
+    manager_.Put(fork_key, value_);
+    {
+        auto sibling = sealed->PinReadState();
+        manager_.Put(key_for(*sibling), value_);
+        ASSERT_EQ(manager_.GetEntryCount(), 3);
+    }
+    EXPECT_TRUE(Hit(original));
+    EXPECT_TRUE(Hit(fork_key));
+    EXPECT_EQ(manager_.GetEntryCount(), 2);
+
+    sealed->AdoptReadState(*fork);
+    auto adopted = key_for(*sealed);
+    EXPECT_NE(adopted.generation, original.generation);
+    EXPECT_NE(adopted.generation, fork_key.generation);
+    EXPECT_FALSE(Hit(original));
+    EXPECT_TRUE(Hit(fork_key));
+    manager_.Put(adopted, value_);
+    fork.reset();
+    EXPECT_FALSE(Hit(fork_key));
+    EXPECT_TRUE(Hit(adopted));
+    EXPECT_EQ(manager_.GetEntryCount(), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(Backends,
+                         ExprCacheGenerationTest,
+                         ::testing::Values(milvus::exec::CacheMode::Memory,
+                                           milvus::exec::CacheMode::Disk));
+}  // namespace
+
+TEST(EntryPoolV2Test, DetachedGenerationKeepsReaderPayloadAndOtherSegments) {
+    milvus::exec::EntryPool pool(1 << 20);
+    auto bits = MakeBits(64);
+    pool.Put({74001, 1}, "a", 64, bits, bits);
+    pool.Put({74001, 1}, "b", 64, bits, bits);
+    pool.Put({74001, 2}, "a", 64, bits, bits);
+    pool.Put({74002, 1}, "a", 64, bits, bits);
+    auto held = pool.Lookup({74001, 1}, "a", 64);
+    ASSERT_NE(held, nullptr);
+    auto before = pool.GetCurrentBytes();
+    {
+        auto retired = pool.DetachSegment({74001, 1});
+        EXPECT_EQ(retired.count, 2);
+        EXPECT_EQ(pool.GetEntryCount(), 2);
+        EXPECT_EQ(pool.GetCurrentBytes(), before);
+        EXPECT_EQ(pool.Lookup({74001, 1}, "a", 64), nullptr);
+        EXPECT_NE(pool.Lookup({74001, 2}, "a", 64), nullptr);
+        EXPECT_NE(pool.Lookup({74002, 1}, "a", 64), nullptr);
+    }
+    EXPECT_LT(pool.GetCurrentBytes(), before);
+    auto with_reader = pool.GetCurrentBytes();
+    milvus::TargetBitmap result, valid;
+    ASSERT_TRUE(held->Decode(result, valid));
+    EXPECT_EQ(result.count(), 64);
+    held.reset();
+    EXPECT_LT(pool.GetCurrentBytes(), with_reader);
 }
