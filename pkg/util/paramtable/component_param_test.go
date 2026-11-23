@@ -120,6 +120,29 @@ func TestDataNodeConcurrencyAndImportMemoryFallbacks(t *testing.T) {
 	}
 }
 
+func TestTextLobConcurrencySettings(t *testing.T) {
+	params := &ComponentParam{}
+	base := NewBaseTable(SkipRemote(true))
+	t.Cleanup(base.mgr.Close)
+	params.Init(base)
+	assert.True(t, params.QueryNodeCfg.TextLobConcurrentReads.GetAsBool())
+	for _, item := range []*ParamItem{&params.QueryNodeCfg.TextLobMaxConcurrentBatches, &params.QueryNodeCfg.TextLobMaxConcurrentFilesPerBatch} {
+		for _, tc := range []struct {
+			value    string
+			expected int
+		}{
+			{"0", 1}, {"-1", 1}, {"8", 8}, {"1000", 64},
+		} {
+			t.Run(item.Key+tc.value, func(t *testing.T) {
+				require.NoError(t, params.Save(item.Key, tc.value))
+				assert.Equal(t, tc.expected, item.GetAsInt())
+			})
+		}
+		require.NoError(t, params.Save(item.Key, "invalid"))
+		assert.Equal(t, item.DefaultValue, item.GetValue())
+	}
+}
+
 func TestQueryNodeSparseInterimIndexAlgorithms(t *testing.T) {
 	params := &ComponentParam{}
 	base := NewBaseTable(SkipRemote(true))

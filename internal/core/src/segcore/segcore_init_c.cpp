@@ -27,6 +27,7 @@
 #include "log/Log.h"
 #include "pthread.h"
 #include "segcore/SegcoreConfig.h"
+#include "segcore/TextColumnCache.h"
 #include "segcore/segcore_init_c.h"
 #include "storage/PrefetchThreadPool.h"
 
@@ -53,6 +54,16 @@ SegcoreInit(const char* conf_file) {
             "collapsed to UnexpectedError): {}",
             what);
     });
+}
+
+extern "C" void
+SegcoreSetTextLobReadConcurrency(bool enabled,
+                                 uint32_t max_batches,
+                                 uint32_t max_files) {
+    try {
+        ConfigureTextLobReadConcurrency(!enabled, max_batches, max_files);
+    }
+    CGO_CATCH_AND_LOG("SegcoreSetTextLobReadConcurrency")
 }
 
 // TODO merge small index config into one config map, including enable/disable small_index

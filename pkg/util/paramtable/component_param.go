@@ -4809,6 +4809,9 @@ type queryNodeConfig struct {
 	KnowhereFetchThreadPoolSize        ParamItem `refreshable:"true"`
 	KnowhereThreadPoolSize             ParamItem `refreshable:"true"`
 	SearchFanoutPoolSizeRatio          ParamItem `refreshable:"true"`
+	TextLobMaxConcurrentFilesPerBatch  ParamItem `refreshable:"false"`
+	TextLobConcurrentReads             ParamItem `refreshable:"false"`
+	TextLobMaxConcurrentBatches        ParamItem `refreshable:"false"`
 	ChunkRows                          ParamItem `refreshable:"false"`
 	FmindexCostRatio                   ParamItem `refreshable:"false"`
 	EnableInterminSegmentIndex         ParamItem `refreshable:"false"`
@@ -5530,6 +5533,56 @@ If set to 0, time based eviction is disabled.`,
 		Export: false,
 	}
 	p.KnowhereFetchThreadPoolSize.Init(base.mgr)
+
+	p.TextLobConcurrentReads = ParamItem{
+		Key:          "queryNode.segcore.textLobConcurrentReads",
+		Version:      "3.0.0",
+		DefaultValue: "true",
+		Doc:          "Allow TEXT reads to share a LOB reader concurrently. Startup-only; false selects synchronous per-path serialization.",
+		Export:       true,
+	}
+	p.TextLobConcurrentReads.Init(base.mgr)
+
+	p.TextLobMaxConcurrentBatches = ParamItem{
+		Key:          "queryNode.segcore.textLobMaxConcurrentBatches",
+		Version:      "3.0.0",
+		DefaultValue: "4",
+		Formatter: func(v string) string {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return "4"
+			}
+			if n < 1 {
+				return "1"
+			}
+			if n > 64 {
+				return "64"
+			}
+			return strconv.Itoa(n)
+		},
+		Doc:    "Process-wide active TEXT LOB read batches (1-64). Limits batches, not GET requests or decoded memory. Startup-only.",
+		Export: true,
+	}
+	p.TextLobMaxConcurrentBatches.Init(base.mgr)
+
+	p.TextLobMaxConcurrentFilesPerBatch = ParamItem{
+		Key:          "queryNode.segcore.textLobMaxConcurrentFilesPerBatch",
+		Version:      "3.0.0",
+		DefaultValue: "1",
+		Formatter: func(v string) string {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				return "1"
+			}
+			if n > 64 {
+				return "64"
+			}
+			return strconv.Itoa(n)
+		},
+		Doc:    "Active async file reads per TEXT LOB batch (1-64), used when textLobConcurrentReads is true. Startup-only.",
+		Export: true,
+	}
+	p.TextLobMaxConcurrentFilesPerBatch.Init(base.mgr)
 
 	p.ChunkRows = ParamItem{
 		Key:          "queryNode.segcore.chunkRows",

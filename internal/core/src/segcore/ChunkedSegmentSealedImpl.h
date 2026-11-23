@@ -832,7 +832,8 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
         const std::vector<int64_t>& result_mapping,
         int64_t size,
         const std::vector<std::string>* dynamic_field_names = nullptr,
-        const std::string* text_lob_path = nullptr);
+        const std::string* text_lob_path = nullptr,
+        const folly::CancellationToken& cancel_token = {});
 
     // Calls reader_->take() with timing. Returns the table on success,
     // or nullptr on failure (logs a warning). Checks op_ctx for cancellation
@@ -1379,7 +1380,8 @@ class ChunkedSegmentSealedImpl : public SegmentSealed {
         const std::shared_ptr<const RuntimeResourceState>& runtime,
         const ChunkedColumnInterface::TakeResult& take,
         google::protobuf::RepeatedPtrField<std::string>* dst,
-        bool* validity) const;
+        bool* validity,
+        const folly::CancellationToken& cancel_token = {}) const;
 
     std::unique_ptr<DataArray>
     fill_with_empty(FieldId field_id,

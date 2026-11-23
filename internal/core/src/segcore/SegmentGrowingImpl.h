@@ -320,11 +320,13 @@ class SegmentGrowingImpl : public SegmentGrowing {
 
     template <typename SetOutput>
     void
-    bulk_subscript_text_impl(FieldId field_id,
-                             const VectorBase* vec_ptr,
-                             const int64_t* seg_offsets,
-                             int64_t count,
-                             SetOutput set_output) const;
+    bulk_subscript_text_impl(
+        FieldId field_id,
+        const VectorBase* vec_ptr,
+        const int64_t* seg_offsets,
+        int64_t count,
+        SetOutput set_output,
+        const folly::CancellationToken& cancel_token = {}) const;
 
     // for scalar array vectors
     template <typename T>

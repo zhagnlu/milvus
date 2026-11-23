@@ -18,6 +18,7 @@
 
 #include <arrow/filesystem/filesystem.h>
 #include <google/protobuf/repeated_ptr_field.h>
+#include <folly/CancellationToken.h>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -28,7 +29,6 @@
 #include <utility>
 #include <vector>
 
-#include "milvus-storage/common/lrucache.h"
 #include "milvus-storage/properties.h"
 #include "milvus-storage/lob_column/lob_column_reader.h"
 #include "milvus-storage/lob_column/lob_column_manager.h"
@@ -43,7 +43,9 @@ MakeTextLobEncodedRef(const void* data, size_t size) {
 }
 
 struct TextColumnCacheConfig {
-    size_t max_file_readers = 64;  // Maximum number of cached file readers
+    size_t max_file_readers = 64;  // Maximum number of cached LOB paths
+    size_t max_concurrent_files = 1;
+    bool serialize_reads = false;  // Startup fallback to the old per-path lock
 };
 
 using TextLobReaderFactory = std::function<
@@ -51,7 +53,7 @@ using TextLobReaderFactory = std::function<
         std::shared_ptr<arrow::fs::FileSystem>,
         const milvus_storage::lob_column::LobColumnConfig&)>;
 
-// Native LobColumnReader supports concurrent reads and retains in-flight resources.
+// Keep the thread-safe LOB reader alive throughout each read, including eviction.
 struct CachedTextLobReader {
     explicit CachedTextLobReader(
         std::shared_ptr<milvus_storage::lob_column::LobColumnReader> reader)
@@ -59,6 +61,7 @@ struct CachedTextLobReader {
     }
 
     std::shared_ptr<milvus_storage::lob_column::LobColumnReader> reader;
+    std::mutex mutex;  // Used only by the startup fallback.
 };
 
 // TextColumnCache provides caching for TEXT column reading
@@ -101,14 +104,15 @@ class TextColumnCache {
             properties);
 
     std::vector<std::string>
-    ReadBatch(const std::string& lob_base_path,
-              std::shared_ptr<arrow::fs::FileSystem> fs,
-              const std::shared_ptr<const milvus_storage::api::Properties>&
-                  properties,
-              const std::vector<milvus_storage::lob_column::EncodedRef>&
-                  encoded_refs);
+    ReadBatch(
+        const std::string& lob_base_path,
+        std::shared_ptr<arrow::fs::FileSystem> fs,
+        const std::shared_ptr<const milvus_storage::api::Properties>&
+            properties,
+        const std::vector<milvus_storage::lob_column::EncodedRef>& encoded_refs,
+        const folly::CancellationToken& cancel_token = {});
 
-    // Read multiple texts directly into destination (zero-copy optimization)
+    // Read multiple texts and move the owned strings into the destination.
     // Parameters:
     //   - lob_base_path: Base path for LOB files
     //   - fs: Arrow filesystem
@@ -122,7 +126,8 @@ class TextColumnCache {
         const std::shared_ptr<const milvus_storage::api::Properties>&
             properties,
         const std::vector<milvus_storage::lob_column::EncodedRef>& encoded_refs,
-        google::protobuf::RepeatedPtrField<std::string>* dst);
+        google::protobuf::RepeatedPtrField<std::string>* dst,
+        const folly::CancellationToken& cancel_token = {});
 
     void
     Clear();
@@ -132,14 +137,20 @@ class TextColumnCache {
     TextLobReaderFactory reader_factory_;
 
     // Key: lob_base_path
-    // Value: LobColumnReader and its per-reader lock.
+    // Value: shared LobColumnReader. No cache lock is held across reads.
     mutable std::mutex reader_cache_mutex_;
-    milvus_storage::LRUCache<std::string, std::shared_ptr<CachedTextLobReader>>
-        reader_cache_;
+    struct ReaderCache;
+    std::unique_ptr<ReaderCache> reader_cache_;
 
     mutable std::atomic<size_t> file_cache_hits_{0};
     mutable std::atomic<size_t> file_cache_misses_{0};
 };
+
+// Called during segcore startup, before the global cache is used.
+void
+ConfigureTextLobReadConcurrency(bool serialize_reads,
+                                size_t max_batches,
+                                size_t max_files = 1);
 
 TextColumnCache&
 GetGlobalTextColumnCache();

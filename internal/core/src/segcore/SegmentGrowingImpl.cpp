@@ -2918,11 +2918,13 @@ SegmentGrowingImpl::vector_search(SearchInfo& search_info,
 
 template <typename SetOutput>
 void
-SegmentGrowingImpl::bulk_subscript_text_impl(FieldId field_id,
-                                             const VectorBase* vec_ptr,
-                                             const int64_t* seg_offsets,
-                                             int64_t count,
-                                             SetOutput set_output) const {
+SegmentGrowingImpl::bulk_subscript_text_impl(
+    FieldId field_id,
+    const VectorBase* vec_ptr,
+    const int64_t* seg_offsets,
+    int64_t count,
+    SetOutput set_output,
+    const folly::CancellationToken& cancel_token) const {
     auto vec = dynamic_cast<const ConcurrentVector<std::string>*>(vec_ptr);
     AssertInfo(vec != nullptr,
                "TEXT field must use ConcurrentVector<std::string>");
@@ -2994,8 +2996,12 @@ SegmentGrowingImpl::bulk_subscript_text_impl(FieldId field_id,
             resolved.Add();
         }
         auto& cache = GetGlobalTextColumnCache();
-        cache.ReadBatchInto(
-            lob_base_path, fs, properties, encoded_refs, &resolved);
+        cache.ReadBatchInto(lob_base_path,
+                            fs,
+                            properties,
+                            encoded_refs,
+                            &resolved,
+                            cancel_token);
         for (size_t j = 0; j < loaded_indices.size(); ++j) {
             set_output(loaded_indices[j], std::move(*resolved.Mutable(j)));
         }
@@ -3248,13 +3254,16 @@ SegmentGrowingImpl::bulk_subscript(milvus::OpContext* op_ctx,
             auto dst = result->mutable_scalars()
                            ->mutable_string_data()
                            ->mutable_data();
-            bulk_subscript_text_impl(field_id,
-                                     vec_ptr,
-                                     seg_offsets,
-                                     count,
-                                     [dst](int64_t i, std::string val) {
-                                         dst->at(i) = std::move(val);
-                                     });
+            bulk_subscript_text_impl(
+                field_id,
+                vec_ptr,
+                seg_offsets,
+                count,
+                [dst](int64_t i, std::string val) {
+                    dst->at(i) = std::move(val);
+                },
+                op_ctx ? op_ctx->cancellation_token
+                       : folly::CancellationToken{});
             break;
         }
         case DataType::JSON: {
@@ -3643,7 +3652,9 @@ SegmentGrowingImpl::bulk_subscript(milvus::OpContext* op_ctx,
                 vec_ptr,
                 seg_offsets,
                 count,
-                [dst](int64_t i, std::string val) { dst[i] = std::move(val); });
+                [dst](int64_t i, std::string val) { dst[i] = std::move(val); },
+                op_ctx ? op_ctx->cancellation_token
+                       : folly::CancellationToken{});
             break;
         }
         case DataType::JSON: {
