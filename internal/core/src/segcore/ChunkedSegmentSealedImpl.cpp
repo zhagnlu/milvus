@@ -153,6 +153,7 @@
 #include "segcore/storagev2translator/ManifestGroupTranslator.h"
 #include "segcore/storagev2translator/StorageV2Config.h"
 #include "segcore/TextColumnCache.h"
+#include "futures/Future.h"
 #include "storage/FileManager.h"
 #include "storage/StatusToErrorCode.h"
 #include "storage/KeyRetriever.h"
@@ -5769,7 +5770,9 @@ ChunkedSegmentSealedImpl::bulk_subscript_vector_array_impl(
 static std::vector<std::string>
 ReadTextLobBatch(
     const std::string& lob_base_path,
-    const std::vector<milvus_storage::lob_column::EncodedRef>& encoded_refs) {
+    const std::vector<milvus_storage::lob_column::EncodedRef>& encoded_refs,
+    const folly::CancellationToken& cancel_token = {}) {
+    milvus::futures::throwIfCancelled(cancel_token);
     if (encoded_refs.empty()) {
         return {};
     }
@@ -5779,7 +5782,8 @@ ReadTextLobBatch(
     auto fs = milvus::segcore::GetDefaultArrowFileSystem();
 
     auto& cache = GetGlobalTextColumnCache();
-    return cache.ReadBatch(lob_base_path, fs, properties, encoded_refs);
+    return cache.ReadBatch(
+        lob_base_path, fs, properties, encoded_refs, cancel_token);
 }
 
 void
@@ -5788,7 +5792,8 @@ ChunkedSegmentSealedImpl::bulk_subscript_text_impl(
     const std::shared_ptr<const RuntimeResourceState>& runtime,
     const ChunkedColumnInterface::TakeResult& take,
     google::protobuf::RepeatedPtrField<std::string>* dst,
-    bool* validity) const {
+    bool* validity,
+    const folly::CancellationToken& cancel_token) const {
     auto runtime_snapshot =
         runtime != nullptr ? runtime : BuildRuntimeResourceState();
     auto it = runtime_snapshot->text_lob_paths.find(field_id);
@@ -5820,7 +5825,7 @@ ChunkedSegmentSealedImpl::bulk_subscript_text_impl(
         return;
     }
 
-    auto texts = ReadTextLobBatch(lob_base_path, encoded_refs);
+    auto texts = ReadTextLobBatch(lob_base_path, encoded_refs, cancel_token);
     for (size_t i = 0; i < valid_indices.size() && i < texts.size(); i++) {
         *dst->Mutable(valid_indices[i]) = std::move(texts[i]);
     }
@@ -5991,7 +5996,11 @@ ChunkedSegmentSealedImpl::CreateTextIndexWithSchema(
                     if (entries.empty()) {
                         return;
                     }
-                    auto texts = ReadTextLobBatch(lob_base_path, encoded_refs);
+                    auto texts =
+                        ReadTextLobBatch(lob_base_path,
+                                         encoded_refs,
+                                         op_ctx ? op_ctx->cancellation_token
+                                                : folly::CancellationToken{});
                     AssertInfo(texts.size() == encoded_refs.size(),
                                "TEXT field {} LOB batch read returned {} "
                                "texts for {} refs. segment_id={}",
@@ -6698,7 +6707,9 @@ ChunkedSegmentSealedImpl::get_raw_data_from_state(
                 snapshot.runtime,
                 *take,
                 ret->mutable_scalars()->mutable_string_data()->mutable_data(),
-                validity);
+                validity,
+                op_ctx ? op_ctx->cancellation_token
+                       : folly::CancellationToken{});
             break;
         }
 
@@ -10465,7 +10476,8 @@ ChunkedSegmentSealedImpl::ArrowToDataArray(
     const std::vector<int64_t>& result_mapping,
     int64_t size,
     const std::vector<std::string>* dynamic_field_names,
-    const std::string* text_lob_path) {
+    const std::string* text_lob_path,
+    const folly::CancellationToken& cancel_token) {
     auto data_array = std::make_unique<DataArray>();
     data_array->set_type(
         static_cast<proto::schema::DataType>(field_meta.get_data_type()));
@@ -10571,7 +10583,8 @@ ChunkedSegmentSealedImpl::ArrowToDataArray(
                     return nullptr;
                 }
 
-                auto texts = ReadTextLobBatch(*text_lob_path, encoded_refs);
+                auto texts = ReadTextLobBatch(
+                    *text_lob_path, encoded_refs, cancel_token);
                 for (auto& text : texts) {
                     obj->add_data(std::move(text));
                 }
@@ -11193,12 +11206,14 @@ ChunkedSegmentSealedImpl::TryTakeForRetrieve(
             }
             text_lob_path = &path_it->second;
         }
-        auto data_array = ArrowToDataArray(arr,
-                                           field_meta,
-                                           ctx.result_mapping,
-                                           size,
-                                           dynamic_field_names,
-                                           text_lob_path);
+        auto data_array = ArrowToDataArray(
+            arr,
+            field_meta,
+            ctx.result_mapping,
+            size,
+            dynamic_field_names,
+            text_lob_path,
+            op_ctx ? op_ctx->cancellation_token : folly::CancellationToken{});
         if (!data_array) {
             LOG_WARN(
                 "[TakeAPI] unsupported data type {} for field '{}', "
@@ -11415,12 +11430,14 @@ ChunkedSegmentSealedImpl::TryTakeForSearch(
             }
             text_lob_path = &path_it->second;
         }
-        auto data_array = ArrowToDataArray(arr,
-                                           field_meta,
-                                           ctx.result_mapping,
-                                           size,
-                                           dynamic_field_names,
-                                           text_lob_path);
+        auto data_array = ArrowToDataArray(
+            arr,
+            field_meta,
+            ctx.result_mapping,
+            size,
+            dynamic_field_names,
+            text_lob_path,
+            op_ctx ? op_ctx->cancellation_token : folly::CancellationToken{});
         if (!data_array) {
             LOG_WARN(
                 "[TakeAPI] search: unsupported type {} for '{}', "

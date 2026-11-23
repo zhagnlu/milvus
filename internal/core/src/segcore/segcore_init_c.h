@@ -24,6 +24,11 @@ void
 SegcoreInit(const char*);
 
 void
+SegcoreSetTextLobReadConcurrency(bool enabled,
+                                 uint32_t max_batches,
+                                 uint32_t max_files);
+
+void
 SegcoreSetChunkRows(const int64_t);
 
 void

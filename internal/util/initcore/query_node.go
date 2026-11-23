@@ -86,6 +86,10 @@ func doInitQueryNodeOnce(ctx context.Context) error {
 	// override segcore chunk size
 	cChunkRows := C.int64_t(paramtable.Get().QueryNodeCfg.ChunkRows.GetAsInt64())
 	C.SegcoreSetChunkRows(cChunkRows)
+	C.SegcoreSetTextLobReadConcurrency(
+		C.bool(paramtable.Get().QueryNodeCfg.TextLobConcurrentReads.GetAsBool()),
+		C.uint32_t(paramtable.Get().QueryNodeCfg.TextLobMaxConcurrentBatches.GetAsUint32()),
+		C.uint32_t(paramtable.Get().QueryNodeCfg.TextLobMaxConcurrentFilesPerBatch.GetAsUint32()))
 
 	// override the FM-index count-first guard threshold (queryNode.fmindexCostRatio)
 	cFmindexCostRatio := C.float(paramtable.Get().QueryNodeCfg.FmindexCostRatio.GetAsFloat())

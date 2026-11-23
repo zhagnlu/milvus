@@ -23,6 +23,7 @@
 #include "segcore/retrieve_result_export_c.h"
 #include "segcore/test_utils/TextMatchTestUtils.h"
 #include "segcore/arrow_field_utils.h"
+#include "segcore/segcore_init_c.h"
 #include "milvus-storage/lob_column/lob_column_manager.h"
 #include "milvus-storage/lob_column/lob_column_writer.h"
 #include "milvus-storage/lob_column/lob_reference.h"
@@ -129,6 +130,8 @@ class GrepScanTest
     CGrepScanOptions options{};
     void
     SetUp() override {
+        // Exercise the startup bridge and optimized shared-reader path.
+        SegcoreSetTextLobReadConcurrency(true, 4, 4);
         schema = std::make_shared<Schema>();
         schema->AddField(FieldMeta(FieldName("pk"),
                                    FieldId(100),
