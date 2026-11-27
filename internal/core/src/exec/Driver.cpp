@@ -42,6 +42,7 @@
 #include "exec/operator/MvccNode.h"
 #include "exec/operator/Operator.h"
 #include "exec/operator/ProjectNode.h"
+#include "exec/operator/ScalarProjectNode.h"
 #include "exec/operator/RandomSampleNode.h"
 #include "exec/operator/RescoresNode.h"
 #include "exec/operator/SearchGroupByNode.h"
@@ -112,6 +113,14 @@ DriverFactory::CreateDriver(
             tracer::AddEvent("create_operator: AggregationNode");
             operators.push_back(std::make_shared<PhyAggregationNode>(
                 id, ctx.get(), queryGroupByNode));
+        } else if (auto scalarScan = std::dynamic_pointer_cast<
+                       const milvus::plan::ScalarProjectScanNode>(plannode)) {
+            operators.push_back(std::make_shared<PhyScalarProjectScanNode>(
+                id, ctx.get(), scalarScan));
+        } else if (auto scalarProject = std::dynamic_pointer_cast<
+                       const milvus::plan::ScalarProjectNode>(plannode)) {
+            operators.push_back(std::make_shared<PhyScalarProjectNode>(
+                id, ctx.get(), scalarProject));
         } else if (auto projectNode =
                        std::dynamic_pointer_cast<const plan::ProjectNode>(
                            plannode)) {

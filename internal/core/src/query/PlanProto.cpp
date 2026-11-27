@@ -1723,6 +1723,23 @@ ProtoParser::CreateAlwaysTrueExprs() {
 }
 
 expr::TypedExprPtr
+ProtoParser::ParseScalarExprs(const proto::plan::Expr& expr_pb) {
+    if (expr_pb.has_binary_arith_expr()) {
+        const auto& arithmetic = expr_pb.binary_arith_expr();
+        return std::make_shared<expr::BinaryArithExpr>(
+            arithmetic.op(),
+            ParseScalarExprs(arithmetic.left()),
+            ParseScalarExprs(arithmetic.right()));
+    }
+    if (expr_pb.has_value_expr() &&
+        expr_pb.value_expr().value().has_float_val()) {
+        return std::make_shared<expr::ValueExpr>(expr_pb.value_expr().value(),
+                                                 DataType::DOUBLE);
+    }
+    return ParseExprs(expr_pb, TypeIsAny);
+}
+
+expr::TypedExprPtr
 ProtoParser::ParseExprs(const proto::plan::Expr& expr_pb,
                         TypeCheckFunction type_check) {
     using ppe = proto::plan::Expr;
@@ -1755,6 +1772,10 @@ ProtoParser::ParseExprs(const proto::plan::Expr& expr_pb,
         case ppe::kBinaryArithOpEvalRangeExpr: {
             result = ParseBinaryArithOpEvalRangeExprs(
                 expr_pb.binary_arith_op_eval_range_expr());
+            break;
+        }
+        case ppe::kBinaryArithExpr: {
+            result = ParseScalarExprs(expr_pb);
             break;
         }
         case ppe::kExistsExpr: {

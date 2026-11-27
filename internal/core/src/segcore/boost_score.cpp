@@ -38,6 +38,7 @@
 #include "query/PlanImpl.h"
 #include "query/PlanProto.h"
 #include "rescores/BoostScoreRunner.h"
+#include "exec/operator/CandidateFilter.h"
 #include "segcore/SegmentInterface.h"
 #include "storage/StatusToErrorCode.h"
 
@@ -213,8 +214,9 @@ ComputeScorerScoresOnPreparedChunks(
     // non-native already builds it, and a native filter would otherwise be
     // recompiled (and its scalar indexes re-pinned) once per chunk.
     std::unique_ptr<milvus::exec::ExprSet> filter_expr_set;
+    std::unique_ptr<milvus::exec::CandidateFilter> scalar_filter;
     auto filter_bitset = milvus::rescores::ComputeNonNativeFilterBitset(
-        &exec_context, scorer, &filter_expr_set);
+        &exec_context, scorer, &filter_expr_set, &scalar_filter);
 
     for (auto chunk_idx = 0; chunk_idx < scorer_offset_chunks.size();
          ++chunk_idx) {
@@ -233,7 +235,7 @@ ComputeScorerScoresOnPreparedChunks(
             output_score_chunks[chunk_idx],
             output_has_score_chunks[chunk_idx],
             filter_bitset.has_value() ? &filter_bitset.value() : nullptr,
-            filter_expr_set.get());
+            filter_expr_set.get(), scalar_filter.get());
     }
 }
 

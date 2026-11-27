@@ -217,7 +217,8 @@ PhyProjectNode::GetOutput() {
         column_vectors.emplace_back(std::move(column_vector));
     }
     is_finished_ = true;
-    auto row_vector = std::make_shared<RowVector>(std::move(column_vectors));
+    auto row_vector = std::make_shared<RowVector>(
+        row_type, selected_count, std::move(column_vectors));
     return row_vector;
 }
 

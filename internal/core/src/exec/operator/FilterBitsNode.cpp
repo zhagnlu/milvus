@@ -15,6 +15,7 @@
 // limitations under the License.
 
 #include "FilterBitsNode.h"
+#include "exec/operator/FilterBitsExecution.h"
 
 #include <algorithm>
 #include <chrono>
@@ -40,7 +41,7 @@ namespace exec {
 namespace {
 
 std::string
-BuildExprCacheKey(const plan::FilterBitsNode& filter,
+BuildExprCacheKey(const ::milvus::plan::FilterBitsNode& filter,
                   QueryContext* query_context) {
     auto key = filter.ToString();
     if (query_context != nullptr) {
@@ -78,7 +79,7 @@ ConvertPredicateToFilteredBitset(TargetBitmapView data,
 PhyFilterBitsNode::PhyFilterBitsNode(
     int32_t operator_id,
     DriverContext* driverctx,
-    const std::shared_ptr<const plan::FilterBitsNode>& filter)
+    const std::shared_ptr<const ::milvus::plan::FilterBitsNode>& filter)
     : Operator(driverctx,
                filter->output_type(),
                operator_id,
@@ -86,6 +87,54 @@ PhyFilterBitsNode::PhyFilterBitsNode(
                "PhyFilterBitsNode") {
     ExecContext* exec_context = operator_context_->get_exec_context();
     query_context_ = exec_context->get_query_context();
+    need_process_rows_ = query_context_->get_active_count();
+    num_processed_rows_ = 0;
+    auto config = query_context_->query_config();
+    auto* segment = query_context_->get_segment();
+    if (config->enable_expr_execution_v2() && segment &&
+        query_context_->get_struct_name().empty() &&
+        !query_context_->bitset_is_element_level()) {
+        auto context = std::make_shared<segcore::reader::ReadContext>();
+        // Same request-scoped borrow as the legacy expressions: ExecuteTask
+        // runs synchronously inside the caller's OpContext lifetime. Keep its
+        // storage counters, trace context and cancellation token, not a copy.
+        if (auto* op = query_context_->get_op_context())
+            context->op_context =
+                std::shared_ptr<OpContext>(op, [](OpContext*) {});
+        context->checkpoint = [query = query_context_] {
+            checkCancellation(query);
+        };
+        exec::plan::PhysicalPrepareOptions physical;
+        physical.reorder = OPTIMIZE_EXPR_ENABLED.load();
+        auto namespace_field =
+            segment->get_schema_snapshot()->get_namespace_field_id();
+        if (namespace_field)
+            physical.namespace_field = namespace_field->get();
+        physical.bind_index = access::MakeSegmentIndexBinding(
+            *segment,
+            query_context_->get_read_snapshot(),
+            need_process_rows_,
+            context,
+            query_context_->get_plan_options().expr_use_json_stats);
+        auto bind = access::MakeSegmentReaderBinding(
+            *segment,
+            query_context_->get_read_snapshot(),
+            need_process_rows_,
+            context->op_context.get());
+        scalar_filter_ = FilterBitsExecution::TryCreateWithBinding(
+            filter->filter(),
+            CreateTTLFieldFilterExpression(query_context_),
+            std::move(bind),
+            need_process_rows_,
+            config->get_expr_batch_size(),
+            std::move(context),
+            physical,
+            segment->get_schema_snapshot());
+        // No global cache on the experimental path. In particular, membership
+        // summaries must never become cache keys. No legacy ExprSet is built.
+        if (scalar_filter_)
+            return;
+    }
     std::vector<expr::TypedExprPtr> filters;
     filters.emplace_back(filter->filter());
     // This operator folds UNKNOWN predicate rows into the excluded set
@@ -94,8 +143,6 @@ PhyFilterBitsNode::PhyFilterBitsNode(
     // from their active sets early.
     exprs_ = std::make_unique<ExprSet>(
         filters, exec_context, /*null_rejecting=*/true);
-    need_process_rows_ = query_context_->get_active_count();
-    num_processed_rows_ = 0;
 
     enable_expr_cache_ = query_context_->get_enable_expr_cache();
     if (enable_expr_cache_) {
@@ -119,6 +166,19 @@ PhyFilterBitsNode::PhyFilterBitsNode(
             enable_expr_cache_ = false;
             expr_cache_key_.clear();
         }
+    }
+}
+
+PhyFilterBitsNode::~PhyFilterBitsNode() = default;
+
+void
+PhyFilterBitsNode::Close() {
+    Operator::Close();
+    if (exprs_)
+        exprs_->Clear();
+    if (scalar_filter_) {
+        scalar_filter_.reset();
+        num_processed_rows_ = need_process_rows_;
     }
 }
 
@@ -222,6 +282,20 @@ PhyFilterBitsNode::GetOutput() {
             }
             return cached_output;
         }
+    }
+
+    if (scalar_filter_) {
+        const auto start = std::chrono::high_resolution_clock::now();
+        auto output = scalar_filter_->GetOutput();
+        const auto elapsed =
+            std::chrono::duration<double, std::micro>(
+                std::chrono::high_resolution_clock::now() - start)
+                .count();
+        milvus::monitor::internal_core_search_latency_scalar.Observe(elapsed /
+                                                                     1000);
+        // Only publish operator progress after the complete bitmap succeeds.
+        num_processed_rows_ = need_process_rows_;
+        return output;
     }
 
     const auto prefetch_start = recording

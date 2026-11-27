@@ -11,11 +11,13 @@
 
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
 
 #include "common/Types.h"
+#include "common/VirtualPK.h"
 #include "filemanager/InputStream.h"
 #include "gtest/gtest.h"
 #include "segcore/InsertRecord.h"
@@ -500,6 +502,36 @@ TEST_F(VirtualPKOffsetMapTest, FindRange) {
         }
         for (int64_t i = 5; i < num; i++) {
             EXPECT_FALSE(view[i]) << "offset " << i;
+        }
+    }
+}
+
+TEST_F(VirtualPKOffsetMapTest, ExtremeComparisonsDoNotOverflow) {
+    for (int64_t segment_id : {int64_t{123}, kSegmentID}) {
+        VirtualPKOffsetMap map(segment_id, kNumRows);
+        for (int64_t target : {std::numeric_limits<int64_t>::min(),
+                               std::numeric_limits<int64_t>::max()}) {
+            for (auto op : {proto::plan::Equal,
+                            proto::plan::LessThan,
+                            proto::plan::LessEqual,
+                            proto::plan::GreaterThan,
+                            proto::plan::GreaterEqual}) {
+                BitsetType bits(kNumRows, false);
+                auto view = bits.view();
+                map.find_range(
+                    PkType(target), op, view, [](int64_t) { return true; });
+                for (int64_t row = 0; row < kNumRows; ++row) {
+                    const auto pk = GetVirtualPK(segment_id, row);
+                    const bool expected =
+                        op == proto::plan::Equal         ? pk == target
+                        : op == proto::plan::LessThan    ? pk < target
+                        : op == proto::plan::LessEqual   ? pk <= target
+                        : op == proto::plan::GreaterThan ? pk > target
+                                                         : pk >= target;
+                    EXPECT_EQ(bits[row], expected)
+                        << segment_id << ":" << target;
+                }
+            }
         }
     }
 }

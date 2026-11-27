@@ -44,7 +44,8 @@ StringChunk::StringViews(
     ret.reserve(len);
     auto end_offset = start_offset + len;
     for (auto i = start_offset; i < end_offset; i++) {
-        ret.emplace_back(data_ + offsets_[i], offsets_[i + 1] - offsets_[i]);
+        const auto begin = OffsetAt(i);
+        ret.emplace_back(data_ + begin, OffsetAt(i + 1) - begin);
     }
     return {std::move(ret), Validity(start_offset)};
 }
@@ -58,8 +59,8 @@ StringChunk::ViewsByOffsets(const FixedVector<int32_t>& offsets) {
     valid_res.reserve(size);
     for (auto i = 0; i < size; ++i) {
         auto idx = offsets[i];
-        auto start = offsets_[idx];
-        ret.emplace_back(data_ + start, offsets_[idx + 1] - start);
+        auto start = OffsetAt(idx);
+        ret.emplace_back(data_ + start, OffsetAt(idx + 1) - start);
         valid_res.emplace_back(isValid(idx));
     }
     return {std::move(ret), std::move(valid_res)};

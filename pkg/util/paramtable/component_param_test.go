@@ -36,6 +36,38 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 )
 
+func TestExprExecutionV2StartupConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		env  string
+		want bool
+	}{
+		{name: "default", yaml: "queryNode: {}", want: false},
+		{name: "yaml_enabled", yaml: "queryNode:\n  segcore:\n    enableExprExecutionV2: true", want: true},
+		{name: "env_enabled", yaml: "queryNode:\n  segcore:\n    enableExprExecutionV2: false", env: "true", want: true},
+		{name: "env_disabled", yaml: "queryNode:\n  segcore:\n    enableExprExecutionV2: true", env: "false", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("MILVUSCONF", dir)
+			if tc.env != "" {
+				t.Setenv("QUERYNODE_SEGCORE_ENABLEEXPREXECUTIONV2", tc.env)
+			}
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "scalar.yaml"), []byte(tc.yaml), 0o600))
+			bt := NewBaseTable(SkipRemote(true), SkipEnv(tc.env == ""), Files([]string{"scalar.yaml"}))
+			t.Cleanup(bt.mgr.Close)
+			params := &ComponentParam{}
+			params.Init(bt)
+			item := params.QueryNodeCfg.EnableExprExecutionV2
+			require.Equal(t, tc.want, item.GetAsBool())
+			field, ok := reflect.TypeOf(params.QueryNodeCfg).FieldByName("EnableExprExecutionV2")
+			require.True(t, ok)
+			require.Equal(t, "false", field.Tag.Get("refreshable"))
+		})
+	}
+}
+
 func TestSearchFanoutPoolSizeRatio(t *testing.T) {
 	params := &ComponentParam{}
 	base := NewBaseTable(SkipRemote(true))

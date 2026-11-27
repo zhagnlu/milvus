@@ -32,6 +32,7 @@
 #include "common/Types.h"
 #include "mmap/ChunkedColumn.h"
 #include "segcore/AckResponder.h"
+#include "segcore/OffsetBatchIterator.h"
 #include "segcore/ConcurrentVector.h"
 #include <tuple>
 #include <type_traits>
@@ -272,6 +273,12 @@ class OffsetMap {
     virtual std::pair<std::vector<OffsetMap::OffsetType>, bool>
     find_first_n(int64_t limit, const BitsetTypeView& bitset) const = 0;
 
+    // Same row ordering/version choice as find_first_n(Unlimited), with
+    // bounded output storage and no full-result offset materialization.
+    virtual OffsetBatchIterator
+    make_offset_iterator(BitsetTypeView excluded,
+                         std::function<void()> checkpoint = {}) const = 0;
+
     // Element-level version of find_first_n.
     // Find first N elements that pass filter, ordered by PK then element_index.
     // Returns:
@@ -418,6 +425,49 @@ class OffsetOrderedMap : public OffsetMap {
         // TODO: we can't retrieve pk by offset very conveniently.
         //      Selectivity should be done outside.
         return find_first_n_by_index(limit, bitset);
+    }
+
+    OffsetBatchIterator
+    make_offset_iterator(BitsetTypeView excluded,
+                         std::function<void()> checkpoint = {}) const override {
+        // No iterator or read lock survives a batch. Inserts may proceed while
+        // columns are read; offsets beyond the fixed bitmap prefix are ignored.
+        return [this,
+                excluded,
+                checkpoint = std::move(checkpoint),
+                last = std::optional<T>{},
+                done = false](size_t max_rows) mutable {
+            CheckOffsetBatchSize(max_rows);
+            if (checkpoint)
+                checkpoint();
+            std::vector<int64_t> offsets;
+            if (done)
+                return offsets;
+            offsets.reserve(std::min(max_rows, excluded.size()));
+            std::shared_lock<std::shared_mutex> lock(mtx_);
+            auto it = last ? map_.upper_bound(*last) : map_.begin();
+            size_t visited = 0;
+            for (; it != map_.end() && offsets.size() < max_rows; ++it) {
+                if ((visited++ % 1024) == 0 && checkpoint)
+                    checkpoint();
+                for (auto row = it->second.rbegin(); row != it->second.rend();
+                     ++row) {
+                    if ((visited++ % 1024) == 0 && checkpoint)
+                        checkpoint();
+                    if (*row >= 0 &&
+                        static_cast<size_t>(*row) < excluded.size() &&
+                        !excluded[*row]) {
+                        offsets.push_back(*row);
+                        break;
+                    }
+                }
+                last = it->first;
+            }
+            done = it == map_.end();
+            if (checkpoint)
+                checkpoint();
+            return offsets;
+        };
     }
 
     std::tuple<std::vector<int64_t>, std::vector<std::vector<int32_t>>, bool>
@@ -748,6 +798,33 @@ class OffsetOrderedArray : public OffsetMap {
         return find_first_n_by_index(limit, bitset);
     }
 
+    OffsetBatchIterator
+    make_offset_iterator(BitsetTypeView excluded,
+                         std::function<void()> checkpoint = {}) const override {
+        check_search();
+        return [this,
+                excluded,
+                checkpoint = std::move(checkpoint),
+                next = size_t{0}](size_t max_rows) mutable {
+            CheckOffsetBatchSize(max_rows);
+            if (checkpoint)
+                checkpoint();
+            std::vector<int64_t> offsets;
+            offsets.reserve(std::min(max_rows, array_.size() - next));
+            while (next < array_.size() && offsets.size() < max_rows) {
+                if ((next % 1024) == 0 && checkpoint)
+                    checkpoint();
+                const auto row = array_[next++].second;
+                if (row >= 0 && static_cast<size_t>(row) < excluded.size() &&
+                    !excluded[row])
+                    offsets.push_back(row);
+            }
+            if (checkpoint)
+                checkpoint();
+            return offsets;
+        };
+    }
+
     std::tuple<std::vector<int64_t>, std::vector<std::vector<int32_t>>, bool>
     find_first_n_element(
         int64_t limit,
@@ -947,7 +1024,13 @@ class VirtualPKOffsetMap : public OffsetMap {
         int64_t lo = 0, hi = num_rows_;  // offset range
 
         // Convert target to offset space
-        int64_t target_offset = target - base;
+        // A valid INT64 predicate can be on the opposite side of zero from
+        // the segment's virtual PK base. Subtract before narrowing, then clip
+        // to the only offsets relevant to this segment (including sentinels).
+        const auto delta = static_cast<__int128>(target) - base;
+        int64_t target_offset = delta < 0 ? -1
+                               : delta >= num_rows_ ? num_rows_
+                                                    : static_cast<int64_t>(delta);
 
         switch (op) {
             case proto::plan::OpType::Equal: {
@@ -1030,6 +1113,12 @@ class VirtualPKOffsetMap : public OffsetMap {
         return {seg_offsets,
                 more_hit_than_limit &&
                     static_cast<int64_t>(seg_offsets.size()) >= limit};
+    }
+
+    OffsetBatchIterator
+    make_offset_iterator(BitsetTypeView excluded,
+                         std::function<void()> checkpoint = {}) const override {
+        return MakeBitmapOffsetIterator(excluded, std::move(checkpoint));
     }
 
     std::tuple<std::vector<int64_t>, std::vector<std::vector<int32_t>>, bool>
@@ -1461,15 +1550,16 @@ class InsertRecordGrowing {
             if (pk_field_id.has_value() && pk_field_id.value() == field_id) {
                 AssertInfo(!field_meta.is_nullable(),
                            "Primary key should not be nullable");
-                switch (field_meta.get_data_type()) {
+                primary_key_type_ = field_meta.get_data_type();
+                switch (primary_key_type_) {
                     case DataType::INT64: {
                         pk2offset_ =
-                            std::make_unique<OffsetOrderedMap<int64_t>>();
+                            std::make_shared<OffsetOrderedMap<int64_t>>();
                         break;
                     }
                     case DataType::VARCHAR: {
                         pk2offset_ =
-                            std::make_unique<OffsetOrderedMap<std::string>>();
+                            std::make_shared<OffsetOrderedMap<std::string>>();
                         break;
                     }
                     default: {
@@ -1589,9 +1679,12 @@ class InsertRecordGrowing {
         timestamps_.clear();
         row_ids_.clear();
         timestamp_index_ = TimestampIndex();
-        if (pk2offset_) {
-            pk2offset_->clear();
-        }
+        // Prepared readers may retain this map after segment release. Publish
+        // an empty generation instead of clearing their fixed row prefix.
+        if (primary_key_type_ == DataType::INT64)
+            pk2offset_ = std::make_shared<OffsetOrderedMap<int64_t>>();
+        else if (primary_key_type_ == DataType::VARCHAR)
+            pk2offset_ = std::make_shared<OffsetOrderedMap<std::string>>();
         reserved = 0;
         {
             std::unique_lock<std::shared_mutex> lck(field_map_mutex_);
@@ -1928,12 +2021,13 @@ class InsertRecordGrowing {
     ConcurrentVector<int64_t> row_ids_;
     std::atomic<int64_t> reserved = 0;
     TimestampIndex timestamp_index_;
-    std::unique_ptr<OffsetMap> pk2offset_;
+    std::shared_ptr<OffsetMap> pk2offset_;
 
     // used for preInsert of growing segment
     AckResponder ack_responder_;
 
  private:
+    DataType primary_key_type_ = DataType::NONE;
     // Unlocked field-map lookups. Callers MUST already hold field_map_mutex_
     // (at least shared). These let multi-lookup hot paths such as
     // get_span_base resolve under a single lock acquisition.

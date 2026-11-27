@@ -150,9 +150,11 @@ struct ArithOpElementFunc {
             }
         }
 
-        // This is the original code, kept here for the documentation purposes
-        // and also this code will be used for iterative filter since iterative filter does not execute as a batch manner
-        if constexpr (filter_type == FilterType::random) {
+        // Floating division must compare the rounded quotient in both access
+        // modes. Rewriting a / b == c to a == b * c changes boundary results.
+        if constexpr (filter_type == FilterType::random ||
+                      (std::is_floating_point_v<T> &&
+                       arith_op == proto::plan::ArithOpType::Div)) {
             for (int i = 0; i < size; ++i) {
                 auto offset = (offsets) ? offsets[i] : i;
                 if constexpr (cmp_op == proto::plan::OpType::Equal) {

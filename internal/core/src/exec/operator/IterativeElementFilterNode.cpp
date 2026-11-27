@@ -57,6 +57,10 @@ PhyIterativeElementFilterNode::PhyIterativeElementFilterNode(
       has_doc_predicate_(element_filter_node->has_doc_predicate()) {
     ExecContext* exec_context = operator_context_->get_exec_context();
     query_context_ = exec_context->get_query_context();
+    scalar_filter_ = CandidateFilter::TryCreate(
+        element_filter_node->element_filter(), exec_context, struct_name_);
+    if (scalar_filter_)
+        return;
     std::vector<expr::TypedExprPtr> exprs;
     exprs.emplace_back(element_filter_node->element_filter());
     element_exprs_ = std::make_unique<ExprSet>(exprs, exec_context, true);
@@ -123,7 +127,7 @@ PhyIterativeElementFilterNode::GetOutput() {
     for (auto& base_iter : base_iterators) {
         // Wrap each iterator with ElementFilterIterator
         auto wrapped_iter = std::make_shared<ElementFilterIterator>(
-            base_iter, exec_context, element_exprs_.get());
+            base_iter, exec_context, element_exprs_.get(), scalar_filter_);
 
         wrapped_iterators.push_back(std::move(wrapped_iter));
     }

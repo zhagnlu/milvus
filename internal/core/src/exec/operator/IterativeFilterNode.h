@@ -27,6 +27,7 @@
 #include "exec/QueryContext.h"
 #include "exec/expression/Expr.h"
 #include "exec/operator/Operator.h"
+#include "exec/operator/CandidateFilter.h"
 #include "plan/PlanNode.h"
 
 // difference between FilterBitsNode and IterativeFilterNode is that
@@ -63,7 +64,9 @@ class PhyIterativeFilterNode : public Operator {
     void
     Close() override {
         Operator::Close();
-        exprs_->Clear();
+        if (exprs_)
+            exprs_->Clear();
+        scalar_filter_.reset();
     }
 
     BlockingReason
@@ -78,6 +81,7 @@ class PhyIterativeFilterNode : public Operator {
 
  private:
     std::unique_ptr<ExprSet> exprs_;
+    std::unique_ptr<CandidateFilter> scalar_filter_;
     QueryContext* query_context_;
     int64_t num_processed_rows_;
     int64_t need_process_rows_;

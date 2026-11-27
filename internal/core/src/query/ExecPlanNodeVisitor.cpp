@@ -19,6 +19,7 @@
 
 #include "common/Tracer.h"
 #include "common/Utils.h"
+#include "common/VectorAccess.h"
 #include "common/protobuf_utils.h"
 #include "exec/Task.h"
 #include "fmt/core.h"
@@ -61,6 +62,8 @@ ExecPlanNodeVisitor::ExecuteTask(
         milvus::exec::Task::Create(DEFAULT_TASK_ID, plan, 0, query_context);
     RowVectorPtr ret = nullptr;
     int64_t processed_num = 0;
+    const bool scalar_rows =
+        plan.plan_node_->output_kind() == milvus::plan::OutputKind::ScalarRows;
     for (;;) {
         auto result = task->Next();
         if (!result) {
@@ -69,7 +72,7 @@ ExecPlanNodeVisitor::ExecuteTask(
                     std::dynamic_pointer_cast<ColumnVector>(ret->child(0));
                 AssertInfo(first_column,
                            "first column must be a column vector");
-                if (first_column->IsBitmap()) {
+                if (!scalar_rows && first_column->IsBitmap()) {
                     if (query_context->bitset_is_element_level()) {
                         Assert(processed_num ==
                                query_context->get_active_element_count());
@@ -80,6 +83,19 @@ ExecPlanNodeVisitor::ExecuteTask(
                 }
             }
             break;
+        }
+        if (scalar_rows) {
+            std::vector<VectorPtr> columns;
+            for (const auto& child : result->childrens()) {
+                auto column = std::dynamic_pointer_cast<ColumnVector>(child);
+                columns.push_back(column && !column->IsBitmap()
+                                      ? column
+                                      : MaterializeScalarColumn(
+                                            ReadOnlyVectorView::CopyOf(child)));
+            }
+            result = std::make_shared<RowVector>(plan.plan_node_->output_type(),
+                                                 result->size(),
+                                                 std::move(columns));
         }
         processed_num += result->size();
         if (ret) {
@@ -103,6 +119,9 @@ ExecPlanNodeVisitor::ExecuteTask(
         } else {
             ret = result;
         }
+        if (scalar_rows && ret->size() != processed_num)
+            ret = std::make_shared<RowVector>(
+                ret->row_type(), processed_num, ret->childrens());
     }
     span.SetAttribute("total_rows", processed_num);
     span.SetAttribute("matched_rows",
@@ -315,6 +334,9 @@ ExecPlanNodeVisitor::setupRetrieveResult(
     RetrieveResult& tmp_retrieve_result,
     const segcore::SegmentInternalInterface* segment,
     std::shared_ptr<milvus::exec::QueryContext> query_context) {
+    const bool scalar_rows =
+        node.plannodes_->output_kind() == milvus::plan::OutputKind::ScalarRows;
+    const auto output_type = node.plannodes_->output_type();
     // Preserve element mode even when execution produces no rows.
     tmp_retrieve_result.element_level_ =
         dynamic_cast<const plan::ElementFilterBitsNode*>(
@@ -322,7 +344,6 @@ ExecPlanNodeVisitor::setupRetrieveResult(
     if (result == nullptr) {
         // Return empty field_data arrays with correct schema (0 rows, N columns)
         // to ensure result structure matches the expected output type.
-        auto output_type = node.plannodes_->output_type();
         if (output_type && output_type->column_count() > 0) {
             auto column_count = output_type->column_count();
             tmp_retrieve_result.field_data_.resize(column_count);
@@ -331,6 +352,8 @@ ExecPlanNodeVisitor::setupRetrieveResult(
                 auto col_type = output_type->column_type(i);
                 milvus::segcore::CreateScalarDataArray(
                     data_array, 0, col_type, col_type, false);
+                if (scalar_rows)
+                    data_array.set_field_name(output_type->column_name(i));
                 tmp_retrieve_result.field_data_[i] = std::move(data_array);
             }
         }
@@ -345,7 +368,9 @@ ExecPlanNodeVisitor::setupRetrieveResult(
     AssertInfo(first_column,
                "children inside row vector must be of column vector for now");
     tmp_retrieve_result.total_data_cnt_ = first_column->size();
-    if (first_column->IsBitmap()) {
+    if (node.plannodes_->output_kind() !=
+            milvus::plan::OutputKind::ScalarRows &&
+        first_column->IsBitmap()) {
         BitsetTypeView view(first_column->GetRawData(), first_column->size());
         if (query_context->bitset_is_element_level()) {
             // Element-level query: bitset is element-level, need to convert to (doc_id, element_index)
@@ -408,6 +433,8 @@ ExecPlanNodeVisitor::setupRetrieveResult(
                                                    column_vec->type(),
                                                    true);
             fillDataArrayFromColumnVector(column_vec, data_array);
+            if (scalar_rows)
+                data_array.set_field_name(output_type->column_name(i));
             tmp_retrieve_result.field_data_[i] = std::move(data_array);
         }
         retrieve_result_opt_ = std::move(tmp_retrieve_result);

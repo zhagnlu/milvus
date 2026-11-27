@@ -155,8 +155,11 @@ RegistrationFromCapability(const IndexCapabilityEntry& entry) {
     } else if (entry.family == index::families::kNgram) {
         kind = IndexKind::Ngram;
     }
-    return IndexRegistration{
-        entry.key, kind, entry.json_path, entry.json_cast_type};
+    return IndexRegistration{entry.key,
+                             kind,
+                             entry.json_path,
+                             entry.json_cast_type,
+                             entry.has_json_cast_function};
 }
 
 }  // namespace milvus::segcore

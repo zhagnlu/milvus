@@ -29,6 +29,7 @@
 namespace milvus::exec {
 class ExecContext;
 class ExprSet;
+class CandidateFilter;
 }  // namespace milvus::exec
 
 namespace milvus::rescores {
@@ -43,7 +44,10 @@ namespace milvus::rescores {
 // this once and pass it to every ComputeScorerScores call; evaluating inside
 // the per-chunk call would re-scan the whole segment once per chunk.
 //
-// out_expr_set: optional sink for the compiled filter expressions. Deciding
+// out_scalar_filter: retains the new query-scoped candidate evaluator when
+// enabled and supported. In that case no legacy ExprSet or full bitset is built.
+//
+// out_expr_set: optional sink for the compiled legacy filter expressions. Deciding
 // native-vs-non-native requires compiling the filter, which also pins scalar
 // indexes; handing the result back lets the caller pass it to every
 // ComputeScorerScores call instead of each of them compiling its own. Reuse is
@@ -54,13 +58,15 @@ std::optional<TargetBitmap>
 ComputeNonNativeFilterBitset(
     exec::ExecContext* exec_context,
     const std::shared_ptr<Scorer>& scorer,
-    std::unique_ptr<exec::ExprSet>* out_expr_set = nullptr);
+    std::unique_ptr<exec::ExprSet>* out_expr_set = nullptr,
+    std::unique_ptr<exec::CandidateFilter>* out_scalar_filter = nullptr);
 
 // filter_bitset: whole-segment filter result from
 // ComputeNonNativeFilterBitset(); pass nullptr to let this call evaluate the
 // filter itself (single-shot callers).
 // prepared_expr_set: compiled filter from ComputeNonNativeFilterBitset()'s
 // out_expr_set; pass nullptr to compile the filter here.
+// scalar_filter: prepared new candidate evaluator; reused across offset chunks.
 void
 ComputeScorerScores(exec::ExecContext* exec_context,
                     OpContext* op_context,
@@ -69,7 +75,8 @@ ComputeScorerScores(exec::ExecContext* exec_context,
                     FixedVector<int32_t>& offsets,
                     std::vector<std::optional<float>>& output_scores,
                     const TargetBitmap* filter_bitset = nullptr,
-                    exec::ExprSet* prepared_expr_set = nullptr);
+                    exec::ExprSet* prepared_expr_set = nullptr,
+                    exec::CandidateFilter* scalar_filter = nullptr);
 
 void
 ComputeScorerScores(exec::ExecContext* exec_context,
@@ -80,7 +87,8 @@ ComputeScorerScores(exec::ExecContext* exec_context,
                     float* output_scores,
                     bool* output_has_score,
                     const TargetBitmap* filter_bitset = nullptr,
-                    exec::ExprSet* prepared_expr_set = nullptr);
+                    exec::ExprSet* prepared_expr_set = nullptr,
+                    exec::CandidateFilter* scalar_filter = nullptr);
 
 void
 ComputeFunctionScores(exec::ExecContext* exec_context,

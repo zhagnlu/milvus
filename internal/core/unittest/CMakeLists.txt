@@ -222,6 +222,17 @@ endif()
 
 install(TARGETS all_tests DESTINATION unittest)
 
+# Opt-in, focused driver for the same performance tests included in all_tests.
+# Timing tests are DISABLED_ by default; normal UT only runs the small oracle.
+add_executable(scalar_execution_perf EXCLUDE_FROM_ALL
+        init_gtest.cpp
+        ${CMAKE_HOME_DIRECTORY}/src/exec/operator/ScalarExecutionPerformanceTest.cpp)
+target_link_libraries(scalar_execution_perf PRIVATE
+        GTest::gtest GTest::gmock milvus_core milvus_conan_deps
+        knowhere milvus-storage milvus-planparser-cpp)
+target_link_options(scalar_execution_perf PRIVATE "-L${PLANPARSER_LIB_DIR}")
+set_target_properties(scalar_execution_perf PROPERTIES
+        BUILD_RPATH "${PLANPARSER_LIB_DIR}")
 add_executable(index_tests init_gtest.cpp ${INDEX_TEST_FILES} ${INDEX_TEST_SUPPORT_FILES})
 
 # The serialization test constructs an IndexNode subclass in Milvus.

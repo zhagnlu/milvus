@@ -24,6 +24,7 @@ namespace milvus {
 
 extern std::atomic<int64_t> FILE_SLICE_SIZE;
 extern std::atomic<int64_t> EXEC_EVAL_EXPR_BATCH_SIZE;
+extern std::atomic<bool> EXPR_EXECUTION_V2_ENABLED;
 extern std::atomic<int64_t> DELETE_DUMP_BATCH_SIZE;
 extern std::atomic<bool> ENABLE_LATEST_DELETE_SNAPSHOT_OPTIMIZATION;
 extern std::atomic<bool> OPTIMIZE_EXPR_ENABLED;

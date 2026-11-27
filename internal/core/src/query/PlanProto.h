@@ -69,6 +69,11 @@ class ProtoParser {
     ParseExprs(const proto::plan::Expr& expr_pb,
                TypeCheckFunction type_check = TypeIsBool);
 
+    // Internal projection entry. Numeric literals preserve wire precision;
+    // this does not relax the BOOL-only filter entry above.
+    expr::TypedExprPtr
+    ParseScalarExprs(const proto::plan::Expr& expr_pb);
+
     std::shared_ptr<rescores::Scorer>
     ParseScorer(const proto::plan::ScoreFunction& function);
 

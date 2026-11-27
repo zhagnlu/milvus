@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -237,6 +238,14 @@ struct ScanBatch {
     // needed. Validity remains the field's real validity. The cursor splits at
     // filter boundaries, so this state applies to the complete dense batch.
     bool data_skipped = false;
+    // Explicit backend guarantee for dense integer slots, including NULLs.
+    // No compressed/gathered layout may set this merely because it has an address.
+    bool integer_null_payload_readable = false;
+    // Fixed-width FLOAT/DOUBLE slots; only total floating kernels may use them.
+    bool floating_null_payload_readable = false;
+    // StringViews constructed every view and pinned its referenced bytes,
+    // including NULL slots. Other variable-length representations stay false.
+    bool string_null_payload_readable = false;
 };
 
 struct OwnedTakeData {
@@ -394,7 +403,12 @@ class TakeResult {
         } else if constexpr (std::is_same_v<T, VectorArrayView>) {
             set_value(VectorArrayAt(index, state));
         } else {
-            set_value(FixedValueAt(index, state));
+            const auto* source = FixedValueAt(index, state);
+            if (state.is_valid && !state.data_skipped) {
+                T value;
+                std::memcpy(&value, source, sizeof(T));
+                item.value.emplace(value);
+            }
         }
         item.is_valid = state.is_valid;
         item.data_skipped = state.data_skipped;

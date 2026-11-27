@@ -37,6 +37,11 @@ namespace milvus {
 namespace plan {
 
 typedef std::string PlanNodeId;
+
+// New scalar pipelines declare data output explicitly. Legacy operators keep
+// their existing result protocol until migrated; physical BOOL encoding alone
+// is not enough to distinguish scalar data from an exclusion bitmap.
+enum class OutputKind { Legacy, ScalarRows };
 /** 
  * @brief Base class for all logic plan node
  * 
@@ -55,6 +60,11 @@ class PlanNode {
 
     virtual RowTypePtr
     output_type() const = 0;
+
+    virtual OutputKind
+    output_kind() const {
+        return OutputKind::Legacy;
+    }
 
     // The source list is stable for the lifetime of this node. Copy the list
     // before modifying it to construct a rewritten plan.
@@ -674,6 +684,11 @@ class OrderByNode : public PlanNode {
     const std::vector<PlanNodePtr>&
     sources() const override {
         return sources_;
+    }
+
+    OutputKind
+    output_kind() const override {
+        return sources_[0]->output_kind();
     }
 
     std::string_view

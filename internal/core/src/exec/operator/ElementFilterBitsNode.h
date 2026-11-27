@@ -25,6 +25,7 @@
 #include "exec/QueryContext.h"
 #include "common/StructElementOffsets.h"
 #include "expr/ITypeExpr.h"
+#include "exec/operator/CandidateFilter.h"
 
 namespace milvus {
 namespace exec {
@@ -74,12 +75,14 @@ class PhyElementFilterBitsNode : public Operator {
     void
     PrefetchAsync(const std::shared_ptr<folly::CPUThreadPoolExecutor>
                       prefetch_pool) override {
-        element_exprs_->PrefetchAsync(prefetch_pool);
+        if (element_exprs_)
+            element_exprs_->PrefetchAsync(prefetch_pool);
     }
 
     void
     WaitPrefetch() override {
-        element_exprs_->WaitPrefetch();
+        if (element_exprs_)
+            element_exprs_->WaitPrefetch();
     }
 
     std::string
@@ -97,6 +100,7 @@ class PhyElementFilterBitsNode : public Operator {
         const IStructElementOffsets* struct_element_offsets);
 
     std::unique_ptr<ExprSet> element_exprs_;
+    std::unique_ptr<CandidateFilter> scalar_filter_;
     QueryContext* query_context_;
     int64_t batch_size_;
     std::string struct_name_;

@@ -692,6 +692,9 @@ queryNode:
   stats:
     publishInterval: 1000 # The interval that query node publishes the node statistics information, including segment status, cpu usage, memory usage, health status, etc. Unit: ms.
   segcore:
+    # Enable the new expression execution framework.
+    # Unsupported plans use legacy execution. Requires a QueryNode/StreamingNode restart.
+    enableExprExecutionV2: false
     knowhereThreadPoolNumRatio: 4 # The number of threads in knowhere's thread pool. If disk is enabled, the pool size will multiply with knowhereThreadPoolNumRatio([1, 32]).
     searchFanoutPoolSizeRatio: 2 # Thread-to-core ratio for the search fanout pool; independent of the search executor and not limited by common.threadCoreCoefficient.maxThreadsSize. Invalid, non-positive, non-finite or overflowing values use the default ratio of 2.
     chunkRows: 128 # Row count by which Segcore divides a segment into chunks.

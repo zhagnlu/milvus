@@ -99,9 +99,37 @@ NextSegmentInstanceUid() {
 // immutable published state without locks or per-chunk re-capture. Growing
 // segments and non-pinned paths return nullptr and fall back to per-call
 // segment access with identical semantics.
+using TextIndexLoader =
+    std::function<std::shared_ptr<const index::IIndexReaderBase>(OpContext*)>;
+
+// A loader owns one published PK generation. Loading is deferred until Eval;
+// the returned lookup owns any pins for the duration of one predicate query.
+using PrimaryKeyLookup = std::function<void(
+    const PkType&, proto::plan::OpType, BitsetTypeView&)>;
+using PrimaryKeyLookupLoader = std::function<PrimaryKeyLookup(OpContext*)>;
+
 class SegmentReadSnapshot {
  public:
     virtual ~SegmentReadSnapshot() = default;
+
+    // Binds PK traversal to the same published generation as column readers.
+    // Empty callable means unsupported; resource/read failures propagate.
+    virtual OffsetBatchIterator
+    MakeOffsetIterator(BitsetTypeView excluded,
+                       OpContext* context,
+                       std::function<void()> checkpoint) const {
+        return {};
+    }
+
+    virtual PrimaryKeyLookupLoader
+    GetPrimaryKeyLookup(FieldId field, DataType type) const {
+        return {};
+    }
+
+    virtual TextIndexLoader
+    GetTextIndexResource(FieldId field, OpContext* context = nullptr) const {
+        return {};
+    }
 
     virtual exec::ExprCacheGenerationPtr
     GetExprCacheGeneration() const {
@@ -133,6 +161,41 @@ class SegmentReadSnapshot {
                       FieldSkipMetricsView>
     GetDataScanResources(FieldId field_id) const = 0;
 
+    // Resolve an index owner in the SAME published generation as columns.
+    // Lazy metadata resolution uses the request context; query data is pinned
+    // only when the returned owner creates a reader and evaluates it.
+
+    virtual index::IndexPtr
+    GetVectorIndexResource(FieldId field_id, OpContext* context = nullptr) const {
+        return nullptr;
+    }
+
+    virtual index::IndexPtr
+    GetScalarIndexResource(FieldId field_id, const IndexType& type, OpContext* context = nullptr) const {
+        return nullptr;
+    }
+
+    virtual std::shared_ptr<exec::SimpleGeometryCache>
+    GetGeometryCache(FieldId field_id) const {
+        return nullptr;
+    }
+
+    virtual index::IndexPtr
+    GetNgramResource(FieldId field_id, const std::string& pointer, OpContext* context = nullptr) const {
+        return nullptr;
+    }
+
+    virtual index::IndexPtr
+    GetJsonPredicateResource(FieldId field_id, const std::string& pointer,
+                             DataType type, bool allow_numeric_cast, OpContext* context = nullptr) const {
+        return nullptr;
+    }
+
+    virtual std::shared_ptr<cachinglayer::CacheSlot<index::JsonKeyStats>>
+    GetJsonStatsResource(FieldId field_id) const {
+        return nullptr;
+    }
+
     // Column-only accessor for the per-chunk hot loop. Returns a borrowed
     // column pointer owned by the published state; callers must not retain it
     // past the request. Default implementation routes through
@@ -147,7 +210,7 @@ class SegmentReadSnapshot {
     // Returns nullptr when this field has no struct mapping in the captured
     // state. Consumers that require element-to-row conversion must check it.
     virtual std::shared_ptr<const IStructElementOffsets>
-    GetStructElementOffsets(FieldId field_id) const = 0;
+    GetStructElementOffsets(FieldId field_id) const { return nullptr; }
 };
 
 // common interface of SegmentSealed and SegmentGrowing used by C API

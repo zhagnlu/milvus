@@ -19,7 +19,9 @@ import (
 )
 
 type ParserVisitorArgs struct {
-	Timezone string
+	// scalarProjection keeps value arithmetic for selected-row execution.
+	scalarProjection bool
+	Timezone         string
 	// MembershipBudget is request-scoped when set: the main predicate, every
 	// hybrid sub-request and every scorer filter share one preflight budget and
 	// one validation cache. Nil means single-expression scope.
@@ -390,7 +392,7 @@ func (v *ParserVisitor) VisitAddSub(ctx *parser.AddSubContext) interface{} {
 	}
 
 	leftValueExpr, rightValueExpr := getValueExpr(left), getValueExpr(right)
-	if leftValueExpr != nil && rightValueExpr != nil {
+	if leftValueExpr != nil && rightValueExpr != nil && !(v.args != nil && v.args.scalarProjection) {
 		if isTemplateExpr(leftValueExpr) || isTemplateExpr(rightValueExpr) {
 			return merr.WrapErrParameterInvalidMsg("placeholder was not supported between two constants with operator: %s", ctx.GetOp().GetText())
 		}
@@ -473,7 +475,7 @@ func (v *ParserVisitor) VisitMulDivMod(ctx *parser.MulDivModContext) interface{}
 	}
 
 	leftValueExpr, rightValueExpr := getValueExpr(left), getValueExpr(right)
-	if leftValueExpr != nil && rightValueExpr != nil {
+	if leftValueExpr != nil && rightValueExpr != nil && !(v.args != nil && v.args.scalarProjection) {
 		if isTemplateExpr(leftValueExpr) || isTemplateExpr(rightValueExpr) {
 			return merr.WrapErrParameterInvalidMsg("placeholder was not supported between two constants with operator: %s", ctx.GetOp().GetText())
 		}

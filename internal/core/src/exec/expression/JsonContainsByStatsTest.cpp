@@ -76,6 +76,10 @@
 #include "test_utils/cachinglayer_test_utils.h"
 #include "test_utils/GenExprProto.h"
 #include "test_utils/storage_test_utils.h"
+#include "exec/operator/FilterBitsExecution.h"
+#include "exec/plan/ExprCompiler.h"
+#include "exec/predicate/IndexNode.h"
+#include "exec/access/ReaderInput.h"
 
 using namespace milvus;
 using namespace milvus::index;
@@ -1029,6 +1033,224 @@ TEST(JsonStatsAsyncLoadTest, UsesFullColumnGroupProjectionWithWarmup) {
                                   /*expect_multi_field_group=*/true);
 }
 
+TEST(ScalarJsonStatsPlanTest,
+     LazyStatsOnlyMatchesRawAndPreservesOffsetsAndNulls) {
+    auto schema = std::make_shared<Schema>();
+    auto field = schema->AddDebugField("json", DataType::JSON, true);
+    auto segment = segcore::CreateSealedSegment(schema);
+    const std::vector<std::string> documents{R"({"n": 1, "rare": 12, "flag": true})",
+                                             R"({"n": 12, "flag": false})",
+                                             R"({"n": 12.5})",
+                                             R"({"n": "12"})",
+                                             R"({"n": null})",
+                                             R"({})",
+                                             R"({"n": 99})",
+                                             R"({"n": 9007199254740993})",
+                                             R"({"n": 18446744073709551615})",
+                                             R"({"n": -3})"};
+    const std::vector<uint8_t> valid{0b10111111, 0b00000011};
+    auto built = BuildJsonStatsIndex(documents,
+                                     field,
+                                     TestLocalPath,
+                                     1911,
+                                     2911,
+                                     3911,
+                                     field.get(),
+                                     5911,
+                                     1,
+                                     &valid);
+    auto counted = MakeCountedJsonStatsSlot(built, field);
+    auto* sealed =
+        dynamic_cast<segcore::ChunkedSegmentSealedImpl*>(segment.get());
+    ASSERT_TRUE(sealed);
+    sealed->SetJsonStatsForTesting(field, counted.slot);
+    auto raw = std::make_shared<FieldData<Json>>(DataType::JSON, true);
+    raw->FillFieldData(MakeNullableJsonArray(documents, valid));
+    auto manager = storage::RemoteChunkManagerSingleton::GetInstance()
+                       .GetRemoteChunkManager();
+    auto load = PrepareSingleFieldInsertBinlog(
+        1911, 2911, 3911, field.get(), {raw}, manager);
+    segment->LoadFieldData(load);
+    auto snapshot = segment->CaptureReadSnapshot();
+    auto context = std::make_shared<segcore::reader::ReadContext>();
+    namespace physical = milvus::exec::plan;
+    physical::CompileOptions options;
+    options.plan_indexes = true;
+    for (const auto& path :
+         {std::string("n"), std::string("rare"), std::string("absent")}) {
+        for (int64_t threshold : {int64_t(10),
+                                  int64_t(9007199254740993),
+                                  std::numeric_limits<int64_t>::max()}) {
+            for (auto op : {proto::plan::Equal,
+                            proto::plan::NotEqual,
+                            proto::plan::LessThan,
+                            proto::plan::LessEqual,
+                            proto::plan::GreaterThan,
+                            proto::plan::GreaterEqual}) {
+                proto::plan::GenericValue bound;
+                bound.set_int64_val(threshold);
+                auto predicate = std::make_shared<expr::UnaryRangeFilterExpr>(
+                    expr::ColumnInfo(field, DataType::JSON, {path}, true),
+                    op,
+                    bound);
+                auto compiled =
+                    physical::CompileFilter(predicate, nullptr, options);
+                ASSERT_TRUE(compiled.supported());
+                ASSERT_EQ(compiled.plan->predicates().size(), 1);
+                physical::PhysicalPrepareOptions selected;
+                selected.bind_index =
+                    exec::access::MakeSealedIndexBinding(snapshot, 10, context);
+                auto prepared = physical::Prepare(compiled.plan, {}, selected);
+                EXPECT_EQ(prepared.predicate_backends()[0],
+                          physical::PredicateBackend::JsonStats);
+                EXPECT_EQ(prepared.granularity(),
+                          physical::ExecutionGranularity::WholeSegment);
+                if (path == "n" && op == proto::plan::Equal && threshold == 10)
+                    EXPECT_EQ(counted.translator->LoadCount(), 0);
+                auto batch = prepared.MakeExecutionBatch(
+                    exec::ReadBatchBinding::Offsets({8, 6, 2, 2, 5, 0, 3, 4}));
+                auto values = batch->Eval(SelectionView::All(8))[0];
+                EXPECT_FALSE(values.IsValid(1));  // SQL NULL
+                EXPECT_FALSE(values.IsValid(4));  // missing path
+                EXPECT_FALSE(values.IsValid(6));  // wrong JSON type
+                EXPECT_FALSE(values.IsValid(7));  // JSON null
+                EXPECT_EQ(values.IsValid(2), values.IsValid(3));
+                if (values.IsValid(2))
+                    EXPECT_EQ(values.ValueAt<bool>(2), values.ValueAt<bool>(3));
+                auto stats_filter = exec::FilterBitsExecution::TryCreate(
+                    predicate, nullptr, snapshot, 10, 2, context);
+                auto raw_filter =
+                    exec::FilterBitsExecution::TryCreateWithBinding(
+                        predicate,
+                        nullptr,
+                        exec::access::MakeSealedReaderBinding(snapshot, 10),
+                        10,
+                        2,
+                        context);
+                ASSERT_TRUE(stats_filter && raw_filter);
+                auto actual = ReadOnlyVectorView::CopyOf(
+                    stats_filter->GetOutput()->child(0));
+                auto expected = ReadOnlyVectorView::CopyOf(
+                    raw_filter->GetOutput()->child(0));
+                for (size_t row = 0; row < 10; ++row)
+                    EXPECT_EQ(actual.ValueAt<bool>(row),
+                              expected.ValueAt<bool>(row))
+                        << path << " " << op << " " << row;
+            }
+        }
+    }
+    // Exercise the new typed stats descriptors against the raw evaluator,
+    // comparing validity as well as TRUE bits (NOT/OR depend on UNKNOWN).
+    for (const auto& path : {std::string("n"), std::string("rare")}) {
+        for (int kind = 0; kind < 6; ++kind) {
+            proto::plan::GenericValue lower, upper;
+            if (kind == 0) {
+                lower.set_int64_val(1);
+                upper.set_int64_val(12);
+            }
+            if (kind == 1) {
+                lower.set_float_val(1.5);
+                upper.set_float_val(12.5);
+            }
+            if (kind == 2) {
+                lower.set_string_val("1");
+                upper.set_string_val("12");
+            }
+            if (kind == 4) {
+                lower.set_int64_val(9007199254740993);
+                upper.set_int64_val(9007199254740995);
+            }
+            if (kind == 5) {
+                lower.set_float_val(0x1p53);
+                upper.set_float_val(0x1p53 + 4);
+            }
+            if (kind == 3) {
+                lower.set_bool_val(false);
+                upper.set_bool_val(true);
+            }
+            expr::ColumnInfo column(
+                field, DataType::JSON, {kind == 3 ? "flag" : path}, true);
+            std::vector<expr::TypedExprPtr> predicates;
+            for (auto op : {proto::plan::Equal,
+                            proto::plan::NotEqual,
+                            proto::plan::LessThan,
+                            proto::plan::LessEqual,
+                            proto::plan::GreaterThan,
+                            proto::plan::GreaterEqual})
+                predicates.push_back(
+                    std::make_shared<expr::UnaryRangeFilterExpr>(
+                        column, op, lower));
+            if (kind != 3)
+                predicates.push_back(
+                    std::make_shared<expr::BinaryRangeFilterExpr>(
+                        column, lower, upper, true, false));
+            predicates.push_back(std::make_shared<expr::TermFilterExpr>(
+                column, std::vector{lower, upper}));
+            for (const auto& predicate : predicates) {
+                auto stats_filter = exec::FilterBitsExecution::TryCreate(
+                    predicate, nullptr, snapshot, 10, 2, context);
+                auto raw_filter =
+                    exec::FilterBitsExecution::TryCreateWithBinding(
+                        predicate,
+                        nullptr,
+                        exec::access::MakeSealedReaderBinding(snapshot, 10),
+                        10,
+                        2,
+                        context);
+                ASSERT_TRUE(stats_filter && raw_filter);
+                ASSERT_EQ(stats_filter->prepared().predicate_backends()[0],
+                          physical::PredicateBackend::JsonStats);
+                const auto binding = exec::ReadBatchBinding::Offsets(
+                    {9, 2, 6, 3, 2, 4, 5, 0, 8, 7});
+                auto actual_batch =
+                    stats_filter->prepared().MakeExecutionBatch(binding);
+                auto expected_batch =
+                    raw_filter->prepared().MakeExecutionBatch(binding);
+                auto actual = actual_batch->Eval(SelectionView::All(10))[0];
+                auto expected = expected_batch->Eval(SelectionView::All(10))[0];
+                for (size_t row = 0; row < 10; ++row) {
+                    EXPECT_EQ(actual.IsValid(row), expected.IsValid(row))
+                        << kind << " " << row;
+                    if (actual.IsValid(row) && expected.IsValid(row))
+                        EXPECT_EQ(actual.ValueAt<bool>(row),
+                                  expected.ValueAt<bool>(row))
+                            << kind << " " << row;
+                }
+            }
+        }
+    }
+    EXPECT_EQ(counted.translator->LoadCount(), 1);
+    segment->DropFieldData(field);
+    proto::plan::GenericValue bound;
+    bound.set_int64_val(10);
+    auto predicate = std::make_shared<expr::UnaryRangeFilterExpr>(
+        expr::ColumnInfo(field, DataType::JSON, {"n"}, true),
+        proto::plan::GreaterThan,
+        bound);
+    auto execution = exec::FilterBitsExecution::TryCreate(
+        predicate, nullptr, segment->CaptureReadSnapshot(), 10, 2, context);
+    ASSERT_TRUE(execution);
+    EXPECT_EQ(execution->prepared().granularity(),
+              physical::ExecutionGranularity::WholeSegment);
+    physical::PhysicalPrepareOptions disabled;
+    disabled.bind_index = exec::access::MakeSealedIndexBinding(
+        segment->CaptureReadSnapshot(), 10, context, false);
+    EXPECT_FALSE(exec::FilterBitsExecution::TryCreateWithBinding(
+        predicate,
+        nullptr,
+        exec::access::MakeSealedReaderBinding(segment->CaptureReadSnapshot(),
+                                              10),
+        10,
+        2,
+        context,
+        disabled));
+    // A later published generation may drop stats. The prepared reader keeps
+    // the original resource and must not re-resolve the live segment.
+    sealed->SetJsonStatsForTesting(field, nullptr);
+    EXPECT_FALSE(segment->CaptureReadSnapshot()->GetJsonStatsResource(field));
+    ASSERT_TRUE(execution->GetOutput());
+}
+
 TEST(JsonStatsUnaryRangeTest, NotEqualKeepsJsonPathUnknownsAndMasksFieldNull) {
     auto schema = std::make_shared<Schema>();
     auto json_fid = schema->AddDebugField("json", DataType::JSON, true);
@@ -1559,6 +1781,657 @@ TEST(JsonStatsThreeValuedAuditTest,
                 true,
                 std::vector<proto::plan::GenericValue>{value})));
     }
+}
+
+TEST(ScalarJsonStatsPlanTest, CollectionsAndExistenceMatchRawAcrossDomains) {
+    namespace physical = milvus::exec::plan;
+    namespace reader = milvus::segcore::reader;
+    auto schema = std::make_shared<Schema>();
+    auto field = schema->AddDebugField("json", DataType::JSON, true);
+    auto segment = segcore::CreateSealedSegment(schema);
+    std::vector<std::string> documents{R"({"a":[1,1.0,true,"x",[1,"x"]]})",
+                                       R"({"a":[2]})",
+                                       R"({"a":[]})",
+                                       R"({"a":[null,{},[]]})",
+                                       R"({"a":[false,""]})",
+                                       R"({"a":[9007199254740993]})",
+                                       R"({"a":[9007199254740992.0]})",
+                                       R"({"a":[1.5]})",
+                                       R"({"a":[[1.0,"x"]]})",
+                                       R"({"a":[[1,"x"]]})",
+                                       R"({"a":[[],[null]]})",
+                                       R"({"a":[9223372036854775807]})",
+                                       R"({"a":[18446744073709551615]})",
+                                       R"({"a":[{"x":0}]})",
+                                       R"({"a":null})",
+                                       R"({})",
+                                       R"({"a":"wrong"})",
+                                       R"({"a":{}})",
+                                       R"({"a":{"x":null,"y":[]}})",
+                                       R"({"a":[1]})"};
+    for (size_t i = 0; i < documents.size(); ++i) {
+        auto object = nlohmann::json::parse(documents[i]);
+        if (i < 2)
+            object["rare"] = object["a"];
+        if (object.contains("a"))
+            object["k/a~b"] = object["a"];
+        // An object may have both a shredded child and shared BSON children.
+        object["o"]["hot"] =
+            i < 10 ? nlohmann::json(i) : nlohmann::json(nullptr);
+        if (i == 0)
+            object["o"]["rare"] = nlohmann::json::array();
+        if (i == 1)
+            object["o"]["rare"] = nlohmann::json::array({0});
+        if (i != 6) {
+            const std::vector<std::string> texts{
+                "北京", "北X京", "a%b", "x\n北京", ""};
+            object["s"] = texts[i % texts.size()];
+            if (i == 4)
+                object["s"] = 42;
+            if (i == 5)
+                object["s"] = nullptr;
+            object["k/s~b"] = object["s"];
+            if (i < 2)
+                object["rare_s"] = object["s"];
+        }
+        const std::vector<nlohmann::json> numbers{0,
+                                                  1,
+                                                  -1,
+                                                  2,
+                                                  INT64_MIN,
+                                                  INT64_MAX,
+                                                  int64_t(9007199254740993),
+                                                  3.5,
+                                                  -4.5,
+                                                  1e100,
+                                                  UINT64_MAX,
+                                                  0.0,
+                                                  -0.0,
+                                                  -1.0,
+                                                  nullptr,
+                                                  nullptr,
+                                                  "wrong",
+                                                  true,
+                                                  nlohmann::json::array({1}),
+                                                  1};
+        if (i != 15) {
+            object["n"] = numbers[i];
+            object["k/n~b"] = numbers[i];
+            if (i < 2)
+                object["rare_n"] = numbers[i];
+        }
+        object["numeric_keys"]["0"] = i % 3 == 0 ? "" : "x";
+        if (i == 18)
+            object["a"] = nlohmann::json{{"0", ""}};
+        documents[i] = object.dump();
+    }
+    const int64_t count = documents.size();
+    const std::vector<uint8_t> validity{255, 255, 0b00000111};
+    auto built = BuildJsonStatsIndex(documents,
+                                     field,
+                                     TestLocalPath,
+                                     1912,
+                                     2912,
+                                     3912,
+                                     field.get(),
+                                     5912,
+                                     1,
+                                     &validity);
+    auto counted = MakeCountedJsonStatsSlot(built, field);
+    auto* sealed =
+        dynamic_cast<segcore::ChunkedSegmentSealedImpl*>(segment.get());
+    ASSERT_TRUE(sealed);
+    sealed->SetJsonStatsForTesting(field, counted.slot);
+    auto raw = std::make_shared<FieldData<Json>>(DataType::JSON, true);
+    raw->FillFieldData(MakeNullableJsonArray(documents, validity));
+    auto manager = storage::RemoteChunkManagerSingleton::GetInstance()
+                       .GetRemoteChunkManager();
+    segment->LoadFieldData(PrepareSingleFieldInsertBinlog(
+        1912, 2912, 3912, field.get(), {raw}, manager));
+    auto snapshot = segment->CaptureReadSnapshot();
+    auto context = std::make_shared<reader::ReadContext>();
+    using V = proto::plan::GenericValue;
+    auto integer = [](int64_t n) {
+        V v;
+        v.set_int64_val(n);
+        return v;
+    };
+    auto floating = [](double n) {
+        V v;
+        v.set_float_val(n);
+        return v;
+    };
+    V text, flag, nested, empty;
+    text.set_string_val("x");
+    flag.set_bool_val(true);
+    *nested.mutable_array_val()->add_array() = integer(1);
+    *nested.mutable_array_val()->add_array() = text;
+    empty.mutable_array_val();
+    const std::vector<std::vector<V>> terms{{integer(1)},
+                                            {floating(1)},
+                                            {flag},
+                                            {text},
+                                            {nested},
+                                            {empty},
+                                            {integer(9007199254740993)},
+                                            {floating(0x1p53)},
+                                            {integer(INT64_MAX)},
+                                            {integer(1), integer(1)},
+                                            {integer(1), text, flag, nested},
+                                            {integer(9007199254740993), text}};
+    std::vector<expr::TypedExprPtr> predicates;
+    for (const auto& path : {"a", "rare", "absent", "k/a~b"}) {
+        expr::ColumnInfo column(field, DataType::JSON, {path}, true);
+        predicates.push_back(std::make_shared<expr::ExistsExpr>(column));
+        for (auto op : {proto::plan::Equal,
+                        proto::plan::NotEqual,
+                        proto::plan::LessThan,
+                        proto::plan::LessEqual,
+                        proto::plan::GreaterThan,
+                        proto::plan::GreaterEqual}) {
+            for (const auto& bound : {integer(-1),
+                                      integer(0),
+                                      integer(2),
+                                      floating(2.5),
+                                      integer(INT64_MAX)}) {
+                auto length =
+                    std::make_shared<expr::BinaryArithOpEvalRangeExpr>(
+                        column,
+                        op,
+                        proto::plan::ArrayLength,
+                        bound,
+                        integer(0));
+                predicates.push_back(length);
+                predicates.push_back(std::make_shared<expr::LogicalUnaryExpr>(
+                    expr::LogicalUnaryExpr::OpType::LogicalNot, length));
+            }
+        }
+
+        for (const auto& values : terms) {
+            const bool same_type =
+                std::all_of(values.begin(), values.end(), [&](const auto& v) {
+                    return v.val_case() == values.front().val_case();
+                });
+            for (auto op : {proto::plan::JSONContainsExpr_JSONOp_Contains,
+                            proto::plan::JSONContainsExpr_JSONOp_ContainsAny,
+                            proto::plan::JSONContainsExpr_JSONOp_ContainsAll}) {
+                auto root = std::make_shared<expr::JsonContainsExpr>(
+                    column, op, same_type, values);
+                predicates.push_back(root);
+                predicates.push_back(std::make_shared<expr::LogicalUnaryExpr>(
+                    expr::LogicalUnaryExpr::OpType::LogicalNot, root));
+            }
+        }
+    }
+    predicates.push_back(std::make_shared<expr::ExistsExpr>(
+        expr::ColumnInfo(field, DataType::JSON, {"o"}, true)));
+    predicates.push_back(std::make_shared<expr::ExistsExpr>(
+        expr::ColumnInfo(field, DataType::JSON, {"o", "hot"}, true)));
+    for (const auto& path : {"n", "rare_n", "absent_n", "k/n~b"}) {
+        for (auto operation : {proto::plan::Add,
+                               proto::plan::Sub,
+                               proto::plan::Mul,
+                               proto::plan::Div,
+                               proto::plan::Mod}) {
+            for (auto comparison : {proto::plan::Equal,
+                                    proto::plan::NotEqual,
+                                    proto::plan::LessThan,
+                                    proto::plan::LessEqual,
+                                    proto::plan::GreaterThan,
+                                    proto::plan::GreaterEqual}) {
+                for (const auto& constants : std::vector<std::pair<V, V>>{
+                         {integer(2), integer(3)},
+                         {integer(INT64_MAX), integer(INT64_MAX)},
+                         {floating(2.5), floating(3.5)},
+                         {floating(-1.0), floating(1.0)}}) {
+                    auto arithmetic =
+                        std::make_shared<expr::BinaryArithOpEvalRangeExpr>(
+                            expr::ColumnInfo(
+                                field, DataType::JSON, {path}, true),
+                            comparison,
+                            operation,
+                            constants.second,
+                            constants.first);
+                    predicates.push_back(arithmetic);
+                    predicates.push_back(
+                        std::make_shared<expr::LogicalUnaryExpr>(
+                            expr::LogicalUnaryExpr::OpType::LogicalNot,
+                            arithmetic));
+                }
+            }
+        }
+    }
+    const auto first_string = predicates.size();
+    for (const auto& path : {"s", "rare_s", "missing_s", "k/s~b"}) {
+        for (auto [op, pattern] :
+             std::vector<std::pair<proto::plan::OpType, std::string>>{
+                 {proto::plan::PrefixMatch, "北"},
+                 {proto::plan::PostfixMatch, "京"},
+                 {proto::plan::InnerMatch, "北京"},
+                 {proto::plan::Match, "北_"},
+                 {proto::plan::Match, "a\\%b"},
+                 {proto::plan::RegexMatch, "北.京"},
+                 {proto::plan::Match, "%"},
+                 {proto::plan::InnerMatch, ""}}) {
+            V value;
+            value.set_string_val(pattern);
+            auto match = std::make_shared<expr::UnaryRangeFilterExpr>(
+                expr::ColumnInfo(field, DataType::JSON, {path}, true),
+                op,
+                value);
+            predicates.push_back(match);
+            predicates.push_back(std::make_shared<expr::LogicalUnaryExpr>(
+                expr::LogicalUnaryExpr::OpType::LogicalNot, match));
+        }
+    }
+    auto compare = [](const ReadOnlyVectorView& actual,
+                      const ReadOnlyVectorView& expected,
+                      SelectionView rows) {
+        rows.ForEachSelected([&](size_t row) {
+            EXPECT_EQ(actual.IsValid(row), expected.IsValid(row)) << row;
+            if (actual.IsValid(row) && expected.IsValid(row))
+                EXPECT_EQ(actual.ValueAt<bool>(row),
+                          expected.ValueAt<bool>(row))
+                    << row;
+        });
+    };
+    size_t p = 0;
+    for (const auto& predicate : predicates) {
+        SCOPED_TRACE(p++);
+        auto indexed = exec::FilterBitsExecution::TryCreate(
+            predicate, nullptr, snapshot, count, 3, context);
+        auto original = exec::FilterBitsExecution::TryCreateWithBinding(
+            predicate,
+            nullptr,
+            exec::access::MakeSealedReaderBinding(snapshot, count),
+            count,
+            3,
+            context);
+        ASSERT_TRUE(indexed && original);
+        ASSERT_EQ(indexed->prepared().predicate_backends()[0],
+                  physical::PredicateBackend::JsonStats);
+        const bool pattern = p > first_string;
+        ASSERT_EQ(indexed->prepared().predicate_routes()[0],
+                  pattern ? physical::PredicateRoute::Refine
+                          : physical::PredicateRoute::ExactIndex);
+        ASSERT_EQ(indexed->prepared().granularity(),
+                  pattern ? physical::ExecutionGranularity::Batch
+                          : physical::ExecutionGranularity::WholeSegment);
+        const auto offsets = exec::ReadBatchBinding::Offsets(
+            {19, 0, 3, 0, 14, 12, 5, 2, 18, 9, 1});
+        auto a = indexed->prepared().MakeExecutionBatch(offsets);
+        auto b = original->prepared().MakeExecutionBatch(offsets);
+        a->Eval(SelectionView::None(offsets.size()));
+        if (p == 1)
+            EXPECT_EQ(counted.translator->LoadCount(), 0);
+        auto sparse = OwnedSelection::FromIndices(offsets.size(), {1, 3, 6});
+        compare(a->Eval(sparse.view())[0],
+                b->Eval(sparse.view())[0],
+                sparse.view());
+        compare(a->Eval(SelectionView::All(offsets.size()))[0],
+                b->Eval(SelectionView::All(offsets.size()))[0],
+                SelectionView::All(offsets.size()));
+        const auto range = exec::ReadBatchBinding::Range(0, count);
+        auto ar = indexed->prepared().MakeExecutionBatch(range);
+        auto br = original->prepared().MakeExecutionBatch(range);
+        compare(ar->Eval(SelectionView::All(count))[0],
+                br->Eval(SelectionView::All(count))[0],
+                SelectionView::All(count));
+    }
+    EXPECT_EQ(counted.translator->LoadCount(), 1);
+    // Verify both storage branches were actually exercised.
+    auto pin = SemiInlineGet(counted.slot->PinCells(nullptr, {0}));
+    EXPECT_FALSE(pin->get_cell_of(0)
+                     ->GetShreddingField("/a", index::JSONType::ARRAY)
+                     .empty());
+    EXPECT_TRUE(pin->get_cell_of(0)
+                    ->GetShreddingField("/rare", index::JSONType::ARRAY)
+                    .empty());
+    EXPECT_FALSE(pin->get_cell_of(0)
+                     ->GetShreddingField("/s", index::JSONType::STRING)
+                     .empty());
+    EXPECT_TRUE(pin->get_cell_of(0)
+                    ->GetShreddingField("/rare_s", index::JSONType::STRING)
+                    .empty());
+    EXPECT_FALSE(pin->get_cell_of(0)
+                     ->GetShreddingField("/n", index::JSONType::INT64)
+                     .empty());
+    EXPECT_FALSE(pin->get_cell_of(0)
+                     ->GetShreddingField("/n", index::JSONType::DOUBLE)
+                     .empty());
+    EXPECT_TRUE(pin->get_cell_of(0)
+                    ->GetShreddingField("/rare_n", index::JSONType::INT64)
+                    .empty());
+    // Real shredded/shared arrays, numeric object keys, sparse incremental
+    // selection and duplicated offsets use the same exact kernel as Raw.
+    for (const auto& path :
+         std::vector<std::vector<std::string>>{{"a", "0"},
+                                               {"a", "1"},
+                                               {"a", "4", "1"},
+                                               {"a", "0", "x"},
+                                               {"a", "99"},
+                                               {"rare", "0"},
+                                               {"k/a~b", "0"},
+                                               {"numeric_keys", "0"}}) {
+        auto column = expr::ColumnInfo(field, DataType::JSON, path, true);
+        std::vector<expr::TypedExprPtr> roots;
+        for (const auto& value : {integer(1),
+                                  integer(9007199254740993LL),
+                                  floating(1),
+                                  text,
+                                  flag}) {
+            roots.push_back(std::make_shared<expr::UnaryRangeFilterExpr>(
+                column, proto::plan::Equal, value));
+            roots.push_back(std::make_shared<expr::TermFilterExpr>(
+                column, std::vector<V>{value}, false));
+        }
+        roots.push_back(std::make_shared<expr::BinaryRangeFilterExpr>(
+            column, integer(0), integer(2), true, true));
+        roots.push_back(std::make_shared<expr::JsonContainsExpr>(
+            column,
+            proto::plan::JSONContainsExpr_JSONOp_Contains,
+            true,
+            std::vector<V>{integer(1)}));
+        roots.push_back(std::make_shared<expr::BinaryArithOpEvalRangeExpr>(
+            column,
+            proto::plan::GreaterThan,
+            proto::plan::ArrayLength,
+            integer(0),
+            integer(0)));
+        for (const auto& root : roots) {
+            SCOPED_TRACE(root->ToString());
+            auto indexed = exec::FilterBitsExecution::TryCreate(
+                root, nullptr, snapshot, count, 3, context);
+            auto raw = exec::FilterBitsExecution::TryCreateWithBinding(
+                root,
+                nullptr,
+                exec::access::MakeSealedReaderBinding(snapshot, count),
+                count,
+                3,
+                context);
+            ASSERT_TRUE(indexed && raw);
+            ASSERT_EQ(indexed->prepared().predicate_backends(),
+                      std::vector{physical::PredicateBackend::JsonStats});
+            auto offsets = exec::ReadBatchBinding::Offsets(
+                {19, 0,  1,  0,  4,  5,  6,  7,  8, 9, 10,
+                 11, 12, 13, 14, 15, 16, 17, 18, 3, 2});
+            for (const auto& binding :
+                 {offsets, exec::ReadBatchBinding::Range(0, count)}) {
+                auto a = indexed->prepared().MakeExecutionBatch(binding);
+                auto b = raw->prepared().MakeExecutionBatch(binding);
+                auto sparse =
+                    OwnedSelection::FromIndices(binding.size(), {0, 2, 3, 5});
+                compare(a->Eval(sparse.view())[0],
+                        b->Eval(sparse.view())[0],
+                        sparse.view());
+                compare(a->Eval(SelectionView::All(binding.size()))[0],
+                        b->Eval(SelectionView::All(binding.size()))[0],
+                        SelectionView::All(binding.size()));
+            }
+        }
+    }
+    {
+        auto column = expr::ColumnInfo(field, DataType::JSON, {"a", "0"}, true);
+        for (auto root : std::vector<expr::TypedExprPtr>{
+                 std::make_shared<expr::TermFilterExpr>(
+                     column, std::vector<V>{}, false),
+                 std::make_shared<expr::JsonContainsExpr>(
+                     column,
+                     proto::plan::JSONContainsExpr_JSONOp_ContainsAny,
+                     true,
+                     std::vector<V>{})}) {
+            auto execution = exec::FilterBitsExecution::TryCreate(
+                root, nullptr, snapshot, count, 3, context);
+            ASSERT_TRUE(execution);
+            EXPECT_TRUE(execution->prepared().predicate_routes().empty());
+            auto values = execution->prepared()
+                              .MakeExecutionBatch(
+                                  exec::ReadBatchBinding::Offsets({19, 0, 19}))
+                              ->Eval(SelectionView::All(3))[0];
+            for (size_t row = 0; row < 3; ++row) {
+                EXPECT_TRUE(values.IsValid(row));
+                EXPECT_FALSE(values.ValueAt<bool>(row));
+            }
+        }
+    }
+    auto selected0 = OwnedSelection::FromIndices(3, {0});
+    auto selected1 = OwnedSelection::FromIndices(3, {1});
+    auto selected2 = OwnedSelection::FromIndices(3, {2});
+    // Row-sensitive arithmetic uses stats but evaluates only selected positions.
+    for (auto [operation, operand] :
+         std::vector<std::pair<proto::plan::ArithOpType, V>>{
+             {proto::plan::Div, integer(-1)},
+             {proto::plan::Mod, integer(-1)},
+             {proto::plan::Div, integer(0)},
+             {proto::plan::Mod, floating(0)},
+             {proto::plan::BitAnd, integer(1)},
+             {proto::plan::BitOr, integer(1)},
+             {proto::plan::BitXor, integer(1)},
+             {proto::plan::Shr, integer(1)},
+             {proto::plan::Shl, integer(1)}}) {
+        auto root = std::make_shared<expr::BinaryArithOpEvalRangeExpr>(
+            expr::ColumnInfo(field, DataType::JSON, {"n"}, true),
+            proto::plan::Equal,
+            operation,
+            operand.has_int64_val() ? integer(0) : floating(0),
+            operand);
+        physical::PhysicalPrepareOptions indexed_options;
+        indexed_options.bind_index =
+            exec::access::MakeSealedIndexBinding(snapshot, count, context);
+        auto execution = exec::FilterBitsExecution::TryCreateWithBinding(
+            root,
+            nullptr,
+            [](const auto&) -> std::shared_ptr<const reader::ColumnReader> {
+                ADD_FAILURE()
+                    << "numeric selected stats must not bind raw JSON";
+                return nullptr;
+            },
+            count,
+            3,
+            context,
+            indexed_options);
+        ASSERT_TRUE(execution);
+        EXPECT_EQ(execution->prepared().granularity(),
+                  physical::ExecutionGranularity::Batch);
+        ASSERT_EQ(execution->prepared().predicate_backends(),
+                  std::vector{physical::PredicateBackend::JsonStats});
+        auto batch = execution->prepared().MakeExecutionBatch(
+            exec::ReadBatchBinding::Offsets({0, 4, 9}));
+        EXPECT_NO_THROW(batch->Eval(SelectionView::None(3)));
+        if (operation == proto::plan::Div || operation == proto::plan::Mod) {
+            if (operand.has_int64_val() && operand.int64_val() == -1) {
+                EXPECT_NO_THROW(batch->Eval(selected0.view()));
+                EXPECT_THROW(batch->Eval(selected1.view()), SegcoreError);
+            } else {
+                EXPECT_THROW(batch->Eval(SelectionView::All(3)), SegcoreError);
+            }
+        } else {
+            EXPECT_NO_THROW(batch->Eval(selected0.view()));
+            EXPECT_THROW(batch->Eval(selected2.view()), SegcoreError);
+        }
+    }
+    // Prove the route reduces actual raw requests, including duplicate offsets.
+    physical::CompileOptions options;
+    options.plan_indexes = true;
+    auto compiled =
+        physical::CompileExpressions({predicates[first_string]}, options);
+    ASSERT_TRUE(compiled.supported());
+    physical::PhysicalPrepareOptions physical_options;
+    physical_options.bind_index =
+        exec::access::MakeSealedIndexBinding(snapshot, count, context);
+    auto bind = exec::access::MakeSealedReaderBinding(snapshot, count);
+    std::vector<size_t> loaded_positions;
+    auto prepared = physical::Prepare(
+        compiled.plan,
+        [&](const auto& dependency) {
+            auto input =
+                exec::access::PrepareReaderInput(bind(dependency), context);
+            input.read_values = [load = input.read_values, &loaded_positions](
+                                    const auto& binding, SelectionView rows) {
+                rows.ForEachSelected(
+                    [&](size_t row) { loaded_positions.push_back(row); });
+                return load(binding, rows);
+            };
+            input.make_loaders = [factory = input.make_loaders,
+                                  &loaded_positions](const auto& binding) {
+                auto loaders = factory(binding);
+                loaders.values = [load = loaders.values,
+                                  &loaded_positions](SelectionView rows) {
+                    rows.ForEachSelected(
+                        [&](size_t row) { loaded_positions.push_back(row); });
+                    return load(rows);
+                };
+                return loaders;
+            };
+            return input;
+        },
+        physical_options);
+    auto refined = prepared.MakeExecutionBatch(
+        exec::ReadBatchBinding::Offsets({2, 0, 9, 4, 2, 19}));
+    auto refined_values = refined->Eval(SelectionView::All(6))[0];
+    EXPECT_EQ(loaded_positions, (std::vector<size_t>{1, 2, 3, 5}));
+    EXPECT_FALSE(refined_values.ValueAt<bool>(0));
+    EXPECT_TRUE(refined_values.ValueAt<bool>(1));
+    EXPECT_TRUE(refined_values.IsValid(2));  // Empty string, not NULL.
+    EXPECT_FALSE(refined_values.ValueAt<bool>(2));
+    EXPECT_FALSE(refined_values.IsValid(3));  // Wrong type.
+    EXPECT_FALSE(refined_values.IsValid(5));  // SQL NULL.
+    // Invalid patterns remain lazy barriers on the stats + refine path.
+    for (auto [op, pattern, code] :
+         std::vector<std::tuple<proto::plan::OpType, std::string, ErrorCode>>{
+             {proto::plan::Match, "abc\\", ExprInvalid},
+             {proto::plan::RegexMatch, "[", InvalidParameter}}) {
+        V value;
+        value.set_string_val(pattern);
+        auto bad = std::make_shared<expr::UnaryRangeFilterExpr>(
+            expr::ColumnInfo(field, DataType::JSON, {"s"}, true), op, value);
+        auto no = std::make_shared<expr::BinaryArithOpEvalRangeExpr>(
+            expr::ColumnInfo(field, DataType::JSON, {"a"}, true),
+            proto::plan::LessThan,
+            proto::plan::ArrayLength,
+            integer(0),
+            integer(0));
+        for (bool bad_first : {false, true}) {
+            auto root = std::make_shared<expr::LogicalBinaryExpr>(
+                expr::LogicalBinaryExpr::OpType::And,
+                bad_first ? expr::TypedExprPtr(bad) : expr::TypedExprPtr(no),
+                bad_first ? expr::TypedExprPtr(no) : expr::TypedExprPtr(bad));
+            auto execution = exec::FilterBitsExecution::TryCreate(
+                root, nullptr, snapshot, count, 3, context);
+            ASSERT_TRUE(execution);
+            auto batch = execution->prepared().MakeExecutionBatch(
+                exec::ReadBatchBinding::Offsets({0, 0}));
+            EXPECT_NO_THROW(batch->Eval(SelectionView::None(2)));
+            if (!bad_first) {
+                auto result = batch->Eval(SelectionView::All(2))[0];
+                EXPECT_TRUE(result.IsValid(0));
+                EXPECT_FALSE(result.ValueAt<bool>(0));
+            } else {
+                try {
+                    batch->Eval(SelectionView::All(2));
+                    FAIL() << "pattern must throw";
+                } catch (const SegcoreError& error) {
+                    EXPECT_EQ(error.get_error_code(), code);
+                }
+            }
+        }
+    }
+    // A failed load or cancellation must not publish a cached predicate.
+    reader::TypedIndexQuery contains_query{};
+    contains_query.op = reader::ScalarIndexOp::ContainsAny;
+    contains_query.type = DataType::ARRAY;
+    contains_query.pointer = "/a";
+    contains_query.terms = {integer(1)};
+    int loads = 0;
+    auto retry_reader = std::make_shared<reader::JsonStatsReader>(
+        [&](const reader::ReadContext&) {
+            if (++loads == 1)
+                ThrowInfo(FileReadFailed, "injected stats load failure");
+            return std::shared_ptr<index::JsonKeyStats>(pin,
+                                                        pin->get_cell_of(0));
+        },
+        count,
+        reader::JsonStatsQuery{"/a", proto::plan::Equal, 0, contains_query});
+    exec::predicate::IndexNode retry(retry_reader, context);
+    auto binding = exec::ReadBatchBinding::Offsets({19, 0, 3, 0});
+    retry.Eval(binding, SelectionView::None(4));
+    EXPECT_EQ(loads, 0);
+    try {
+        retry.Eval(binding, SelectionView::All(4));
+        FAIL() << "expected stats source failure";
+    } catch (const SegcoreError& error) {
+        EXPECT_EQ(error.get_error_code(), FileReadFailed);
+    }
+    auto retried = retry.Eval(binding, SelectionView::All(4));
+    EXPECT_EQ(loads, 2);
+    EXPECT_FALSE(retried.IsValid(0));
+    EXPECT_TRUE(retried.ValueAt<bool>(1));
+    EXPECT_FALSE(retried.ValueAt<bool>(2));
+    EXPECT_TRUE(retried.ValueAt<bool>(3));
+    retry.Eval(binding, SelectionView::All(4));
+    EXPECT_EQ(loads, 2);
+    auto cancelled_context = std::make_shared<reader::ReadContext>();
+    int checkpoints = 0, cancel_at = 5;
+    cancelled_context->checkpoint = [&] {
+        if (++checkpoints == cancel_at)
+            ThrowInfo(FollyCancel, "injected stats cancellation");
+    };
+    exec::predicate::IndexNode cancelled(retry_reader, cancelled_context);
+    try {
+        cancelled.Eval(binding, SelectionView::All(4));
+        FAIL() << "expected stats cancellation";
+    } catch (const SegcoreError& error) {
+        EXPECT_EQ(error.get_error_code(), FollyCancel);
+    }
+    const int loads_after_cancel = loads;
+    cancel_at = 0;
+    compare(cancelled.Eval(binding, SelectionView::All(4)),
+            retried,
+            SelectionView::All(4));
+    EXPECT_EQ(loads, loads_after_cancel + 1);
+    segment->DropFieldData(field);
+    snapshot = segment->CaptureReadSnapshot();
+    for (size_t i = 0; i < predicates.size(); ++i) {
+        auto no_raw = exec::FilterBitsExecution::TryCreate(
+            predicates[i], nullptr, snapshot, count - 1, 3, context);
+        if (i >= first_string) {
+            EXPECT_FALSE(no_raw);
+        } else {
+            ASSERT_TRUE(no_raw);
+            EXPECT_EQ(no_raw->GetOutput()->size(), count - 1);
+        }
+    }
+    physical::PhysicalPrepareOptions disabled;
+    disabled.bind_index =
+        exec::access::MakeSealedIndexBinding(snapshot, count, context, false);
+    EXPECT_FALSE(exec::FilterBitsExecution::TryCreateWithBinding(
+        predicates.front(),
+        nullptr,
+        exec::access::MakeSealedReaderBinding(snapshot, count),
+        count,
+        3,
+        context,
+        disabled));
+    for (const auto& path :
+         std::vector<std::vector<std::string>>{{}, {"a", "0"}}) {
+        auto unsupported = std::make_shared<expr::ExistsExpr>(
+            expr::ColumnInfo(field, DataType::JSON, path, true));
+        EXPECT_FALSE(exec::FilterBitsExecution::TryCreate(
+            unsupported, nullptr, snapshot, count, 3, context));
+    }
+    // Empty contains is a constant even on missing/NULL documents and needs
+    // neither the JSON payload nor stats.
+    auto empty_contains = std::make_shared<expr::JsonContainsExpr>(
+        expr::ColumnInfo(field, DataType::JSON, {"a"}, true),
+        proto::plan::JSONContainsExpr_JSONOp_ContainsAll,
+        true,
+        std::vector<V>{});
+    auto constant = exec::FilterBitsExecution::TryCreateWithBinding(
+        empty_contains, nullptr, {}, count, 3, context, disabled);
+    ASSERT_TRUE(constant);
+    auto result = ReadOnlyVectorView::CopyOf(constant->GetOutput()->child(0));
+    for (int64_t row = 0; row < count; ++row)
+        EXPECT_FALSE(result.ValueAt<bool>(row));
 }
 
 namespace {

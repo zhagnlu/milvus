@@ -110,6 +110,9 @@ struct IndexCapabilityEntry {
     // Metadata-derived caps must equal the opened reader's Caps(); the inventory
     // checks that invariant after pinning.
     index::ReaderCaps caps;
+
+    // Cast functions can change JSON comparison semantics (e.g. string to number).
+    bool has_json_cast_function{false};
 };
 
 // Index category available without initializing a lazy entry.
@@ -125,6 +128,7 @@ struct IndexRegistration {
     IndexKind kind{IndexKind::Scalar};
     std::string json_path;
     JsonCastType json_cast_type{JsonCastType::UNKNOWN};
+    bool has_json_cast_function{false};
 };
 
 // Copies registration metadata and classifies the resolved family.

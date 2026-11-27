@@ -4914,7 +4914,8 @@ type queryNodeConfig struct {
 
 	EnableWorkerSQCostMetrics ParamItem `refreshable:"true"`
 
-	ExprEvalBatchSize ParamItem `refreshable:"false"`
+	ExprEvalBatchSize     ParamItem `refreshable:"false"`
+	EnableExprExecutionV2 ParamItem `refreshable:"false"`
 
 	// delete snapshot dump batch size
 	DeleteDumpBatchSize ParamItem `refreshable:"false"`
@@ -6465,6 +6466,15 @@ user-task-polling:
 		Doc:          "expr eval batch size for getnext interface",
 	}
 	p.ExprEvalBatchSize.Init(base.mgr)
+
+	p.EnableExprExecutionV2 = ParamItem{
+		Key:          "queryNode.segcore.enableExprExecutionV2",
+		Version:      "3.0.0",
+		DefaultValue: "false",
+		Doc:          "Enable the new expression execution framework. Unsupported plans use legacy execution. Requires a QueryNode/StreamingNode restart.",
+		Export:       true,
+	}
+	p.EnableExprExecutionV2.Init(base.mgr)
 
 	p.DeleteDumpBatchSize = ParamItem{
 		Key:          "queryNode.segcore.deleteDumpBatchSize",

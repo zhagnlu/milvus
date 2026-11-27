@@ -372,6 +372,16 @@ class ColumnExpr : public ITypeExpr {
 
 class ValueExpr : public ITypeExpr {
  public:
+    // Scalar projections retain the DOUBLE precision carried by GenericValue.
+    // The default constructor remains compatible with legacy function calls.
+    ValueExpr(const proto::plan::GenericValue& val, DataType type)
+        : ValueExpr(val) {
+        AssertInfo(
+            type == type_ || (type == DataType::DOUBLE && val.has_float_val()),
+            "invalid explicit literal type");
+        type_ = type;
+    }
+
     explicit ValueExpr(const proto::plan::GenericValue& val)
         : ITypeExpr(DataType::NONE), val_(val) {
         switch (val.val_case()) {
@@ -682,6 +692,47 @@ class BinaryRangeFilterExpr : public ITypeFilterExpr {
     const proto::plan::GenericValue upper_val_;
     const bool lower_inclusive_;
     const bool upper_inclusive_;
+};
+
+// Value-producing arithmetic; deliberately separate from the legacy fused
+// field/constant comparison, whose FLOAT coercion rules must not change.
+class BinaryArithExpr : public ITypeExpr {
+ public:
+    BinaryArithExpr(proto::plan::ArithOpType op,
+                    TypedExprPtr left,
+                    TypedExprPtr right)
+        : ITypeExpr(ResultType(left, right), {left, right}), op_(op) {
+    }
+
+    proto::plan::ArithOpType
+    op() const {
+        return op_;
+    }
+
+    std::string
+    ToString() const override {
+        return fmt::format("BinaryArithExpr:[{}, {}, {}]",
+                           proto::plan::ArithOpType_Name(op_),
+                           inputs_[0]->ToString(),
+                           inputs_[1]->ToString());
+    }
+
+ private:
+    static DataType
+    ResultType(const TypedExprPtr& left, const TypedExprPtr& right) {
+        AssertInfo(left && right, "arithmetic requires two operands");
+        AssertInfo(IsNumericDataType(left->type()) &&
+                       IsNumericDataType(right->type()) &&
+                       left->type() != DataType::BOOL &&
+                       right->type() != DataType::BOOL,
+                   "arithmetic requires numeric operands");
+        return IsIntegerDataType(left->type()) &&
+                       IsIntegerDataType(right->type())
+                   ? DataType::INT64
+                   : DataType::DOUBLE;
+    }
+
+    const proto::plan::ArithOpType op_;
 };
 
 class BinaryArithOpEvalRangeExpr : public ITypeFilterExpr {

@@ -456,12 +456,10 @@ class SegmentGrowingImpl : public SegmentGrowing {
         cache_manager.RemoveSegmentCaches(segment_instance_uid(),
                                           get_segment_id());
 
-        // Original mmap cleanup logic
-        if (mmap_descriptor_ != nullptr) {
-            auto mcm =
-                storage::MmapManager::GetInstance().GetMmapChunkManager();
-            mcm->UnRegister(mmap_descriptor_);
-        }
+        // Register() installs a descriptor deleter that unregisters mmap.
+        // Pinned chunk generations also retain this descriptor: explicitly
+        // unregistering here would invalidate their outstanding read handles.
+        // Release mappings when the last descriptor owner is destroyed.
 
         // Refund any tracked resources before destruction
         // No lock needed - destructor implies exclusive access

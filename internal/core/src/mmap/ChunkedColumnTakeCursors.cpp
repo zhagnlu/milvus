@@ -54,6 +54,8 @@ struct OwnedTakeStorage {
     std::vector<ArrayView> array_views;
     std::vector<ArrayValue> array_values;
     std::vector<ArrayValueView> array_value_views;
+    std::vector<VectorArray> vector_arrays;
+    std::vector<VectorArrayView> vector_array_views;
     FixedVector<bool> validity;
     FixedVector<bool> data_skipped;
 };
@@ -85,9 +87,6 @@ ValidateTakeTargetType(DataType data_type,
                "take target {} does not match column type {}",
                static_cast<int>(requested),
                data_type);
-    if (requested == ChunkedColumnInterface::TargetType::VectorArrayView) {
-        return std::nullopt;
-    }
     return requested;
 }
 
@@ -387,6 +386,26 @@ class RawTakeResult final : public ChunkedColumnInterface::TakeResult {
                 values.data = owner->json_values.data();
                 values.byte_width = sizeof(Json);
                 break;
+            case DataType::VECTOR_ARRAY:
+                owner->vector_arrays.resize(Size());
+                owner->vector_array_views.resize(Size());
+                visit_values([&](int64_t index,
+                                 Chunk* chunk,
+                                 size_t chunk_offset,
+                                 bool valid) {
+                    if (!valid)
+                        return;
+                    auto* array_chunk = dynamic_cast<VectorArrayChunk*>(chunk);
+                    AssertInfo(array_chunk,
+                               "raw take Cell is not a vector array");
+                    owner->vector_arrays[index] =
+                        array_chunk->View(chunk_offset).ToOwned();
+                    owner->vector_array_views[index] =
+                        VectorArrayView(owner->vector_arrays[index]);
+                });
+                values.data = owner->vector_array_views.data();
+                values.byte_width = sizeof(VectorArrayView);
+                break;
             case DataType::ARRAY:
                 if (target_type_ == TargetType::ArrayValueView) {
                     owner->array_values.resize(Size());
@@ -520,6 +539,18 @@ class RawTakeResult final : public ChunkedColumnInterface::TakeResult {
         const auto [array_chunk, offset] =
             ResolveData<ColumnarArrayChunk>(index);
         return array_chunk->template View<ArrayValueView>(offset);
+    }
+
+    VectorArrayView
+    VectorArrayAt(int64_t index, TakeItemState& state) const override {
+        if (!PrepareValue(index, state))
+            return {};
+        if (owned_ != nullptr)
+            return owned_data_.values.data_as<VectorArrayView>()[index];
+        const auto [chunk, offset] = ResolveBorrowed(index);
+        auto* array_chunk = dynamic_cast<VectorArrayChunk*>(chunk);
+        AssertInfo(array_chunk, "raw take Cell is not a vector array");
+        return array_chunk->View(offset);
     }
 
  private:

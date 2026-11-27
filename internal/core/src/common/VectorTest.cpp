@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -30,6 +31,34 @@
 #include "gtest/gtest.h"
 
 using namespace milvus;
+
+TEST(RowVectorTest, ExplicitRowCountWithNoColumns) {
+    RowVector rows(1024, std::vector<VectorPtr>{});
+    EXPECT_EQ(rows.size(), 1024);
+    EXPECT_TRUE(rows.childrens().empty());
+    RowVector empty(0, std::vector<VectorPtr>{});
+    EXPECT_EQ(empty.size(), 0);
+    EXPECT_THROW((RowVector(std::numeric_limits<size_t>::max(),
+                            std::vector<VectorPtr>{})),
+                 SegcoreError);
+}
+
+TEST(RowVectorTest, ExplicitRowCountChecksEveryChild) {
+    auto a = std::make_shared<ColumnVector>(DataType::INT64, 4);
+    auto b = std::make_shared<ConstantVector<int64_t>>(DataType::INT64, 4, 7);
+    RowVector rows(4, std::vector<VectorPtr>{a, b});
+    EXPECT_EQ(rows.size(), 4);
+    EXPECT_EQ(rows.child(0), a);
+    EXPECT_EQ(rows.child(1), b);
+    EXPECT_THROW((RowVector(3, std::vector<VectorPtr>{a, b})), SegcoreError);
+    EXPECT_THROW((RowVector(4, std::vector<VectorPtr>{a, nullptr})), SegcoreError);
+    auto short_column = std::make_shared<ColumnVector>(DataType::INT64, 3);
+    EXPECT_THROW((RowVector(4, std::vector<VectorPtr>{a, short_column})),
+                 SegcoreError);
+    // Existing inference constructors are deliberately unchanged.
+    RowVector legacy(std::vector<VectorPtr>{a, short_column});
+    EXPECT_EQ(legacy.size(), 4);
+}
 
 // Helper function to create a bitmap ColumnVector with given data and valid bitmaps
 static ColumnVectorPtr

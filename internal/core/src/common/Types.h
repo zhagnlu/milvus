@@ -1535,6 +1535,13 @@ class RowType final {
         return names_.size();
     }
 
+    const std::string&
+    column_name(column_index_t index) const {
+        AssertInfo(index < names_.size(),
+                   "row type column index out of bounds");
+        return names_[index];
+    }
+
  private:
     const std::vector<std::string> names_;
     const std::vector<milvus::DataType> columns_types_;

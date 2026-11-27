@@ -23,6 +23,7 @@
 #include "common/Vector.h"
 #include "exec/expression/Expr.h"
 #include "segcore/SegmentInterface.h"
+#include "exec/expression/JsonArrayComparison.h"
 #include "query/Utils.h"
 #include "common/bson_view.h"
 namespace milvus {
@@ -67,74 +68,6 @@ GetColumnVector(const VectorPtr& result) {
                   "expr result must have a ColumnVector or RowVector result");
     }
     return res;
-}
-
-template <typename T>
-bool
-CompareTwoJsonArray(T arr1, const proto::plan::Array& arr2) {
-    int json_array_length = 0;
-    if constexpr (std::is_same_v<
-                      T,
-                      simdjson::simdjson_result<simdjson::ondemand::array>>) {
-        json_array_length = arr1.count_elements();
-    }
-    if constexpr (std::is_same_v<T,
-                                 std::vector<simdjson::simdjson_result<
-                                     simdjson::ondemand::value>>>) {
-        json_array_length = arr1.size();
-    }
-
-    if constexpr (std::is_same_v<
-                      T,
-                      simdjson::simdjson_result<simdjson::dom::array>>) {
-        json_array_length = arr1.size();
-    }
-
-    if constexpr (std::is_same_v<T, simdjson::dom::array>) {
-        json_array_length = arr1.size();
-    }
-    if (arr2.array_size() != json_array_length) {
-        return false;
-    }
-    int i = 0;
-    for (auto&& it : arr1) {
-        switch (arr2.array(i).val_case()) {
-            case proto::plan::GenericValue::kBoolVal: {
-                auto val = it.template get<bool>();
-                if (val.error() || val.value() != arr2.array(i).bool_val()) {
-                    return false;
-                }
-                break;
-            }
-            case proto::plan::GenericValue::kInt64Val: {
-                auto val = it.template get<int64_t>();
-                if (val.error() || val.value() != arr2.array(i).int64_val()) {
-                    return false;
-                }
-                break;
-            }
-            case proto::plan::GenericValue::kFloatVal: {
-                auto val = it.template get<double>();
-                if (val.error() || val.value() != arr2.array(i).float_val()) {
-                    return false;
-                }
-                break;
-            }
-            case proto::plan::GenericValue::kStringVal: {
-                auto val = it.template get<std::string_view>();
-                if (val.error() || val.value() != arr2.array(i).string_val()) {
-                    return false;
-                }
-                break;
-            }
-            default:
-                ThrowInfo(UnexpectedError,
-                          "unsupported data type {}",
-                          arr2.array(i).val_case());
-        }
-        i++;
-    }
-    return true;
 }
 
 template <>

@@ -847,6 +847,11 @@ InitScalarFieldData(const DataType& type, bool nullable, int64_t cap_rows) {
                 type, nullable, cap_rows);
         case DataType::JSON:
             return std::make_shared<FieldData<Json>>(type, nullable, cap_rows);
+        case DataType::VECTOR_ARRAY:
+            return std::make_shared<FieldDataVectorArrayImpl>(
+                type, nullable, cap_rows);
+        case DataType::ARRAY:
+            return std::make_shared<FieldData<Array>>(type, nullable, cap_rows);
         case DataType::GEOMETRY:
             return std::make_shared<FieldData<std::string>>(
                 type, nullable, cap_rows);
@@ -882,6 +887,18 @@ InitScalarFieldDataWithLength(const DataType& type, int64_t length) {
             return InitScalarFieldDataWithLengthImpl<std::string>(type, length);
         case DataType::JSON:
             return InitScalarFieldDataWithLengthImpl<Json>(type, length);
+        case DataType::VECTOR_ARRAY: {
+            auto data = std::make_shared<FieldDataVectorArrayImpl>(type, false);
+            std::vector<VectorArray> values(length);
+            data->FillFieldData(values.data(), length);
+            return data;
+        }
+        case DataType::ARRAY: {
+            auto data = std::make_shared<FieldData<Array>>(type, false);
+            std::vector<Array> values(length);
+            data->FillFieldData(values.data(), length);
+            return data;
+        }
         default:
             ThrowInfo(DataTypeInvalid,
                       "InitScalarFieldDataWithLength not support data type {}",
@@ -944,6 +961,18 @@ ResizeScalarFieldData(const DataType& type,
                 std::dynamic_pointer_cast<FieldData<std::string>>(field_data);
             AssertInfo(inner_field_data != nullptr,
                        "Failed to cast field_data to FieldData<std::string>");
+            inner_field_data->resize_field_data(new_num_rows);
+            return;
+        }
+        case DataType::VECTOR_ARRAY: {
+            auto data =
+                std::dynamic_pointer_cast<FieldDataVectorArrayImpl>(field_data);
+            data->resize_field_data(new_num_rows);
+            return;
+        }
+        case DataType::ARRAY: {
+            auto inner_field_data =
+                std::dynamic_pointer_cast<FieldData<Array>>(field_data);
             inner_field_data->resize_field_data(new_num_rows);
             return;
         }

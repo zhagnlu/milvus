@@ -28,6 +28,7 @@
 
 namespace milvus {
 namespace exec {
+class FilterBitsExecution;
 
 bool
 ConvertPredicateToFilteredBitset(TargetBitmapView data,
@@ -39,7 +40,9 @@ class PhyFilterBitsNode : public Operator {
     PhyFilterBitsNode(
         int32_t operator_id,
         DriverContext* ctx,
-        const std::shared_ptr<const plan::FilterBitsNode>& filter);
+        const std::shared_ptr<const ::milvus::plan::FilterBitsNode>& filter);
+
+    ~PhyFilterBitsNode() override;
 
     bool
     IsFilter() const override {
@@ -61,10 +64,7 @@ class PhyFilterBitsNode : public Operator {
     IsFinished() override;
 
     void
-    Close() override {
-        Operator::Close();
-        exprs_->Clear();
-    }
+    Close() override;
 
     BlockingReason
     IsBlocked(ContinueFuture* /* unused */) override {
@@ -82,15 +82,22 @@ class PhyFilterBitsNode : public Operator {
     void
     PrefetchAsync(const std::shared_ptr<folly::CPUThreadPoolExecutor>
                       prefetch_pool) override {
-        exprs_->PrefetchAsync(prefetch_pool);
+        if (exprs_)
+            exprs_->PrefetchAsync(prefetch_pool);
     }
 
     void
     WaitPrefetch() override {
-        exprs_->WaitPrefetch();
+        if (exprs_)
+            exprs_->WaitPrefetch();
     }
 
  private:
+    // Inspect routing/progress in operator tests without exposing a runtime API.
+    friend class FilterBitsNodeTestAccess;
+    friend class ScalarExecutionPerformanceAccess;
+
+    std::unique_ptr<FilterBitsExecution> scalar_filter_;
     std::unique_ptr<ExprSet> exprs_;
     QueryContext* query_context_;
     int64_t num_processed_rows_;

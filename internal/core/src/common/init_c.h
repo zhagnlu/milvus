@@ -52,6 +52,10 @@ SetThreadPoolMaxThreadsSize(const int);
 void
 SetDefaultExprEvalBatchSize(int64_t val);
 
+// Startup default captured by each newly constructed QueryConfig.
+void
+SetDefaultExprExecutionV2Enabled(bool enabled);
+
 void
 SetDefaultDeleteDumpBatchSize(int64_t val);
 

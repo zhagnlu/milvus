@@ -24,6 +24,7 @@
 #include "exec/expression/Expr.h"
 #include "expr/ITypeExpr.h"
 #include "rescores/Utils.h"
+#include "exec/operator/CandidateFilter.h"
 
 namespace milvus::rescores {
 
@@ -79,12 +80,23 @@ EvalFilterOverAllBatches(exec::ExecContext* exec_context,
 }  // namespace
 
 std::optional<TargetBitmap>
-ComputeNonNativeFilterBitset(exec::ExecContext* exec_context,
-                             const std::shared_ptr<Scorer>& scorer,
-                             std::unique_ptr<exec::ExprSet>* out_expr_set) {
+ComputeNonNativeFilterBitset(
+    exec::ExecContext* exec_context,
+    const std::shared_ptr<Scorer>& scorer,
+    std::unique_ptr<exec::ExprSet>* out_expr_set,
+    std::unique_ptr<exec::CandidateFilter>* out_scalar_filter) {
     auto filter = scorer->filter();
     if (!filter) {
         return std::nullopt;
+    }
+    if (out_scalar_filter) {
+        *out_scalar_filter =
+            exec::CandidateFilter::TryCreate(filter, exec_context);
+        if (*out_scalar_filter) {
+            if (out_expr_set)
+                out_expr_set->reset();
+            return std::nullopt;
+        }
     }
     auto expr_set = BuildFilterExprSet(filter, exec_context);
     if (AllSupportOffsetInput(*expr_set)) {
@@ -112,7 +124,8 @@ ComputeScorerScores(exec::ExecContext* exec_context,
                     FixedVector<int32_t>& offsets,
                     std::vector<std::optional<float>>& output_scores,
                     const TargetBitmap* filter_bitset,
-                    exec::ExprSet* prepared_expr_set) {
+                    exec::ExprSet* prepared_expr_set,
+                    exec::CandidateFilter* scalar_filter) {
     AssertInfo(output_scores.size() == offsets.size(),
                "scorer score output size {} must match offsets size {}",
                output_scores.size(),
@@ -136,6 +149,22 @@ ComputeScorerScores(exec::ExecContext* exec_context,
         return;
     }
 
+    std::unique_ptr<exec::CandidateFilter> owned_scalar_filter;
+    if (!scalar_filter && !prepared_expr_set) {
+        owned_scalar_filter =
+            exec::CandidateFilter::TryCreate(filter, exec_context);
+        scalar_filter = owned_scalar_filter.get();
+    }
+    if (scalar_filter) {
+        auto matches = scalar_filter->Eval(offsets);
+        scorer->batch_score(op_context,
+                            segment,
+                            function_mode,
+                            offsets,
+                            TargetBitmapView(matches),
+                            output_scores);
+        return;
+    }
     std::unique_ptr<exec::ExprSet> owned_expr_set;
     if (prepared_expr_set == nullptr) {
         owned_expr_set = BuildFilterExprSet(filter, exec_context);
@@ -188,7 +217,8 @@ ComputeScorerScores(exec::ExecContext* exec_context,
                     float* output_scores,
                     bool* output_has_score,
                     const TargetBitmap* filter_bitset,
-                    exec::ExprSet* prepared_expr_set) {
+                    exec::ExprSet* prepared_expr_set,
+                    exec::CandidateFilter* scalar_filter) {
     std::vector<std::optional<float>> scores(offsets.size());
     ComputeScorerScores(exec_context,
                         op_context,
@@ -197,7 +227,8 @@ ComputeScorerScores(exec::ExecContext* exec_context,
                         offsets,
                         scores,
                         filter_bitset,
-                        prepared_expr_set);
+                        prepared_expr_set,
+                        scalar_filter);
     CopyScoresToBuffers(scores, output_scores, output_has_score);
 }
 

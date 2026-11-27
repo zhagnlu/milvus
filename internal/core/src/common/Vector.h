@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 
 #include "common/EasyAssert.h"
@@ -67,10 +68,9 @@ class BaseVector {
         length_ = newSize;
     }
 
-    /// Resets non-reusable buffers and updates child vectors by calling
-    /// BaseVector::prepareForReuse.
-    /// Base implementation checks and resets nulls buffer if needed. Keeps the
-    /// nulls buffer if singly-referenced, mutable and has at least one null bit set.
+    // Legacy metadata reset. This does not establish exclusive ownership of
+    // payload buffers. Use the VectorAccess writable-copy boundary for writes
+    // to shared inputs, and VectorPool for opt-in scratch reuse.
     virtual void
     prepareForReuse();
 
@@ -218,6 +218,12 @@ class ColumnVector final : public SimpleVector {
         return valid_values_[index];
     }
 
+    // Const access for adapters; existing mutable accessors remain unchanged.
+    const TargetBitmap&
+    Validity() const {
+        return valid_values_;
+    }
+
     void*
     GetRawData() const {
         return values_->Data();
@@ -241,45 +247,40 @@ class ColumnVector final : public SimpleVector {
 
     void
     resize(vector_size_t new_size, bool setNotNull = true) override {
-        AssertInfo(!is_bitmap_, "Cannot resize bitmap column vector");
-        auto old_size = length_;
-        BaseVector::resize(new_size, setNotNull);
-        ResizeScalarFieldData(type(), new_size, values_);
-
-        if (new_size > old_size) {
-            // Growing: new bits are added
-            valid_values_.resize(new_size);
-            if (setNotNull) {
-                // All new bits are set to valid (true), no nulls added
-                for (auto i = old_size; i < new_size; ++i) {
-                    valid_values_.set(i, true);
-                }
-                // null_count_ unchanged (no new nulls)
-            } else {
-                // New bits default to null (false)
-                for (auto i = old_size; i < new_size; ++i) {
-                    valid_values_.set(i, false);
-                }
-                // Update null_count_: add (new_size - old_size) nulls
-                null_count_ = null_count_.value_or(0) + (new_size - old_size);
-            }
-        } else if (new_size < old_size) {
-            // Shrinking: need to count nulls in removed range and subtract
-            size_t removed_nulls = 0;
-            for (auto i = new_size; i < old_size; ++i) {
-                if (!valid_values_[i]) {
-                    ++removed_nulls;
-                }
-            }
-            valid_values_.resize(new_size);
-            // Update null_count_: subtract removed nulls
-            if (removed_nulls > 0 && null_count_.has_value()) {
-                null_count_ = (null_count_.value() >= removed_nulls)
-                                  ? null_count_.value() - removed_nulls
-                                  : 0;
-            }
+        AssertInfo(new_size >= 0, "negative column size");
+        if (static_cast<size_t>(new_size) == length_) {
+            return;
         }
-        // If new_size == old_size, no change needed
+        if (is_bitmap_) {
+            TargetBitmap bits(new_size, false);
+            const auto count = std::min(length_, static_cast<size_t>(new_size));
+            if (count != 0) {
+                TargetBitmap::policy_type::op_copy(
+                    static_cast<const TargetBitmap::data_type*>(
+                        values_->Data()),
+                    0,
+                    bits.data(),
+                    0,
+                    count);
+            }
+            TargetBitmap valid(valid_values_.view());
+            valid.resize(new_size, setNotNull);
+            auto data = std::make_shared<FieldBitsetImpl<uint8_t>>(
+                DataType::INT8, std::move(bits));
+            values_ = std::move(data);
+            valid_values_ = std::move(valid);
+            length_ = new_size;
+            null_count_ = length_ - valid_values_.count();
+            return;
+        }
+        // Allocate validity before touching values, and publish length only
+        // after both resize operations have succeeded.
+        TargetBitmap valid(valid_values_.view());
+        valid.resize(new_size, setNotNull);
+        ResizeScalarFieldData(type(), new_size, values_);
+        valid_values_ = std::move(valid);
+        length_ = new_size;
+        null_count_ = length_ - valid_values_.count();
     }
 
     void
@@ -329,7 +330,15 @@ class ColumnVector final : public SimpleVector {
 
     VectorPtr
     cloneEmpty(vector_size_t size) const override {
-        return std::make_shared<ColumnVector>(type(), size, std::nullopt);
+        AssertInfo(size >= 0, "negative column size");
+        if (is_bitmap_) {
+            return std::make_shared<ColumnVector>(TargetBitmap(size, false),
+                                                  TargetBitmap(size, true));
+        }
+        return std::make_shared<ColumnVector>(
+            InitScalarFieldDataWithLength(type(), size),
+            TargetBitmap(size, true),
+            0);
     }
 
     // Check if all rows are definitely TRUE (valid=1, data=1)
@@ -417,6 +426,7 @@ class ColumnVector final : public SimpleVector {
     }
 
  private:
+    friend class VectorPool;
     bool is_bitmap_;  // TODO: remove the field after implementing BitmapVector
     FieldDataPtr values_;
     TargetBitmap valid_values_;  // false means the value is null
@@ -473,6 +483,31 @@ class ConstantVector : public SimpleVector {
  */
 class RowVector : public BaseVector {
  public:
+    // Schema-aware batch constructor. The optional validity describes the row
+    // itself (e.g. a nullable struct), independently of child-column validity.
+    RowVector(RowTypePtr row_type,
+              size_t row_count,
+              std::vector<VectorPtr> children,
+              std::optional<TargetBitmap> validity = std::nullopt);
+
+    // Explicit batch shape, including a nonzero row count with zero columns.
+    // Legacy constructors retain their existing length-inference behavior.
+    RowVector(size_t row_count, std::vector<VectorPtr> children)
+        : BaseVector(DataType::ROW, row_count),
+          children_values_(std::move(children)) {
+        AssertInfo(row_count <=
+                       static_cast<size_t>(std::numeric_limits<int64_t>::max()),
+                   "RowVector row count exceeds size() range");
+        for (const auto& child : children_values_) {
+            AssertInfo(child != nullptr, "RowVector child cannot be null");
+            AssertInfo(child->size() == static_cast<int64_t>(row_count),
+                       "RowVector child length {} must match row count {}",
+                       child->size(),
+                       row_count);
+        }
+        InferRowType();
+    }
+
     RowVector(std::vector<DataType>& data_types,
               size_t length,
               std::optional<size_t> null_count = std::nullopt)
@@ -481,38 +516,61 @@ class RowVector : public BaseVector {
             children_values_.emplace_back(
                 std::make_shared<ColumnVector>(type, length));
         }
+        InferRowType();
+        InitRowValidity(null_count);
     }
 
     RowVector(const std::vector<VectorPtr>& children)
         : BaseVector(DataType::ROW, 0) {
         for (auto& child : children) {
+            AssertInfo(child, "RowVector child cannot be null");
             children_values_.push_back(child);
             if (child->size() > length_) {
                 length_ = child->size();
             }
         }
+        InferRowType();
     }
 
     RowVector(std::vector<VectorPtr>&& children)
         : BaseVector(DataType::ROW, 0), children_values_(std::move(children)) {
         for (auto& child : children_values_) {
+            AssertInfo(child, "RowVector child cannot be null");
             if (child->size() > length_) {
                 length_ = child->size();
             }
         }
+        InferRowType();
     }
 
     RowVector(const RowTypePtr& rowType,
               size_t size,
               std::optional<size_t> nullCount = std::nullopt)
         : BaseVector(DataType::ROW, size, nullCount) {
+        AssertInfo(rowType, "RowVector schema cannot be null");
+        row_type_ = rowType;
         auto column_count = rowType->column_count();
         for (auto i = 0; i < column_count; i++) {
             auto column_type = rowType->column_type(i);
             children_values_.emplace_back(
                 std::make_shared<ColumnVector>(column_type, size));
         }
+        InitRowValidity(nullCount);
     }
+
+    const RowTypePtr&
+    row_type() const {
+        return row_type_;
+    }
+
+    bool
+    IsValid(size_t row) const {
+        AssertInfo(row < length_, "row index out of bounds");
+        return !row_validity_ || (*row_validity_)[row];
+    }
+
+    void
+    SetRowValid(size_t row, bool valid);
 
     const std::vector<VectorPtr>&
     childrens() const {
@@ -521,24 +579,45 @@ class RowVector : public BaseVector {
 
     VectorPtr
     child(int index) const {
-        assert(index < children_values_.size());
+        AssertInfo(
+            index >= 0 && static_cast<size_t>(index) < children_values_.size(),
+            "RowVector child index out of bounds");
         return children_values_[index];
+    }
+
+    VectorPtr
+    child(const std::string& name) const {
+        return child(row_type_->GetChildIndex(name));
     }
 
     void
     resize(vector_size_t new_size, bool setNotNull = true) override;
 
+    // Drop this batch's children without mutating buffers still held by other
+    // batches. Fresh empty children retain their schema and physical kind.
+    void
+    prepareForReuse() override;
+
     VectorPtr
     cloneEmpty(vector_size_t size) const override {
-        // Extract data types from existing children to preserve structure
-        std::vector<DataType> data_types;
+        AssertInfo(size >= 0, "negative vector size");
+        std::vector<VectorPtr> children;
         for (const auto& child : children_values_) {
-            data_types.push_back(child->type());
+            children.push_back(child->cloneEmpty(size));
         }
-        return std::make_shared<RowVector>(data_types, size, std::nullopt);
+        return std::make_shared<RowVector>(
+            row_type_, size, std::move(children));
     }
 
  private:
+    void
+    InferRowType();
+
+    void
+    InitRowValidity(std::optional<size_t> null_count);
+
+    RowTypePtr row_type_;
+    std::optional<TargetBitmap> row_validity_;
     std::vector<VectorPtr> children_values_;
 };
 

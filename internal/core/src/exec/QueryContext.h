@@ -99,6 +99,10 @@ class QueryConfig : public MemConfig {
  public:
     static constexpr const char* kExprEvalBatchSize =
         "expression.eval_batch_size";
+    // Defaults to queryNode.segcore.enableExprExecutionV2 set during startup;
+    // an explicit per-query value overrides the captured service default.
+    static constexpr const char* kEnableExprExecutionV2 =
+        "expression.enable_expr_execution_v2";
 
     explicit QueryConfig(
         const std::unordered_map<std::string, std::string>& values)
@@ -112,6 +116,16 @@ class QueryConfig : public MemConfig {
         return BaseConfig::Get<int64_t>(kExprEvalBatchSize,
                                         EXEC_EVAL_EXPR_BATCH_SIZE.load());
     }
+
+    bool
+    enable_expr_execution_v2() const {
+        return BaseConfig::Get<bool>(kEnableExprExecutionV2,
+                                     expr_execution_v2_enabled_);
+    }
+
+ private:
+    // Keep execution mode stable for the lifetime of this query.
+    const bool expr_execution_v2_enabled_ = EXPR_EXECUTION_V2_ENABLED.load();
 };
 
 class Context {

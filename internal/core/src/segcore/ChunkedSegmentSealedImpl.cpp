@@ -13,6 +13,7 @@
 #include "index/scalar/sort/SortedMembership.h"
 #include "ChunkedSegmentSealedImpl.h"
 #include "exec/expression/ExprCache.h"
+#include "index/scalar/json/JsonValueProjection.h"
 #include "segcore/default_fs.h"
 
 #include <cxxabi.h>
@@ -1585,12 +1586,80 @@ class ChunkedSegmentSealedImpl::SealedReadSnapshot
     }
 
     explicit SealedReadSnapshot(
-        std::shared_ptr<const PublishedSegmentState> state)
-        : state_(std::move(state)) {
-        AssertInfo(state_ != nullptr && state_->fields != nullptr &&
-                       state_->runtime != nullptr,
+        std::shared_ptr<const PublishedSegmentState> state, bool sorted_by_pk)
+        : state_(std::move(state)), sorted_by_pk_(sorted_by_pk) {
+        AssertInfo(state_ != nullptr && state_->fields != nullptr && state_->runtime != nullptr,
                    "sealed read snapshot must hold a published state with a "
                    "non-null field layout and runtime");
+    }
+
+    OffsetBatchIterator
+    MakeOffsetIterator(BitsetTypeView excluded,
+                       OpContext* context,
+                       std::function<void()> checkpoint) const override {
+        AssertInfo(excluded.size() <= state_->runtime->row_count,
+                   "offset iterator domain exceeds sealed snapshot");
+        if (checkpoint)
+            checkpoint();
+        const auto& runtime = *state_->runtime;
+        if (runtime.virtual_pk2offset || sorted_by_pk_)
+            return MakeBitmapOffsetIterator(excluded, std::move(checkpoint));
+        AssertInfo(runtime.pk_index_slot, "primary key index is not ready");
+        auto pin = SemiInlineGet(runtime.pk_index_slot->PinCells(context, {0}));
+        const auto* cell = pin->get_cell_of(0);
+        AssertInfo(cell && cell->has_pk2offset(),
+                   "prepared primary key index has no offset map");
+        auto next = cell->pk2offset().make_offset_iterator(
+            excluded, std::move(checkpoint));
+        return [pin = std::move(pin), next = std::move(next)](
+                   size_t max_rows) mutable { return next(max_rows); };
+    }
+
+    PrimaryKeyLookupLoader
+    GetPrimaryKeyLookup(FieldId field, DataType type) const override {
+        if (!state_->fields->has_field(field) ||
+            state_->fields->get_primary_field_id() != field ||
+            (type != DataType::INT64 && type != DataType::VARCHAR) ||
+            (*state_->fields)[field].get_data_type() != type ||
+            (*state_->fields)[field].is_nullable())
+            return {};
+        const auto& runtime = *state_->runtime;
+        if (runtime.virtual_pk2offset) {
+            return [map = runtime.virtual_pk2offset](
+                       OpContext*) -> PrimaryKeyLookup {
+                return [map](const PkType& pk, auto op, auto& bits) {
+                    map->find_range(pk, op, bits, [&](int64_t offset) {
+                        return offset >= 0 && offset < bits.size();
+                    });
+                };
+            };
+        }
+        if (sorted_by_pk_) {
+            auto it = runtime.fields.find(field);
+            if (it == runtime.fields.end() || !it->second)
+                return {};
+            return [column = it->second, type](OpContext* context) {
+                return type == DataType::INT64
+                           ? LoadSortedPrimaryKey<int64_t>(column, context)
+                           : LoadSortedPrimaryKey<std::string>(column, context);
+            };
+        }
+        if (!runtime.pk_index_slot)
+            return {};
+        return [slot = runtime.pk_index_slot](
+                   OpContext* context) -> PrimaryKeyLookup {
+            auto pin = SemiInlineGet(slot->PinCells(context, {0}));
+            const auto* cell = pin->get_cell_of(0);
+            AssertInfo(cell && cell->has_pk2offset(),
+                       "prepared primary key index has no offset map");
+            return [pin = std::move(pin), cell](
+                       const PkType& pk, auto op, auto& bits) {
+                // Sealed OffsetOrderedArray does not clip to the bitmap size.
+                cell->pk2offset().find_range(pk, op, bits, [&](int64_t offset) {
+                    return offset >= 0 && offset < bits.size();
+                });
+            };
+        };
     }
 
     int64_t
@@ -1657,6 +1726,101 @@ class ChunkedSegmentSealedImpl::SealedReadSnapshot
         return {std::move(column), std::move(view)};
     }
 
+    index::IndexPtr
+    GetVectorIndexResource(FieldId field, OpContext* context = nullptr) const override {
+        for (const auto& entry : state_->runtime->indexes.SnapshotEntries()) {
+            if (entry->registration().key.field_id == field &&
+                entry->registration().kind == IndexKind::Vector)
+                return entry->Resolve(context).index;
+        }
+        return nullptr;
+    }
+
+    index::IndexPtr
+    GetScalarIndexResource(FieldId field, const IndexType& type,
+                           OpContext* context = nullptr) const override {
+        static const std::unordered_map<std::string, std::string> families{
+            {"STL_SORT", "sort"},
+            {"INVERTED", "inverted"},
+            {"BITMAP", "bitmap"},
+            {"Trie", "marisa"},
+            {"TRIE", "marisa"},
+            {"NGRAM", "ngram"},
+            {"RTREE", "rtree"}};
+        auto expected = families.find(type);
+        if (expected == families.end()) return nullptr;
+        for (const auto& entry : state_->runtime->indexes.SnapshotEntries()) {
+            const auto& registration = entry->registration();
+            if (registration.key.field_id != field || !registration.json_path.empty() ||
+                registration.kind == IndexKind::Vector || registration.kind == IndexKind::Text)
+                continue;
+            const auto& resolved = entry->Resolve(context);
+            if (resolved.family == expected->second) return resolved.index;
+        }
+        return nullptr;
+    }
+
+    std::shared_ptr<exec::SimpleGeometryCache>
+    GetGeometryCache(FieldId field_id) const override {
+        const auto& caches = state_->runtime->geometry_caches;
+        auto it = caches.find(field_id);
+        return it == caches.end() ? nullptr : it->second;
+    }
+
+    index::IndexPtr
+    GetNgramResource(FieldId field, const std::string& pointer,
+                     OpContext* context = nullptr) const override {
+        for (const auto& entry : state_->runtime->indexes.SnapshotEntries()) {
+            const auto& registration = entry->registration();
+            if (registration.key.field_id == field && registration.json_path == pointer &&
+                registration.kind == IndexKind::Ngram)
+                return entry->Resolve(context).index;
+        }
+        return nullptr;
+    }
+
+    index::IndexPtr
+    GetJsonPredicateResource(FieldId field, const std::string& pointer,
+                             DataType type, bool allow_numeric_cast,
+                             OpContext* context = nullptr) const override {
+        for (const auto& entry : state_->runtime->indexes.SnapshotEntries()) {
+            const auto& registration = entry->registration();
+            if (registration.key.field_id != field ||
+                registration.json_path != pointer ||
+                registration.has_json_cast_function ||
+                registration.json_cast_type.data_type() ==
+                    JsonCastType::DataType::JSON ||
+                registration.json_cast_type.data_type() ==
+                    JsonCastType::DataType::UNKNOWN)
+                continue;
+            const auto& resolved = entry->Resolve(context);
+            if (resolved.caps.predicate && resolved.caps.exact && !resolved.caps.nested &&
+                (type == DataType::NONE || index::json::IsDataTypeSupported(registration.json_cast_type, type, false)) &&
+                (registration.json_cast_type.ToMilvusDataType() != DataType::DOUBLE || allow_numeric_cast))
+                return resolved.index;
+        }
+        return nullptr;
+    }
+
+    TextIndexLoader
+    GetTextIndexResource(FieldId field, OpContext* context = nullptr) const override {
+        for (const auto& entry : state_->runtime->indexes.SnapshotEntries()) {
+            if (entry->registration().key.field_id != field ||
+                entry->registration().kind != IndexKind::Text) continue;
+            auto resource = entry->Resolve(context).index;
+            return [resource](OpContext* context) -> std::shared_ptr<const index::IIndexReaderBase> {
+                return resource->CreateReader(context);
+            };
+        }
+        return {};
+    }
+
+    std::shared_ptr<cachinglayer::CacheSlot<index::JsonKeyStats>>
+    GetJsonStatsResource(FieldId field_id) const override {
+        auto it = state_->runtime->json_stats.find(field_id);
+        return it == state_->runtime->json_stats.end() ? nullptr : it->second;
+    }
+
     // Hot-loop column accessor: borrowed pointer straight out of the frozen
     // published state, no shared_ptr copies and no skip-metrics construction.
     const ChunkedColumnInterface*
@@ -1677,6 +1841,75 @@ class ChunkedSegmentSealedImpl::SealedReadSnapshot
     }
 
  private:
+    template <typename T>
+    static PrimaryKeyLookup
+    LoadSortedPrimaryKey(std::shared_ptr<ChunkedColumnInterface> column,
+                         OpContext* context) {
+        // Search global row positions so duplicates spanning chunk boundaries
+        // are included. Pin only visited chunks, reusing pins across IN terms.
+        return [column = std::move(column),
+                context,
+                pins = std::map<int64_t, PinWrapper<Chunk*>>{}](
+                   const PkType& pk, auto op, auto& bits) mutable {
+            AssertInfo(bits.size() <= column->NumRows(),
+                       "prepared PK domain exceeds its column generation");
+            const auto& target = std::get<T>(pk);
+            auto bound = [&](bool upper) {
+                int64_t lo = 0, hi = bits.size();
+                while (lo < hi) {
+                    const auto mid = lo + (hi - lo) / 2;
+                    const auto [chunk, offset] =
+                        column->GetChunkIDByOffset(mid);
+                    auto it = pins.find(chunk);
+                    if (it == pins.end())
+                        it = pins.emplace(chunk,
+                                          column->GetChunk(context, chunk))
+                                 .first;
+                    auto value = [&] {
+                        if constexpr (std::is_same_v<T, int64_t>) {
+                            return reinterpret_cast<const int64_t*>(
+                                it->second.get()->RawData())[offset];
+                        } else {
+                            auto* strings =
+                                dynamic_cast<StringChunk*>(it->second.get());
+                            AssertInfo(strings,
+                                       "invalid sorted PK string chunk");
+                            return (*strings)[offset];
+                        }
+                    }();
+                    if (value < target || (upper && value == target))
+                        lo = mid + 1;
+                    else
+                        hi = mid;
+                }
+                return lo;
+            };
+            int64_t begin = 0, end = bits.size();
+            switch (op) {
+                case proto::plan::Equal:
+                    begin = bound(false);
+                    end = bound(true);
+                    break;
+                case proto::plan::LessThan:
+                    end = bound(false);
+                    break;
+                case proto::plan::LessEqual:
+                    end = bound(true);
+                    break;
+                case proto::plan::GreaterThan:
+                    begin = bound(true);
+                    break;
+                case proto::plan::GreaterEqual:
+                    begin = bound(false);
+                    break;
+                default:
+                    AssertInfo(false, "invalid prepared PK comparison {}", op);
+            }
+            if (begin < end)
+                bits.set(begin, end - begin, true);
+        };
+    }
+
     bool
     FieldDataReady(FieldId field_id) const {
         return get_bit(state_->field_data_ready_bitset, field_id);
@@ -1688,11 +1921,13 @@ class ChunkedSegmentSealedImpl::SealedReadSnapshot
     }
 
     std::shared_ptr<const PublishedSegmentState> state_;
+    const bool sorted_by_pk_;
 };
 
 std::shared_ptr<const SegmentReadSnapshot>
 ChunkedSegmentSealedImpl::CaptureReadSnapshot() const {
-    return std::make_shared<SealedReadSnapshot>(CapturePublishedState());
+    return std::make_shared<SealedReadSnapshot>(CapturePublishedState(),
+                                                is_sorted_by_pk_);
 }
 
 std::shared_ptr<const ChunkedSegmentSealedImpl::PublishedSegmentState>

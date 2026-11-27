@@ -62,6 +62,11 @@ PhyIterativeFilterNode::PhyIterativeFilterNode(
                "PhyIterativeFilterNode") {
     ExecContext* exec_context = operator_context_->get_exec_context();
     query_context_ = exec_context->get_query_context();
+    need_process_rows_ = query_context_->get_active_count();
+    num_processed_rows_ = 0;
+    scalar_filter_ = CandidateFilter::TryCreate(filter->filter(), exec_context);
+    if (scalar_filter_)
+        return;
     std::vector<expr::TypedExprPtr> filters;
     filters.emplace_back(filter->filter());
     // This operator reads only the data bits of the predicate output, so
@@ -74,8 +79,6 @@ PhyIterativeFilterNode::PhyIterativeFilterNode(
         is_native_supported_ =
             (is_native_supported_ && (expr->SupportOffsetInput()));
     }
-    need_process_rows_ = query_context_->get_active_count();
-    num_processed_rows_ = 0;
 }
 
 void
@@ -254,25 +257,29 @@ PhyIterativeFilterNode::GetOutput() {
                 }
 
                 if (is_native_supported_) {
-                    eval_ctx.set_offset_input(eval_offsets);
-                    std::vector<VectorPtr> results;
-                    exprs_->Eval(0, 1, true, eval_ctx, results);
-                    AssertInfo(
-                        results.size() == 1 && results[0] != nullptr,
-                        "PhyIterativeFilterNode result size should be size "
-                        "one and not "
-                        "be nullptr");
-
-                    auto col_vec =
-                        std::dynamic_pointer_cast<ColumnVector>(results[0]);
-                    auto col_vec_size = col_vec->size();
-                    TargetBitmapView bitsetview(col_vec->GetRawData(),
-                                                col_vec_size);
-                    // Fold UNKNOWN into FALSE explicitly (data &= valid):
-                    // rows are included below on the data bit alone.
-                    TargetBitmapView validview(col_vec->GetValidRawData(),
-                                               col_vec_size);
-                    bitsetview.inplace_and(validview, col_vec_size);
+                    auto matches = [&]() -> TargetBitmap {
+                        if (scalar_filter_)
+                            return scalar_filter_->Eval(*eval_offsets);
+                        eval_ctx.set_offset_input(eval_offsets);
+                        std::vector<VectorPtr> results;
+                        exprs_->Eval(0, 1, true, eval_ctx, results);
+                        AssertInfo(results.size() == 1 && results[0],
+                                   "iterative filter returned no result");
+                        auto column =
+                            std::dynamic_pointer_cast<ColumnVector>(results[0]);
+                        AssertInfo(
+                            column && column->size() == eval_offsets->size(),
+                            "iterative filter result shape mismatch");
+                        TargetBitmap result(column->size(), false);
+                        TargetBitmapView values(column->GetRawData(),
+                                                column->size());
+                        TargetBitmapView valid(column->GetValidRawData(),
+                                               column->size());
+                        for (size_t i = 0; i < column->size(); ++i)
+                            result.set(i, values[i] && valid[i]);
+                        return result;
+                    }();
+                    TargetBitmapView bitsetview(matches);
 
                     if (element_level) {
                         Assert(bitsetview.size() == doc_offsets.size());

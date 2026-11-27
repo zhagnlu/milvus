@@ -136,12 +136,14 @@ IndexInventory::ResolveCapability(milvus::OpContext* op_ctx,
     for (const auto& [key, entry] : field_entries) {
         const auto& resolved = entry->Resolve(op_ctx);
         const auto& registration = entry->registration();
-        entries.push_back(IndexCapabilityEntry{key,
-                                               registration.json_path,
-                                               registration.json_cast_type,
-                                               resolved.family,
-                                               resolved.value_type,
-                                               resolved.caps});
+        entries.push_back(
+            IndexCapabilityEntry{key,
+                                 registration.json_path,
+                                 registration.json_cast_type,
+                                 resolved.family,
+                                 resolved.value_type,
+                                 resolved.caps,
+                                 registration.has_json_cast_function});
     }
     return FieldIndexCapability(field_id, std::move(entries));
 }

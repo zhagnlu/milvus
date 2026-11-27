@@ -1546,7 +1546,14 @@ CreateFieldDataFromDataArray(ssize_t raw_count,
             case DataType::VECTOR_SPARSE_U32_F32: {
                 auto sparse_float_array = data->vectors().sparse_float_vector();
                 auto rows = SparseBytesToRows(sparse_float_array.contents());
-                createFieldData(rows.get(), DataType::VECTOR_SPARSE_U32_F32, 0);
+                if (field_meta.is_nullable())
+                    createNullableFieldData(rows.get(),
+                                            row_valid_data.data(),
+                                            DataType::VECTOR_SPARSE_U32_F32,
+                                            0);
+                else
+                    createFieldData(
+                        rows.get(), DataType::VECTOR_SPARSE_U32_F32, 0);
                 break;
             }
             case DataType::VECTOR_INT8: {
@@ -1570,7 +1577,25 @@ CreateFieldDataFromDataArray(ssize_t raw_count,
                     data_raw[i] = VectorArray(src_data.at(i),
                                               field_meta.is_element_nullable());
                 }
-                createFieldData(data_raw.data(), DataType::VECTOR_ARRAY, dim);
+                if (field_meta.is_nullable()) {
+                    AssertInfo(row_valid_data.size() == raw_count,
+                               "VECTOR_ARRAY row validity size mismatch");
+                    std::vector<VectorArray> compact;
+                    if (data_raw.size() == raw_count) {
+                        for (int64_t row = 0; row < raw_count; ++row)
+                            if (row_valid_data[row])
+                                compact.emplace_back(std::move(data_raw[row]));
+                    } else {
+                        compact = std::move(data_raw);
+                    }
+                    createNullableFieldData(compact.data(),
+                                            row_valid_data.data(),
+                                            DataType::VECTOR_ARRAY,
+                                            dim);
+                } else {
+                    createFieldData(
+                        data_raw.data(), DataType::VECTOR_ARRAY, dim);
+                }
                 break;
             }
             default: {

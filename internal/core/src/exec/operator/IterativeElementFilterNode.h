@@ -28,6 +28,7 @@
 #include "exec/expression/Expr.h"
 #include "exec/operator/Operator.h"
 #include "plan/PlanNode.h"
+#include "exec/operator/CandidateFilter.h"
 
 namespace milvus {
 namespace exec {
@@ -87,6 +88,7 @@ class PhyIterativeElementFilterNode : public Operator {
                    const IStructElementOffsets* struct_element_offsets);
 
     std::unique_ptr<ExprSet> element_exprs_;
+    std::shared_ptr<CandidateFilter> scalar_filter_;
     QueryContext* query_context_;
     std::string struct_name_;
     bool has_doc_predicate_{true};

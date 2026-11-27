@@ -202,10 +202,18 @@ VectorBase::set_data_raw(ssize_t element_offset,
         }
         case DataType::ARRAY: {
             auto& array_data = FIELD_DATA(data, array);
+            const auto& valid_data = GetFieldDataRowValidData(*data);
             std::vector<Array> data_raw{};
             data_raw.reserve(array_data.size());
-            for (auto& array_bytes : array_data) {
-                data_raw.emplace_back(Array(array_bytes));
+            for (int i = 0; i < array_data.size(); ++i) {
+                // Row-NULL placeholders do not carry an element bitmap.
+                if (field_meta.is_nullable() &&
+                    valid_data.size() == array_data.size() && !valid_data[i]) {
+                    data_raw.emplace_back();
+                } else {
+                    data_raw.emplace_back(array_data[i],
+                                          field_meta.is_element_nullable());
+                }
             }
 
             return set_data_raw(element_offset, data_raw.data(), element_count);

@@ -6642,6 +6642,12 @@ TEST(SealedSegmentCowState, ReplaceScalarIndexStagesRuntimeUntilFinalPublish) {
     auto published_before_replace = TestIndexOwner(
         before->runtime->indexes, payload, index::families::kSort);
     ASSERT_EQ(published_before_replace, first_cache_index);
+    auto read_before = sealed->CaptureReadSnapshot();
+    EXPECT_EQ(
+        read_before->GetScalarIndexResource(payload, index::ASCENDING_SORT),
+        first_cache_index);
+    EXPECT_FALSE(read_before->GetScalarIndexResource(
+        payload, index::INVERTED_INDEX_TYPE));
 
     auto runtime = sealed->TestCloneMutableRuntimeResourceState();
     ASSERT_TRUE(TestIndexEntries(runtime->indexes, payload).size() > 0);
@@ -6700,6 +6706,19 @@ TEST(SealedSegmentCowState, ReplaceScalarIndexStagesRuntimeUntilFinalPublish) {
                   next->runtime->indexes, payload, index::families::kNgram)
                   .size(),
               0);
+    auto frozen = ChunkedSegmentSealedImpl::TestFreezeRuntimeResourceStateCopy(
+        *next->runtime);
+    EXPECT_EQ(TestIndexOwner(frozen->indexes, payload, index::families::kSort),
+              replacement_cache_index);
+    sealed->TestPublishRuntimeResourceState(
+        std::make_shared<ChunkedSegmentSealedImpl::RuntimeResourceState>(
+            *next->runtime));
+    EXPECT_EQ(sealed->CaptureReadSnapshot()->GetScalarIndexResource(
+                  payload, index::ASCENDING_SORT),
+              replacement_cache_index);
+    EXPECT_EQ(
+        read_before->GetScalarIndexResource(payload, index::ASCENDING_SORT),
+        first_cache_index);
 }
 
 TEST(SealedSegmentCowState, ReplacePkStateIsInvisibleUntilFinalPublish) {

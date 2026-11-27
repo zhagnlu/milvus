@@ -66,6 +66,11 @@ PhyElementFilterBitsNode::PhyElementFilterBitsNode(
     // window even if the global default changes before execution.
     batch_size_ = query_context_->query_config()->get_expr_batch_size();
 
+    scalar_filter_ = CandidateFilter::TryCreate(
+        element_filter_bits_node->element_filter(), exec_context, struct_name_);
+    if (scalar_filter_)
+        return;
+
     // Build expression set from element-level expression
     std::vector<expr::TypedExprPtr> exprs;
     exprs.emplace_back(element_filter_bits_node->element_filter());
@@ -89,7 +94,7 @@ PhyElementFilterBitsNode::GetOutput() {
         return nullptr;
     }
 
-    DeferLambda([&]() { is_finished_ = true; });
+    checkCancellation(query_context_);
 
     tracer::AutoSpan span(
         "PhyElementFilterBitsNode::GetOutput", tracer::GetRootSpan(), true);
@@ -109,8 +114,11 @@ PhyElementFilterBitsNode::GetOutput() {
                   field_id.get());
     }
     query_context_->set_struct_element_offsets(struct_element_offsets);
-    auto [first_elem, _] = struct_element_offsets->ElementIDRangeOfRow(
-        query_context_->get_active_count());
+    const auto documents = query_context_->get_active_count();
+    const auto first_elem =
+        documents == 0
+            ? 0
+            : struct_element_offsets->ElementIDRangeOfRow(documents - 1).second;
     query_context_->set_active_element_count(first_elem);
 
     if (first_elem == 0) {
@@ -122,12 +130,17 @@ PhyElementFilterBitsNode::GetOutput() {
         std::vector<VectorPtr> col_res;
         col_res.push_back(std::make_shared<ColumnVector>(
             std::move(bitset), std::move(valid_bitset)));
-        return std::make_shared<RowVector>(std::move(col_res));
+        auto output = std::make_shared<RowVector>(std::move(col_res));
+        checkCancellation(query_context_);
+        is_finished_ = true;
+        return output;
     }
 
     // Step 2: Prepare doc bitset
     auto col_input = GetColumnVector(input_);
-    TargetBitmapView doc_bitset(col_input->GetRawData(), col_input->size());
+    TargetBitmap selected_docs(
+        TargetBitmapView(col_input->GetRawData(), col_input->size()));
+    auto doc_bitset = selected_docs.view();
     TargetBitmapView doc_bitset_valid(col_input->GetValidRawData(),
                                       col_input->size());
     doc_bitset.flip();
@@ -136,11 +149,6 @@ PhyElementFilterBitsNode::GetOutput() {
     // Use offset mode or full mode based on selectivity
     auto [expr_result, valid_expr_result] = EvaluateElementExpression(
         doc_bitset, doc_bitset_valid, struct_element_offsets.get());
-
-    // Step 4: Set query context
-    query_context_->set_struct_name(struct_name_);
-    // Mark that bitset has been converted to element-level
-    query_context_->set_bitset_is_element_level(true);
 
     std::chrono::high_resolution_clock::time_point end_time =
         std::chrono::high_resolution_clock::now();
@@ -163,7 +171,12 @@ PhyElementFilterBitsNode::GetOutput() {
     std::vector<VectorPtr> col_res;
     col_res.push_back(std::make_shared<ColumnVector>(
         std::move(expr_result), std::move(valid_expr_result)));
-    return std::make_shared<RowVector>(std::move(col_res));
+    auto output = std::make_shared<RowVector>(std::move(col_res));
+    checkCancellation(query_context_);
+    query_context_->set_struct_name(struct_name_);
+    query_context_->set_bitset_is_element_level(true);
+    is_finished_ = true;
+    return output;
 }
 
 std::pair<TargetBitmap, TargetBitmap>
@@ -175,6 +188,42 @@ PhyElementFilterBitsNode::EvaluateElementExpression(
                           tracer::GetRootSpan(),
                           true);
     int64_t total_elements = query_context_->get_active_element_count();
+
+    if (scalar_filter_) {
+        TargetBitmap excluded(total_elements, true);
+        FixedVector<int32_t> candidates;
+        const auto batch_size = operator_context_->get_exec_context()
+                                    ->get_query_config()
+                                    ->get_expr_batch_size();
+        AssertInfo(batch_size > 0, "invalid element filter batch size");
+        auto flush = [&] {
+            if (candidates.empty())
+                return;
+            auto matches = scalar_filter_->Eval(candidates);
+            for (size_t i = 0; i < candidates.size(); ++i)
+                if (matches[i])
+                    excluded[candidates[i]] = false;
+            candidates.clear();
+        };
+        // Generate only requested elements in bounded batches.
+        for (size_t doc = 0; doc < doc_bitset.size(); ++doc) {
+            if (doc % 256 == 0)
+                checkCancellation(query_context_);
+            if (!doc_bitset[doc] || !doc_bitset_valid[doc])
+                continue;
+            const auto [begin, end] =
+                struct_element_offsets->ElementIDRangeOfRow(doc);
+            AssertInfo(begin >= 0 && end <= total_elements,
+                       "element range exceeds query domain");
+            for (int64_t element = begin; element < end; ++element) {
+                candidates.push_back(element);
+                if (candidates.size() == static_cast<size_t>(batch_size))
+                    flush();
+            }
+        }
+        flush();
+        return {std::move(excluded), TargetBitmap(total_elements, true)};
+    }
 
     auto count = doc_bitset.count();
     auto doc_hit_ratio = count * 1.0 / doc_bitset.size();

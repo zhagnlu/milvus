@@ -467,9 +467,7 @@ class ConcurrentVectorImpl : public VectorBase {
 
     SpanBase
     get_span_base(const ChunkSnapshot& snap, int64_t chunk_id) const override {
-        if constexpr (std::is_same_v<Type, VectorArray>) {
-            ThrowInfo(NotImplemented, "unimplemented");
-        } else if constexpr (is_type_entire_row) {
+        if constexpr (is_type_entire_row) {
             return chunks_ptr_->get_span(snap, chunk_id);
         } else if constexpr (std::is_same_v<Type, int64_t> ||  // NOLINT
                              std::is_same_v<Type, int>) {
@@ -587,9 +585,7 @@ class ConcurrentVectorImpl : public VectorBase {
 
     int64_t
     get_element_size() const override {
-        if constexpr (std::is_same_v<Type, VectorArray>) {
-            ThrowInfo(NotImplemented, "unimplemented");
-        } else if constexpr (is_type_entire_row) {
+        if constexpr (is_type_entire_row) {
             return chunks_ptr_->get_element_size();
         } else if constexpr (std::is_same_v<Type, int64_t> ||  // NOLINT
                              std::is_same_v<Type, int>) {
@@ -763,6 +759,13 @@ class ConcurrentVectorImpl : public VectorBase {
             return valid_data_ptr_->get_data();
         }
         return FixedVector<bool>{};
+    }
+
+    // Retain validity independently of the column when capturing a bounded
+    // scalar read handle. Published rows must not be rewritten by the caller.
+    std::shared_ptr<const ThreadSafeValidData>
+    validity_owner() const {
+        return valid_data_ptr_;
     }
 
     void

@@ -15,9 +15,9 @@
 // limitations under the License.
 
 #include "ElementFilterIterator.h"
-
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "bitset/bitset.h"
@@ -27,19 +27,22 @@
 #include "common/Vector.h"
 #include "exec/expression/EvalCtx.h"
 #include "exec/expression/Expr.h"
+#include "exec/operator/CandidateFilter.h"
 
 namespace milvus {
 
 ElementFilterIterator::ElementFilterIterator(
     std::shared_ptr<VectorIterator> base_iterator,
     exec::ExecContext* exec_context,
-    exec::ExprSet* expr_set)
+    exec::ExprSet* expr_set,
+    std::shared_ptr<exec::CandidateFilter> scalar_filter)
     : base_iterator_(std::move(base_iterator)),
       exec_context_(exec_context),
       expr_set_(expr_set) {
     AssertInfo(base_iterator_ != nullptr, "Base iterator cannot be null");
     AssertInfo(exec_context_ != nullptr, "Exec context cannot be null");
-    AssertInfo(expr_set_ != nullptr, "ExprSet cannot be null");
+    scalar_filter_ = std::move(scalar_filter);
+    AssertInfo(expr_set_ || scalar_filter_, "element predicate cannot be null");
 }
 
 bool
@@ -76,6 +79,9 @@ ElementFilterIterator::FetchAndFilterBatch() {
            element_ids_buffer_.size() < kBatchSize) {
         auto pair = base_iterator_->Next();
         if (pair.has_value()) {
+            AssertInfo(pair->first >= 0 &&
+                           pair->first <= std::numeric_limits<int32_t>::max(),
+                       "element candidate ID exceeds int32 domain");
             element_ids_buffer_.push_back(static_cast<int32_t>(pair->first));
             distances_buffer_.push_back(pair->second);
         }
@@ -87,6 +93,14 @@ ElementFilterIterator::FetchAndFilterBatch() {
     }
 
     // Step 2: Batch evaluate element-level expression
+    if (scalar_filter_) {
+        auto matches = scalar_filter_->Eval(element_ids_buffer_);
+        for (size_t i = 0; i < element_ids_buffer_.size(); ++i)
+            if (matches[i])
+                filtered_buffer_.emplace_back(element_ids_buffer_[i],
+                                              distances_buffer_[i]);
+        return;
+    }
     exec::EvalCtx eval_ctx(exec_context_, &element_ids_buffer_);
     std::vector<VectorPtr> results;
 

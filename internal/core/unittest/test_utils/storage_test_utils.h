@@ -243,7 +243,8 @@ CreateSealedWithFieldDataLoaded(milvus::SchemaPtr schema,
 inline std::unique_ptr<milvus::segcore::SegmentSealed>
 CreateTwoChunkSealed(const milvus::SchemaPtr& schema,
                      const GeneratedData& first,
-                     const GeneratedData& second) {
+                     const GeneratedData& second,
+                     bool sorted_by_pk = false) {
     std::unordered_map<int64_t, std::vector<FieldDataPtr>> field_chunks;
 
     auto append_dataset = [&](const GeneratedData& dataset) {
@@ -284,8 +285,12 @@ CreateTwoChunkSealed(const milvus::SchemaPtr& schema,
         combined_load_info.field_infos.merge(field_load_info.field_infos);
     }
 
-    auto segment =
-        milvus::segcore::CreateSealedSegment(schema, milvus::empty_index_meta);
+    auto segment = milvus::segcore::CreateSealedSegment(
+        schema,
+        milvus::empty_index_meta,
+        0,
+        milvus::segcore::SegcoreConfig::default_config(),
+        sorted_by_pk);
     const auto status = LoadFieldData(segment.get(), &combined_load_info);
     AssertInfo(status.error_code == milvus::ErrorCode::Success,
                "Failed to load two-chunk sealed data: {}",

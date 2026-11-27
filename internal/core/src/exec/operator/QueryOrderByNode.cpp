@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "common/EasyAssert.h"
+#include "common/VectorAccess.h"
 #include "log/Log.h"
 
 namespace milvus {
@@ -108,14 +109,11 @@ PhyQueryOrderByNode::AddInput(RowVectorPtr& input) {
 
     for (size_t i = 0; i < children.size(); ++i) {
         auto col_vec = std::dynamic_pointer_cast<ColumnVector>(children[i]);
-        if (col_vec) {
+        if (col_vec && !col_vec->IsBitmap()) {
             columns.push_back(std::move(col_vec));
         } else {
-            // Handle case where child is not a ColumnVector
-            // This shouldn't happen in normal operation
-            ThrowInfo(Unsupported,
-                      "QueryOrderByNode input child {} is not a ColumnVector",
-                      i);
+            columns.push_back(MaterializeScalarColumn(
+                ReadOnlyVectorView::CopyOf(children[i])));
         }
     }
 
@@ -165,7 +163,9 @@ PhyQueryOrderByNode::GetOutput() {
     }
 
     // Wrap columns in RowVector
-    auto row_vector = std::make_shared<RowVector>(std::move(output_columns));
+    const auto row_count = output_columns.front()->size();
+    auto row_vector = std::make_shared<RowVector>(
+        OutputType(), row_count, std::move(output_columns));
 
     LOG_DEBUG("QueryOrderByNode: GetOutput returned {} rows, total output={}",
               row_vector->size(),

@@ -16,6 +16,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -340,7 +341,8 @@ class StringChunk : public Chunk {
                       row_nums_);
         }
 
-        return {data_ + offsets_[i], offsets_[i + 1] - offsets_[i]};
+        const auto begin = OffsetAt(i);
+        return {data_ + begin, OffsetAt(i + 1) - begin};
     }
 
     std::pair<std::vector<std::string_view>, ValidityView>
@@ -420,6 +422,14 @@ class StringChunk : public Chunk {
     }
 
  protected:
+    uint32_t
+    OffsetAt(int64_t index) const {
+        // Nullable string offsets follow a packed bitmap and may be unaligned.
+        uint32_t offset;
+        std::memcpy(&offset, offsets_ + index, sizeof(offset));
+        return offset;
+    }
+
     uint32_t* offsets_;
 };
 

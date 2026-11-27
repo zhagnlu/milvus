@@ -1621,6 +1621,9 @@ MakeSealedIndexRegistration(const LoadIndexInfo& info) {
         // Full JSON uses the json_flat reader, including its NGRAM spelling.
         is_ngram =
             is_ngram && cast_type.data_type() != JsonCastType::DataType::JSON;
+        const auto function = info.index_params.find(JSON_CAST_FUNCTION);
+        registration.has_json_cast_function =
+            function != info.index_params.end() && !function->second.empty();
         registration.json_path = path->second;
         registration.json_cast_type = index::RuntimeJsonCastType(
             is_ngram ? index::NGRAM_INDEX_TYPE : "", cast_type);
@@ -1643,6 +1646,7 @@ MakeSealedIndexCapability(const LoadIndexInfo& info) {
     meta.family = info.index_family;
     meta.value_type = info.index_value_type;
     meta.caps = info.index_caps;
+    meta.has_json_cast_function = registration.has_json_cast_function;
     return meta;
 }
 

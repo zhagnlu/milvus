@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <bit>
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -151,11 +153,35 @@ struct ArithCompareOperator {
             const ArithHighPrecisionType<T>& right,
             const ArithHighPrecisionType<T>& value) {
         if constexpr (AOp == ArithOpType::Add) {
-            return CompareOperator<CmpOp>::compare(left + right, value);
+            if constexpr (std::is_integral_v<T>) {
+                // SIMD arithmetic wraps at 64 bits; scalar tails must do the
+                // same without invoking signed-overflow undefined behavior.
+                const auto result = std::bit_cast<int64_t>(
+                    static_cast<uint64_t>(left) + static_cast<uint64_t>(right));
+                return CompareOperator<CmpOp>::compare(result, value);
+            } else {
+                return CompareOperator<CmpOp>::compare(left + right, value);
+            }
         } else if constexpr (AOp == ArithOpType::Sub) {
-            return CompareOperator<CmpOp>::compare(left - right, value);
+            if constexpr (std::is_integral_v<T>) {
+                // SIMD arithmetic wraps at 64 bits; scalar tails must do the
+                // same without invoking signed-overflow undefined behavior.
+                const auto result = std::bit_cast<int64_t>(
+                    static_cast<uint64_t>(left) - static_cast<uint64_t>(right));
+                return CompareOperator<CmpOp>::compare(result, value);
+            } else {
+                return CompareOperator<CmpOp>::compare(left - right, value);
+            }
         } else if constexpr (AOp == ArithOpType::Mul) {
-            return CompareOperator<CmpOp>::compare(left * right, value);
+            if constexpr (std::is_integral_v<T>) {
+                // SIMD arithmetic wraps at 64 bits; scalar tails must do the
+                // same without invoking signed-overflow undefined behavior.
+                const auto result = std::bit_cast<int64_t>(
+                    static_cast<uint64_t>(left) * static_cast<uint64_t>(right));
+                return CompareOperator<CmpOp>::compare(result, value);
+            } else {
+                return CompareOperator<CmpOp>::compare(left * right, value);
+            }
         } else if constexpr (AOp == ArithOpType::Div) {
             return CompareOperator<CmpOp>::compare(left / right, value);
         } else if constexpr (AOp == ArithOpType::Mod) {

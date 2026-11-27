@@ -29,11 +29,14 @@
 
 namespace milvus {
 
+namespace exec { class CandidateFilter; }
+
 class ElementFilterIterator : public VectorIterator {
  public:
     ElementFilterIterator(std::shared_ptr<VectorIterator> base_iterator,
                           exec::ExecContext* exec_context,
-                          exec::ExprSet* expr_set);
+                          exec::ExprSet* expr_set,
+                          std::shared_ptr<exec::CandidateFilter> scalar_filter = {});
 
     bool
     HasNext() override;
@@ -59,6 +62,7 @@ class ElementFilterIterator : public VectorIterator {
 
     // Expression set containing element-level filter expression
     exec::ExprSet* expr_set_;
+    std::shared_ptr<exec::CandidateFilter> scalar_filter_;
 
     // Cache of filtered elements ready to be consumed
     std::deque<std::pair<int64_t, float>> filtered_buffer_;

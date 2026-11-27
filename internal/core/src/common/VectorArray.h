@@ -40,6 +40,7 @@ namespace milvus {
 // ConcurrentVector<VectorArray> and VariableLengthChunk<VectorArray> use the
 // type only as a tag and store VectorArrayViews.
 class VectorArray : public milvus::VectorTrait {
+    friend class VectorArrayView;
  public:
     VectorArray() = default;
 
@@ -321,14 +322,15 @@ class VectorArray : public milvus::VectorTrait {
         return vector_field;
     }
 
-    int
-    physical_length() const {
-        return physical_length_;
-    }
-
+    // Logical count includes NULL elements in the compact payload.
     int
     length() const {
         return length_;
+    }
+
+    int
+    physical_length() const {
+        return physical_length_;
     }
 
     bool
@@ -426,6 +428,16 @@ class VectorArrayView {
 
     VectorArrayView(const VectorArrayView& other) = default;
 
+    explicit VectorArrayView(const VectorArray& value)
+        : VectorArrayView(const_cast<char*>(value.data_.get()),
+                          value.dim_,
+                          value.length_,
+                          value.size_,
+                          value.element_type_,
+                          value.element_valid_data_.view(),
+                          value.element_nullable_) {
+    }
+
     VectorArrayView(
         char* data, int64_t dim, int len, size_t size, DataType element_type)
         : VectorArrayView(
@@ -471,6 +483,16 @@ class VectorArrayView {
                    bytes_per_vector);
         AssertInfo(data_ != nullptr || size_ == 0,
                    "non-empty vector array payload cannot be null");
+    }
+
+    VectorArray
+    ToOwned() const {
+        return VectorArray(data_,
+                           length_,
+                           dim_,
+                           element_type_,
+                           element_valid_data_,
+                           element_nullable_);
     }
 
     VectorFieldProto

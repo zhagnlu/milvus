@@ -673,6 +673,7 @@ TEST(IndexInventoryTest, LifecycleOperationsDoNotWaitForLazyFactory) {
 
 TEST(IndexInventoryTest, EagerAndLazyProjectionMetadataMatchesAcrossClones) {
     auto entry = TestEntry();
+    entry.has_json_cast_function = true;
     entry.json_path = "/doc/value";
     entry.json_cast_type = JsonCastType::FromString("DOUBLE");
     IndexInventory eager;
@@ -698,12 +699,14 @@ TEST(IndexInventoryTest, EagerAndLazyProjectionMetadataMatchesAcrossClones) {
     ASSERT_EQ(lazy_caps.entries().size(), 1);
     ASSERT_EQ(clone_caps.entries().size(), 1);
     const auto& expected = eager_caps.entries().front();
+    EXPECT_TRUE(expected.has_json_cast_function);
     for (const auto* actual :
          {&lazy_caps.entries().front(), &clone_caps.entries().front()}) {
         EXPECT_EQ(actual->key, expected.key);
         EXPECT_EQ(actual->json_path, expected.json_path);
         EXPECT_EQ(actual->json_cast_type.ToString(),
                   expected.json_cast_type.ToString());
+        EXPECT_TRUE(actual->has_json_cast_function);
         EXPECT_EQ(actual->family, expected.family);
         EXPECT_EQ(actual->value_type, expected.value_type);
         EXPECT_TRUE(SameCaps(actual->caps, expected.caps));

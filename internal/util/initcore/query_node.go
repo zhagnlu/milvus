@@ -142,6 +142,10 @@ func doInitQueryNodeOnce(ctx context.Context) error {
 	cExprBatchSize := C.int64_t(paramtable.Get().QueryNodeCfg.ExprEvalBatchSize.GetAsInt64())
 	C.SetDefaultExprEvalBatchSize(cExprBatchSize)
 
+	enableExprExecutionV2 := paramtable.Get().QueryNodeCfg.EnableExprExecutionV2.GetAsBool()
+	C.SetDefaultExprExecutionV2Enabled(C.bool(enableExprExecutionV2))
+	mlog.Info(ctx, "configured expression execution framework", mlog.Bool("enableExprExecutionV2", enableExprExecutionV2))
+
 	cDeleteDumpBatchSize := C.int64_t(paramtable.Get().QueryNodeCfg.DeleteDumpBatchSize.GetAsInt64())
 	C.SetDefaultDeleteDumpBatchSize(cDeleteDumpBatchSize)
 

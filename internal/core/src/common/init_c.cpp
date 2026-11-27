@@ -89,6 +89,11 @@ SetDefaultExprEvalBatchSize(int64_t val) {
 }
 
 void
+SetDefaultExprExecutionV2Enabled(bool enabled) {
+    milvus::EXPR_EXECUTION_V2_ENABLED.store(enabled);
+}
+
+void
 SetDefaultDeleteDumpBatchSize(int64_t val) {
     milvus::SetDefaultDeleteDumpBatchSize(val);
 }

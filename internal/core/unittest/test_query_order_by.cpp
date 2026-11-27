@@ -16,6 +16,8 @@
 #include "test_utils/DataGen.h"
 #include "segcore/SegmentSealed.h"
 #include "plan/PlanNode.h"
+#include "plan/ScalarProjectNode.h"
+#include "common/VectorAccess.h"
 #include "plan/PlanNodeIdGenerator.h"
 #include "test_utils/storage_test_utils.h"
 #include "exec/expression/function/FunctionFactory.h"
@@ -876,4 +878,125 @@ TEST_P(QueryOrderByTest, OrderByMultiKey) {
         EXPECT_TRUE(secondary_sort_tested)
             << "No duplicate int8 values found — secondary sort was not tested";
     }
+}
+
+TEST_P(QueryOrderByTest,
+       ScalarProjectDriverPreservesBoolAndCollectsSortedBatches) {
+    num_rows_ = 2050;
+    raw_data_ = DataGen(schema_, num_rows_, 42, 0, 1, 10, false, false, false);
+    auto sealed = CreateSealedWithFieldDataLoaded(schema_, raw_data_);
+    segment_ = SegmentSealedSPtr(sealed.release());
+    const auto field = field_map_[int64_field];
+    auto baseline = runProjectOnlyPlan({field}, {"value"}, {DataType::INT64});
+    const auto reference = ReadOnlyVectorView::CopyOf(baseline->child(0));
+    proto::plan::GenericValue one, zero;
+    one.set_int64_val(1);
+    zero.set_int64_val(0);
+    auto predicate = std::make_shared<expr::UnaryRangeFilterExpr>(
+        expr::ColumnInfo(field, DataType::INT64),
+        proto::plan::GreaterThan,
+        zero);
+    auto increment = std::make_shared<expr::BinaryArithExpr>(
+        proto::plan::Add,
+        std::make_shared<expr::ColumnExpr>(
+            expr::ColumnInfo(field, DataType::INT64)),
+        std::make_shared<expr::ValueExpr>(one));
+    auto mvcc = std::make_shared<MvccNode>(GetNextPlanNodeId());
+    auto fetch =
+        std::make_shared<ProjectNode>(GetNextPlanNodeId(),
+                                      std::vector<FieldId>{field},
+                                      std::vector<std::string>{"value"},
+                                      std::vector<DataType>{DataType::INT64},
+                                      std::vector<PlanNodePtr>{mvcc});
+    auto projection = std::make_shared<ScalarProjectNode>(
+        GetNextPlanNodeId(),
+        std::vector<expr::TypedExprPtr>{predicate, increment},
+        std::vector<std::string>{"positive", "adjusted"},
+        std::map<int64_t, column_index_t>{{field.get(), 0}},
+        fetch);
+    auto execute = [&](PlanNodePtr root) {
+        auto context = std::make_shared<milvus::exec::QueryContext>(
+            "scalar-project-driver",
+            segment_.get(),
+            num_rows_,
+            MAX_TIMESTAMP,
+            0,
+            0,
+            query::PlanOptions{false},
+            std::make_shared<milvus::exec::QueryConfig>(
+                std::unordered_map<std::string, std::string>{
+                    {milvus::exec::QueryConfig::kExprEvalBatchSize, "127"}}));
+        OpContext op_context;
+        context->set_op_context(&op_context);
+        context->set_read_snapshot(segment_->CaptureReadSnapshot());
+        auto fragment = PlanFragment(root);
+        return query::ExecPlanNodeVisitor::ExecuteTask(fragment, context);
+    };
+    auto scan = std::make_shared<ScalarProjectScanNode>(
+        GetNextPlanNodeId(),
+        std::vector<expr::TypedExprPtr>{predicate, increment},
+        std::vector<std::string>{"positive", "adjusted"},
+        mvcc);
+    auto projected = execute(scan);
+    auto upstream_projected = execute(projection);
+    ASSERT_EQ(upstream_projected->size(), projected->size());
+    ASSERT_EQ(projected->size(), reference.size());
+    ASSERT_EQ(projected->row_type()->column_type(0), DataType::BOOL);
+    EXPECT_FALSE(std::dynamic_pointer_cast<ColumnVector>(projected->child(0))
+                     ->IsBitmap());
+    const auto bools = ReadOnlyVectorView::CopyOf(projected->child(0));
+    const auto numbers = ReadOnlyVectorView::CopyOf(projected->child(1));
+    std::vector<int64_t> expected;
+    for (size_t i = 0; i < reference.size(); ++i) {
+        EXPECT_EQ(numbers.IsValid(i), reference.IsValid(i));
+        EXPECT_EQ(bools.IsValid(i), reference.IsValid(i));
+        if (reference.IsValid(i)) {
+            const auto value = reference.ValueAt<int64_t>(i);
+            EXPECT_EQ(numbers.ValueAt<int64_t>(i), value + 1);
+            EXPECT_EQ(bools.ValueAt<bool>(i), value > 0);
+            expected.push_back(value + 1);
+        }
+    }
+    std::sort(expected.begin(), expected.end(), std::greater<int64_t>());
+    auto order = std::make_shared<OrderByNode>(
+        GetNextPlanNodeId(),
+        std::vector<expr::FieldAccessTypeExprPtr>{
+            std::make_shared<expr::FieldAccessTypeExpr>(
+                DataType::INT64, "adjusted", field)},
+        std::vector<SortOrder>{{false, false}},
+        1025,
+        std::vector<PlanNodePtr>{scan});
+    auto sorted = execute(order);
+    ASSERT_EQ(sorted->size(),
+              1025);  // spans the sort operator's 1024-row output boundary
+    ASSERT_EQ(sorted->child(0)->size(), sorted->size());
+    ASSERT_EQ(sorted->child(1)->size(), sorted->size());
+    const auto sorted_numbers = ReadOnlyVectorView::CopyOf(sorted->child(1));
+    for (size_t i = 0; i < sorted->size(); ++i) {
+        if (i < expected.size()) {
+            ASSERT_TRUE(sorted_numbers.IsValid(i));
+            EXPECT_EQ(sorted_numbers.ValueAt<int64_t>(i), expected[i]);
+        } else {
+            EXPECT_FALSE(sorted_numbers.IsValid(i));
+        }
+    }
+    auto divide_by_zero = std::make_shared<expr::BinaryArithExpr>(
+        proto::plan::Div,
+        std::make_shared<expr::ColumnExpr>(
+            expr::ColumnInfo(field, DataType::INT64)),
+        std::make_shared<expr::ValueExpr>(zero));
+    auto failing = std::make_shared<ScalarProjectNode>(
+        GetNextPlanNodeId(),
+        std::vector<expr::TypedExprPtr>{predicate, divide_by_zero},
+        std::vector<std::string>{"positive", "invalid"},
+        std::map<int64_t, column_index_t>{{field.get(), 0}},
+        fetch);
+    RowVectorPtr partial;
+    try {
+        partial = execute(failing);
+        FAIL() << "expected selected-row division failure";
+    } catch (const SegcoreError& error) {
+        EXPECT_EQ(error.get_error_code(), ErrorCode::ExprInvalid);
+    }
+    EXPECT_EQ(partial, nullptr);
 }

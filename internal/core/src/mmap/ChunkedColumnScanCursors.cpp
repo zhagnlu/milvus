@@ -253,6 +253,9 @@ class RawScanCursor final : public ChunkedColumnInterface::ScanCursor {
         out->row_id_start = 0;
         out->size = 0;
         out->data_skipped = false;
+        out->integer_null_payload_readable = false;
+        out->floating_null_payload_readable = false;
+        out->string_null_payload_readable = false;
     }
 
     void
@@ -367,6 +370,19 @@ class RawScanCursor final : public ChunkedColumnInterface::ScanCursor {
         out->values.byte_width = span.element_sizeof();
         out->validity = span.validity().Subview(current_chunk_offset_);
         out->owner = BatchPin(input);
+        // FixedWidthChunk stores every integer slot in the mapped byte buffer;
+        // NULL affects only the independent bitmap, not slot addressability.
+        const auto rows = static_cast<uint64_t>(span.row_count());
+        const auto null_bytes = span.validity() ? (rows + 7) / 8 : 0;
+        const auto width = static_cast<uint64_t>(span.element_sizeof());
+        const bool full_storage = width != 0 && chunk->Size() >= null_bytes &&
+                                  rows <= (chunk->Size() - null_bytes) / width;
+        out->integer_null_payload_readable = full_storage &&
+            (target_type_ == TargetType::Int8 || target_type_ == TargetType::Int16 ||
+             target_type_ == TargetType::Int32 || target_type_ == TargetType::Int64);
+        out->floating_null_payload_readable =
+            full_storage && (target_type_ == TargetType::Float ||
+                             target_type_ == TargetType::Double);
     }
 
     void
@@ -388,6 +404,9 @@ class RawScanCursor final : public ChunkedColumnInterface::ScanCursor {
                 out->values.byte_width = sizeof(std::string_view);
                 FillViewValidity(owner->views.second, out);
                 out->owner = std::move(owner);
+                // StringViews constructs all view objects from pinned chunk
+                // offsets, independently of SQL validity (including NULLs).
+                out->string_null_payload_readable = true;
                 return;
             }
             case ChunkedColumnInterface::TargetType::Json: {

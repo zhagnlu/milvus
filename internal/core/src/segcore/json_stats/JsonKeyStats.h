@@ -213,7 +213,8 @@ class JsonKeyStats {
         PinWrapper<BsonInvertedIndex*>& bson_index_cache,
         const std::string& path,
         std::function<void(BsonView bson, uint32_t row_id, uint32_t offset)>
-            func) {
+            func,
+        const std::function<bool(uint32_t)>& selected = {}) {
         if (bson_index_cache.get() == nullptr) {
             bson_index_cache = GetBsonIndex(op_ctx);
         }
@@ -222,11 +223,23 @@ class JsonKeyStats {
         }
         bson_index_cache.get()->TermQuery(
             path,
-            [this, &func, op_ctx](const uint32_t* row_id_array,
-                                  const uint32_t* offset_array,
-                                  const int64_t array_len) {
-                shared_column_->BulkRawBsonAt(
-                    op_ctx, func, row_id_array, offset_array, array_len);
+            [this, &func, &selected, op_ctx](const uint32_t* row_id_array,
+                                             const uint32_t* offset_array,
+                                             const int64_t array_len) {
+                if (!selected) {
+                    shared_column_->BulkRawBsonAt(
+                        op_ctx, func, row_id_array, offset_array, array_len);
+                    return;
+                }
+                std::vector<uint32_t> rows, offsets;
+                for (int64_t i = 0; i < array_len; ++i)
+                    if (selected(row_id_array[i])) {
+                        rows.push_back(row_id_array[i]);
+                        offsets.push_back(offset_array[i]);
+                    }
+                if (!rows.empty())
+                    shared_column_->BulkRawBsonAt(
+                        op_ctx, func, rows.data(), offsets.data(), rows.size());
             });
     }
 
@@ -395,6 +408,13 @@ class JsonKeyStats {
     }
 
  public:
+    // Retain this immutable stats generation while performing finite Take.
+    std::shared_ptr<const ChunkedColumnInterface>
+    GetShreddingColumn(const std::string& field) const {
+        auto it = shredding_columns_.find(field);
+        return it == shredding_columns_.end() ? nullptr : it->second;
+    }
+
     std::set<std::string>
     GetShreddingFields(const std::string& pointer) {
         std::set<std::string> fields;
