@@ -264,6 +264,8 @@ message RetrieveRequest {
   // When 2, delegator can skip plan unmarshal for segment filter optimization.
   int32 pk_filter = 26;
   int32 schema_version = 27;
+  // Query-local scalar layout used by aggregate reducers, never segment reads.
+  plan.SQLProject sql_project = 28;
 }
 
 // Element indices for element-level query results

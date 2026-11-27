@@ -26,6 +26,8 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/metacache"
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/proxy/taskmodel"
+	"github.com/milvus-io/milvus/internal/sqlparser"
+	"github.com/milvus-io/milvus/internal/sqlquery"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/exprutil"
 	"github.com/milvus-io/milvus/internal/util/queryutil"
@@ -91,6 +93,8 @@ type QueryTask struct {
 	resultBuf *typeutil.ConcurrentSet[*internalpb.RetrieveResults]
 
 	plan             *planpb.PlanNode
+	sqlBound         *sqlparser.BoundQuery
+	sqlAggregate     *sqlparser.AggregatePlan
 	partitionKeyMode bool
 	shardclientMgr   shardclient.ShardClientMgr
 	lb               shardclient.LBPolicy
@@ -674,6 +678,9 @@ func (t *QueryTask) createPlan(ctx context.Context) error {
 }
 
 func (t *QueryTask) createPlanArgs(ctx context.Context, visitorArgs *planparserv2.ParserVisitorArgs) error {
+	if prepared, err := t.prepareSQL(visitorArgs); err != nil || prepared {
+		return err
+	}
 	schema := t.schema
 	var err error
 	if t.plan == nil {
@@ -956,7 +963,7 @@ func (t *QueryTask) PreExecute(ctx context.Context) error {
 	// Both are safe without a limit, so exempt them from the limit requirement.
 	hasAgg := len(t.userAggregates) > 0
 
-	if userPlanAlwaysTrue && t.Limit == typeutil.Unlimited && !hasAgg {
+	if userPlanAlwaysTrue && t.Limit == typeutil.Unlimited && !hasAgg && t.sqlBound == nil {
 		return merr.WrapErrParameterInvalidMsg("empty expression should be used with limit")
 	}
 
@@ -1099,6 +1106,9 @@ func (t *QueryTask) Execute(ctx context.Context) error {
 
 	t.resultBuf = typeutil.NewConcurrentSet[*internalpb.RetrieveResults]()
 	t.executeStart = time.Now()
+	if t.sqlBound != nil && t.sqlBound.Components.Limit == 0 {
+		return nil
+	}
 	path, err := executePathQuery, error(nil)
 	// Materialize currently routes through the legacy delegator. QueryView
 	// requests must retain their View-bound execution and requery snapshots.
@@ -1288,6 +1298,13 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 
 	metrics.ProxyDecodeResultLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), t.getQueryLabel()).Observe(0.0)
 	tr.CtxRecord(ctx, "reduceResultStart")
+	if t.sqlBound != nil && t.sqlBound.Components.Limit == 0 {
+		t.result = &milvuspb.QueryResults{Status: merr.Success(), CollectionName: t.collectionName}
+		for _, output := range t.sqlBound.Outputs {
+			t.result.OutputFields = append(t.result.OutputFields, output.Name)
+		}
+		return nil
+	}
 
 	// Use the same complete group ordering as segcore, QN, and Delegator.
 	var orderByFields []*orderby.OrderByField
@@ -1305,26 +1322,30 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 		return err
 	}
 
-	// A Materialize request left one result, already deduplicated and in its
-	// final order (finishMaterialize); the plain pipeline's pk reduce passes a
-	// single result through untouched, so only complement_fields and the
-	// steps below act on it -- no cross-shard reduce runs.
-	pipeline, err := NewQueryPipeline(
-		t.schema.CollectionSchema,
-		t.queryParams.limit,
-		t.queryParams.offset,
-		t.queryParams.reduceType,
-		orderByFields,
-		t.GetGroupByFieldIds(),
-		t.GetAggregates(),
-		t.aggregationFieldMap,
-		filterSystemFields(t.GetOutputFieldsId()),
-	)
-	if err != nil {
-		log.Warn(ctx, "fail to create query pipeline", mlog.Err(err))
-		return err
+	if t.sqlAggregate != nil {
+		t.result, err = sqlquery.ReduceAggregate(ctx, t.sqlAggregate, t.schema.CollectionSchema, toReduceResults, paramtable.Get().QuotaConfig.MaxOutputSize.GetAsInt64())
+	} else {
+		var pipeline *QueryPipeline
+		pipeline, err = NewQueryPipeline(
+			t.schema.CollectionSchema,
+			t.queryParams.limit,
+			t.queryParams.offset,
+			t.queryParams.reduceType,
+			orderByFields,
+			t.GetGroupByFieldIds(),
+			t.GetAggregates(),
+			t.aggregationFieldMap,
+			filterSystemFields(t.GetOutputFieldsId()),
+		)
+		if err != nil {
+			log.Warn(ctx, "fail to create query pipeline", mlog.Err(err))
+			return err
+		}
+		t.result, err = pipeline.Execute(ctx, toReduceResults)
+		if err == nil && t.sqlBound != nil {
+			t.result, err = sqlquery.Project(ctx, t.sqlBound, t.result, t.resolvedTimezoneStr, paramtable.Get().QuotaConfig.MaxOutputSize.GetAsInt64())
+		}
 	}
-	t.result, err = pipeline.Execute(ctx, toReduceResults)
 	if err != nil {
 		log.Warn(ctx, "fail to reduce query result", mlog.Err(err))
 		return err
@@ -1341,8 +1362,10 @@ func (t *QueryTask) PostExecute(ctx context.Context) error {
 			}
 		}
 	}
-	t.result.OutputFields = t.userOutputFields
-	if !t.reQuery {
+	if t.sqlBound == nil {
+		t.result.OutputFields = t.userOutputFields
+	}
+	if !t.reQuery && t.sqlBound == nil {
 		reconstructStructFieldDataForQuery(t.result, t.schema.CollectionSchema)
 	}
 

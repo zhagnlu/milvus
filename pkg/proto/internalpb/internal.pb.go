@@ -2253,6 +2253,8 @@ type RetrieveRequest struct {
 	// When 2, delegator can skip plan unmarshal for segment filter optimization.
 	PkFilter      int32 `protobuf:"varint,26,opt,name=pk_filter,json=pkFilter,proto3" json:"pk_filter,omitempty"`
 	SchemaVersion int32 `protobuf:"varint,27,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// Query-local scalar layout used by aggregate reducers, never segment reads.
+	SqlProject *planpb.SQLProject `protobuf:"bytes,28,opt,name=sql_project,json=sqlProject,proto3" json:"sql_project,omitempty"`
 }
 
 func (x *RetrieveRequest) Reset() {
@@ -2474,6 +2476,13 @@ func (x *RetrieveRequest) GetSchemaVersion() int32 {
 		return x.SchemaVersion
 	}
 	return 0
+}
+
+func (x *RetrieveRequest) GetSqlProject() *planpb.SQLProject {
+	if x != nil {
+		return x.SqlProject
+	}
+	return nil
 }
 
 // Element indices for element-level query results
@@ -6388,7 +6397,7 @@ var file_internal_proto_rawDesc = []byte{
 	0x52, 0x07, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x4e, 0x51, 0x12, 0x32, 0x0a, 0x14, 0x74, 0x6f, 0x74,
 	0x61, 0x6c, 0x52, 0x65, 0x6c, 0x61, 0x74, 0x65, 0x64, 0x44, 0x61, 0x74, 0x61, 0x53, 0x69, 0x7a,
 	0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x14, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x52, 0x65,
-	0x6c, 0x61, 0x74, 0x65, 0x64, 0x44, 0x61, 0x74, 0x61, 0x53, 0x69, 0x7a, 0x65, 0x22, 0xa5, 0x09,
+	0x6c, 0x61, 0x74, 0x65, 0x64, 0x44, 0x61, 0x74, 0x61, 0x53, 0x69, 0x7a, 0x65, 0x22, 0xe5, 0x09,
 	0x0a, 0x0f, 0x52, 0x65, 0x74, 0x72, 0x69, 0x65, 0x76, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
 	0x74, 0x12, 0x30, 0x0a, 0x04, 0x62, 0x61, 0x73, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
 	0x1c, 0x2e, 0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x63,
@@ -6463,7 +6472,11 @@ var file_internal_proto_rawDesc = []byte{
 	0x20, 0x01, 0x28, 0x05, 0x52, 0x08, 0x70, 0x6b, 0x46, 0x69, 0x6c, 0x74, 0x65, 0x72, 0x12, 0x25,
 	0x0a, 0x0e, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e,
 	0x18, 0x1b, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0d, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x56, 0x65,
-	0x72, 0x73, 0x69, 0x6f, 0x6e, 0x22, 0x2a, 0x0a, 0x0e, 0x45, 0x6c, 0x65, 0x6d, 0x65, 0x6e, 0x74,
+	0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x3e, 0x0a, 0x0b, 0x73, 0x71, 0x6c, 0x5f, 0x70, 0x72, 0x6f,
+	0x6a, 0x65, 0x63, 0x74, 0x18, 0x1c, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1d, 0x2e, 0x6d, 0x69, 0x6c,
+	0x76, 0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x70, 0x6c, 0x61, 0x6e, 0x2e, 0x53,
+	0x51, 0x4c, 0x50, 0x72, 0x6f, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x0a, 0x73, 0x71, 0x6c, 0x50, 0x72,
+	0x6f, 0x6a, 0x65, 0x63, 0x74, 0x22, 0x2a, 0x0a, 0x0e, 0x45, 0x6c, 0x65, 0x6d, 0x65, 0x6e, 0x74,
 	0x49, 0x6e, 0x64, 0x69, 0x63, 0x65, 0x73, 0x12, 0x18, 0x0a, 0x07, 0x69, 0x6e, 0x64, 0x69, 0x63,
 	0x65, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x05, 0x52, 0x07, 0x69, 0x6e, 0x64, 0x69, 0x63, 0x65,
 	0x73, 0x22, 0xbc, 0x07, 0x0a, 0x0f, 0x52, 0x65, 0x74, 0x72, 0x69, 0x65, 0x76, 0x65, 0x52, 0x65,
@@ -7220,13 +7233,14 @@ var file_internal_proto_goTypes = []interface{}{
 	(*schemapb.SearchResultData)(nil),         // 79: milvus.proto.schema.SearchResultData
 	(*planpb.Aggregate)(nil),                  // 80: milvus.proto.plan.Aggregate
 	(*planpb.OrderByField)(nil),               // 81: milvus.proto.plan.OrderByField
-	(*schemapb.IDs)(nil),                      // 82: milvus.proto.schema.IDs
-	(*schemapb.FieldData)(nil),                // 83: milvus.proto.schema.FieldData
-	(*milvuspb.PrivilegeGroupInfo)(nil),       // 84: milvus.proto.milvus.PrivilegeGroupInfo
-	(*commonpb.IDRange)(nil),                  // 85: milvus.proto.common.IDRange
-	(*schemapb.CollectionSchema)(nil),         // 86: milvus.proto.schema.CollectionSchema
-	(commonpb.SegmentState)(0),                // 87: milvus.proto.common.SegmentState
-	(commonpb.SegmentLevel)(0),                // 88: milvus.proto.common.SegmentLevel
+	(*planpb.SQLProject)(nil),                 // 82: milvus.proto.plan.SQLProject
+	(*schemapb.IDs)(nil),                      // 83: milvus.proto.schema.IDs
+	(*schemapb.FieldData)(nil),                // 84: milvus.proto.schema.FieldData
+	(*milvuspb.PrivilegeGroupInfo)(nil),       // 85: milvus.proto.milvus.PrivilegeGroupInfo
+	(*commonpb.IDRange)(nil),                  // 86: milvus.proto.common.IDRange
+	(*schemapb.CollectionSchema)(nil),         // 87: milvus.proto.schema.CollectionSchema
+	(commonpb.SegmentState)(0),                // 88: milvus.proto.common.SegmentState
+	(commonpb.SegmentLevel)(0),                // 89: milvus.proto.common.SegmentLevel
 }
 var file_internal_proto_depIdxs = []int32{
 	73, // 0: milvus.proto.internal.NodeInfo.address:type_name -> milvus.proto.common.Address
@@ -7263,69 +7277,70 @@ var file_internal_proto_depIdxs = []int32{
 	78, // 31: milvus.proto.internal.RetrieveRequest.consistency_level:type_name -> milvus.proto.common.ConsistencyLevel
 	80, // 32: milvus.proto.internal.RetrieveRequest.aggregates:type_name -> milvus.proto.plan.Aggregate
 	81, // 33: milvus.proto.internal.RetrieveRequest.order_by_fields:type_name -> milvus.proto.plan.OrderByField
-	74, // 34: milvus.proto.internal.RetrieveResults.base:type_name -> milvus.proto.common.MsgBase
-	75, // 35: milvus.proto.internal.RetrieveResults.status:type_name -> milvus.proto.common.Status
-	82, // 36: milvus.proto.internal.RetrieveResults.ids:type_name -> milvus.proto.schema.IDs
-	83, // 37: milvus.proto.internal.RetrieveResults.fields_data:type_name -> milvus.proto.schema.FieldData
-	24, // 38: milvus.proto.internal.RetrieveResults.costAggregation:type_name -> milvus.proto.internal.CostAggregation
-	26, // 39: milvus.proto.internal.RetrieveResults.element_indices:type_name -> milvus.proto.internal.ElementIndices
-	83, // 40: milvus.proto.internal.RetrieveResults.computed_results:type_name -> milvus.proto.schema.FieldData
-	29, // 41: milvus.proto.internal.MaterializeResults.header:type_name -> milvus.proto.internal.MaterializeHeader
-	75, // 42: milvus.proto.internal.MaterializeHeader.status:type_name -> milvus.proto.common.Status
-	24, // 43: milvus.proto.internal.MaterializeHeader.cost_aggregation:type_name -> milvus.proto.internal.CostAggregation
-	74, // 44: milvus.proto.internal.LoadIndex.base:type_name -> milvus.proto.common.MsgBase
-	76, // 45: milvus.proto.internal.LoadIndex.index_params:type_name -> milvus.proto.common.KeyValuePair
-	76, // 46: milvus.proto.internal.IndexStats.index_params:type_name -> milvus.proto.common.KeyValuePair
-	31, // 47: milvus.proto.internal.FieldStats.index_stats:type_name -> milvus.proto.internal.IndexStats
-	74, // 48: milvus.proto.internal.ChannelTimeTickMsg.base:type_name -> milvus.proto.common.MsgBase
-	74, // 49: milvus.proto.internal.ListPolicyRequest.base:type_name -> milvus.proto.common.MsgBase
-	75, // 50: milvus.proto.internal.ListPolicyResponse.status:type_name -> milvus.proto.common.Status
-	84, // 51: milvus.proto.internal.ListPolicyResponse.privilege_groups:type_name -> milvus.proto.milvus.PrivilegeGroupInfo
-	68, // 52: milvus.proto.internal.ListPolicyResponse.collection_visibility:type_name -> milvus.proto.internal.CollectionVisibilitySnapshot
-	74, // 53: milvus.proto.internal.ShowConfigurationsRequest.base:type_name -> milvus.proto.common.MsgBase
-	75, // 54: milvus.proto.internal.ShowConfigurationsResponse.status:type_name -> milvus.proto.common.Status
-	76, // 55: milvus.proto.internal.ShowConfigurationsResponse.configuations:type_name -> milvus.proto.common.KeyValuePair
-	2,  // 56: milvus.proto.internal.Rate.rt:type_name -> milvus.proto.internal.RateType
-	71, // 57: milvus.proto.internal.SnapshotImportSource.v2_reference:type_name -> milvus.proto.internal.SnapshotImportV2Reference
-	85, // 58: milvus.proto.internal.ImportFile.id_range:type_name -> milvus.proto.common.IDRange
-	41, // 59: milvus.proto.internal.ImportFile.snapshot_source:type_name -> milvus.proto.internal.SnapshotImportSource
-	86, // 60: milvus.proto.internal.ImportRequestInternal.schema:type_name -> milvus.proto.schema.CollectionSchema
-	43, // 61: milvus.proto.internal.ImportRequestInternal.files:type_name -> milvus.proto.internal.ImportFile
-	76, // 62: milvus.proto.internal.ImportRequestInternal.options:type_name -> milvus.proto.common.KeyValuePair
-	4,  // 63: milvus.proto.internal.ImportRequestInternal.version:type_name -> milvus.proto.internal.ImportVersion
-	43, // 64: milvus.proto.internal.ImportRequest.files:type_name -> milvus.proto.internal.ImportFile
-	76, // 65: milvus.proto.internal.ImportRequest.options:type_name -> milvus.proto.common.KeyValuePair
-	75, // 66: milvus.proto.internal.ImportResponse.status:type_name -> milvus.proto.common.Status
-	75, // 67: milvus.proto.internal.GetImportProgressResponse.status:type_name -> milvus.proto.common.Status
-	3,  // 68: milvus.proto.internal.GetImportProgressResponse.state:type_name -> milvus.proto.internal.ImportJobState
-	48, // 69: milvus.proto.internal.GetImportProgressResponse.task_progresses:type_name -> milvus.proto.internal.ImportTaskProgress
-	75, // 70: milvus.proto.internal.ListImportsResponse.status:type_name -> milvus.proto.common.Status
-	3,  // 71: milvus.proto.internal.ListImportsResponse.states:type_name -> milvus.proto.internal.ImportJobState
-	87, // 72: milvus.proto.internal.SegmentInfo.state:type_name -> milvus.proto.common.SegmentState
-	88, // 73: milvus.proto.internal.SegmentInfo.level:type_name -> milvus.proto.common.SegmentLevel
-	54, // 74: milvus.proto.internal.SegmentInfo.insert_logs:type_name -> milvus.proto.internal.FieldBinlog
-	54, // 75: milvus.proto.internal.SegmentInfo.delta_logs:type_name -> milvus.proto.internal.FieldBinlog
-	54, // 76: milvus.proto.internal.SegmentInfo.stats_logs:type_name -> milvus.proto.internal.FieldBinlog
-	75, // 77: milvus.proto.internal.GetSegmentsInfoResponse.status:type_name -> milvus.proto.common.Status
-	55, // 78: milvus.proto.internal.GetSegmentsInfoResponse.segmentInfos:type_name -> milvus.proto.internal.SegmentInfo
-	74, // 79: milvus.proto.internal.GetQuotaMetricsRequest.base:type_name -> milvus.proto.common.MsgBase
-	75, // 80: milvus.proto.internal.GetQuotaMetricsResponse.status:type_name -> milvus.proto.common.Status
-	74, // 81: milvus.proto.internal.GetFeatureUsageRequest.base:type_name -> milvus.proto.common.MsgBase
-	75, // 82: milvus.proto.internal.GetFeatureUsageResponse.status:type_name -> milvus.proto.common.Status
-	60, // 83: milvus.proto.internal.GetFeatureUsageResponse.entries:type_name -> milvus.proto.internal.FeatureEntry
-	60, // 84: milvus.proto.internal.FeatureUsageNode.entries:type_name -> milvus.proto.internal.FeatureEntry
-	75, // 85: milvus.proto.internal.FeatureUsageReport.status:type_name -> milvus.proto.common.Status
-	62, // 86: milvus.proto.internal.FeatureUsageReport.nodes:type_name -> milvus.proto.internal.FeatureUsageNode
-	64, // 87: milvus.proto.internal.SyncFileResourceRequest.resources:type_name -> milvus.proto.internal.FileResourceInfo
-	74, // 88: milvus.proto.internal.BackupEzkRequest.base:type_name -> milvus.proto.common.MsgBase
-	75, // 89: milvus.proto.internal.BackupEzkResponse.status:type_name -> milvus.proto.common.Status
-	69, // 90: milvus.proto.internal.CollectionVisibilitySnapshot.roles:type_name -> milvus.proto.internal.RoleCollectionVisibility
-	70, // 91: milvus.proto.internal.RoleCollectionVisibility.rules:type_name -> milvus.proto.internal.CollectionVisibilityRule
-	92, // [92:92] is the sub-list for method output_type
-	92, // [92:92] is the sub-list for method input_type
-	92, // [92:92] is the sub-list for extension type_name
-	92, // [92:92] is the sub-list for extension extendee
-	0,  // [0:92] is the sub-list for field type_name
+	82, // 34: milvus.proto.internal.RetrieveRequest.sql_project:type_name -> milvus.proto.plan.SQLProject
+	74, // 35: milvus.proto.internal.RetrieveResults.base:type_name -> milvus.proto.common.MsgBase
+	75, // 36: milvus.proto.internal.RetrieveResults.status:type_name -> milvus.proto.common.Status
+	83, // 37: milvus.proto.internal.RetrieveResults.ids:type_name -> milvus.proto.schema.IDs
+	84, // 38: milvus.proto.internal.RetrieveResults.fields_data:type_name -> milvus.proto.schema.FieldData
+	24, // 39: milvus.proto.internal.RetrieveResults.costAggregation:type_name -> milvus.proto.internal.CostAggregation
+	26, // 40: milvus.proto.internal.RetrieveResults.element_indices:type_name -> milvus.proto.internal.ElementIndices
+	84, // 41: milvus.proto.internal.RetrieveResults.computed_results:type_name -> milvus.proto.schema.FieldData
+	29, // 42: milvus.proto.internal.MaterializeResults.header:type_name -> milvus.proto.internal.MaterializeHeader
+	75, // 43: milvus.proto.internal.MaterializeHeader.status:type_name -> milvus.proto.common.Status
+	24, // 44: milvus.proto.internal.MaterializeHeader.cost_aggregation:type_name -> milvus.proto.internal.CostAggregation
+	74, // 45: milvus.proto.internal.LoadIndex.base:type_name -> milvus.proto.common.MsgBase
+	76, // 46: milvus.proto.internal.LoadIndex.index_params:type_name -> milvus.proto.common.KeyValuePair
+	76, // 47: milvus.proto.internal.IndexStats.index_params:type_name -> milvus.proto.common.KeyValuePair
+	31, // 48: milvus.proto.internal.FieldStats.index_stats:type_name -> milvus.proto.internal.IndexStats
+	74, // 49: milvus.proto.internal.ChannelTimeTickMsg.base:type_name -> milvus.proto.common.MsgBase
+	74, // 50: milvus.proto.internal.ListPolicyRequest.base:type_name -> milvus.proto.common.MsgBase
+	75, // 51: milvus.proto.internal.ListPolicyResponse.status:type_name -> milvus.proto.common.Status
+	85, // 52: milvus.proto.internal.ListPolicyResponse.privilege_groups:type_name -> milvus.proto.milvus.PrivilegeGroupInfo
+	68, // 53: milvus.proto.internal.ListPolicyResponse.collection_visibility:type_name -> milvus.proto.internal.CollectionVisibilitySnapshot
+	74, // 54: milvus.proto.internal.ShowConfigurationsRequest.base:type_name -> milvus.proto.common.MsgBase
+	75, // 55: milvus.proto.internal.ShowConfigurationsResponse.status:type_name -> milvus.proto.common.Status
+	76, // 56: milvus.proto.internal.ShowConfigurationsResponse.configuations:type_name -> milvus.proto.common.KeyValuePair
+	2,  // 57: milvus.proto.internal.Rate.rt:type_name -> milvus.proto.internal.RateType
+	71, // 58: milvus.proto.internal.SnapshotImportSource.v2_reference:type_name -> milvus.proto.internal.SnapshotImportV2Reference
+	86, // 59: milvus.proto.internal.ImportFile.id_range:type_name -> milvus.proto.common.IDRange
+	41, // 60: milvus.proto.internal.ImportFile.snapshot_source:type_name -> milvus.proto.internal.SnapshotImportSource
+	87, // 61: milvus.proto.internal.ImportRequestInternal.schema:type_name -> milvus.proto.schema.CollectionSchema
+	43, // 62: milvus.proto.internal.ImportRequestInternal.files:type_name -> milvus.proto.internal.ImportFile
+	76, // 63: milvus.proto.internal.ImportRequestInternal.options:type_name -> milvus.proto.common.KeyValuePair
+	4,  // 64: milvus.proto.internal.ImportRequestInternal.version:type_name -> milvus.proto.internal.ImportVersion
+	43, // 65: milvus.proto.internal.ImportRequest.files:type_name -> milvus.proto.internal.ImportFile
+	76, // 66: milvus.proto.internal.ImportRequest.options:type_name -> milvus.proto.common.KeyValuePair
+	75, // 67: milvus.proto.internal.ImportResponse.status:type_name -> milvus.proto.common.Status
+	75, // 68: milvus.proto.internal.GetImportProgressResponse.status:type_name -> milvus.proto.common.Status
+	3,  // 69: milvus.proto.internal.GetImportProgressResponse.state:type_name -> milvus.proto.internal.ImportJobState
+	48, // 70: milvus.proto.internal.GetImportProgressResponse.task_progresses:type_name -> milvus.proto.internal.ImportTaskProgress
+	75, // 71: milvus.proto.internal.ListImportsResponse.status:type_name -> milvus.proto.common.Status
+	3,  // 72: milvus.proto.internal.ListImportsResponse.states:type_name -> milvus.proto.internal.ImportJobState
+	88, // 73: milvus.proto.internal.SegmentInfo.state:type_name -> milvus.proto.common.SegmentState
+	89, // 74: milvus.proto.internal.SegmentInfo.level:type_name -> milvus.proto.common.SegmentLevel
+	54, // 75: milvus.proto.internal.SegmentInfo.insert_logs:type_name -> milvus.proto.internal.FieldBinlog
+	54, // 76: milvus.proto.internal.SegmentInfo.delta_logs:type_name -> milvus.proto.internal.FieldBinlog
+	54, // 77: milvus.proto.internal.SegmentInfo.stats_logs:type_name -> milvus.proto.internal.FieldBinlog
+	75, // 78: milvus.proto.internal.GetSegmentsInfoResponse.status:type_name -> milvus.proto.common.Status
+	55, // 79: milvus.proto.internal.GetSegmentsInfoResponse.segmentInfos:type_name -> milvus.proto.internal.SegmentInfo
+	74, // 80: milvus.proto.internal.GetQuotaMetricsRequest.base:type_name -> milvus.proto.common.MsgBase
+	75, // 81: milvus.proto.internal.GetQuotaMetricsResponse.status:type_name -> milvus.proto.common.Status
+	74, // 82: milvus.proto.internal.GetFeatureUsageRequest.base:type_name -> milvus.proto.common.MsgBase
+	75, // 83: milvus.proto.internal.GetFeatureUsageResponse.status:type_name -> milvus.proto.common.Status
+	60, // 84: milvus.proto.internal.GetFeatureUsageResponse.entries:type_name -> milvus.proto.internal.FeatureEntry
+	60, // 85: milvus.proto.internal.FeatureUsageNode.entries:type_name -> milvus.proto.internal.FeatureEntry
+	75, // 86: milvus.proto.internal.FeatureUsageReport.status:type_name -> milvus.proto.common.Status
+	62, // 87: milvus.proto.internal.FeatureUsageReport.nodes:type_name -> milvus.proto.internal.FeatureUsageNode
+	64, // 88: milvus.proto.internal.SyncFileResourceRequest.resources:type_name -> milvus.proto.internal.FileResourceInfo
+	74, // 89: milvus.proto.internal.BackupEzkRequest.base:type_name -> milvus.proto.common.MsgBase
+	75, // 90: milvus.proto.internal.BackupEzkResponse.status:type_name -> milvus.proto.common.Status
+	69, // 91: milvus.proto.internal.CollectionVisibilitySnapshot.roles:type_name -> milvus.proto.internal.RoleCollectionVisibility
+	70, // 92: milvus.proto.internal.RoleCollectionVisibility.rules:type_name -> milvus.proto.internal.CollectionVisibilityRule
+	93, // [93:93] is the sub-list for method output_type
+	93, // [93:93] is the sub-list for method input_type
+	93, // [93:93] is the sub-list for extension type_name
+	93, // [93:93] is the sub-list for extension extendee
+	0,  // [0:93] is the sub-list for field type_name
 }
 
 func init() { file_internal_proto_init() }

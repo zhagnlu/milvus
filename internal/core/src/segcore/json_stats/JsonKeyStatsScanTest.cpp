@@ -36,6 +36,16 @@ class JsonStatsScanTestAccessor {
               std::shared_ptr<milvus::ChunkedColumnInterface> column) {
         stats.shredding_columns_["test_path"] = std::move(column);
     }
+
+    static void
+    SetReaderColumn(milvus::index::JsonKeyStats& stats,
+                    std::shared_ptr<milvus::ChunkedColumnInterface> column,
+                    milvus::index::JSONType type) {
+        stats.num_rows_ = column->NumRows();
+        stats.key_field_map_["/value"].insert("test_path");
+        stats.shred_field_data_type_map_["test_path"] = type;
+        SetColumn(stats, std::move(column));
+    }
 };
 
 namespace milvus::index {
@@ -69,6 +79,8 @@ struct ScanTrace {
     int64_t largest_batch = 0;
     const void* last_values = nullptr;
     bool fail_pin = false;
+    bool cancel_pin = false;
+    int64_t row_locations = 0;
 };
 
 // Delegate to the production RawScanCursor. Record its output pointer so the
@@ -116,11 +128,21 @@ class RecordingColumn : public Base {
 
     PinWrapper<Chunk*>
     GetChunk(OpContext* ctx, int64_t chunk_id) const override {
+        if (trace_->cancel_pin) {
+            ThrowInfo(ErrorCode::FollyCancel,
+                      "injected reader pin cancellation");
+        }
         if (trace_->fail_pin) {
             throw std::runtime_error("injected scan pin failure");
         }
         trace_->pinned_chunks.push_back(chunk_id);
         return Base::GetChunk(ctx, chunk_id);
+    }
+
+    std::pair<size_t, size_t>
+    GetChunkIDByOffset(int64_t offset) const override {
+        ++trace_->row_locations;
+        return Base::GetChunkIDByOffset(offset);
     }
 
     ScanResult
@@ -627,6 +649,109 @@ TEST_P(JsonKeyStatsScanTest, MissingPathDoesNotScanAndPinFailurePropagates) {
                      TargetBitmapView(result),
                      TargetBitmapView(valid)),
                  std::runtime_error);
+}
+
+TEST_P(JsonKeyStatsScanTest, ReaderStringBatchesKeepViewsAndSparseRowOrder) {
+    const std::vector<std::string> values{"",
+                                          "invalid",
+                                          std::string("a\0b", 3),
+                                          std::string(200, 'x'),
+                                          "tail",
+                                          "again",
+                                          "last"};
+    auto fixture =
+        MakeColumn<std::string>({3, 4}, values, DataType::STRING, true);
+    auto stats = MakeStats(fixture.column);
+    JsonStatsScanTestAccessor::SetReaderColumn(
+        *stats, fixture.column, JSONType::STRING);
+    auto reader = stats->CreateShreddingReader("/value", JSONType::STRING, 7);
+    ASSERT_NE(reader, nullptr);
+    // Borrowed values remain pinned even after the stats/column owners leave.
+    stats.reset();
+    auto trace = fixture.trace;
+    fixture.column.reset();
+    const std::vector<int64_t> ids{0, 1, 2, 3, 6, 3, 2, 0};
+    std::vector<std::optional<std::string_view>> actual(ids.size());
+    reader->GetStringViews(nullptr, ids, actual);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (ValidRow(ids[i])) {
+            ASSERT_TRUE(actual[i].has_value());
+            EXPECT_EQ(*actual[i], values[ids[i]]);
+        } else {
+            EXPECT_FALSE(actual[i].has_value());
+        }
+    }
+    EXPECT_EQ(trace->pinned_chunks, (std::vector<int64_t>{0, 1}));
+    EXPECT_EQ(trace->row_locations, 3);
+    const auto borrowed = actual[3];
+    const std::vector<int64_t> next{6, 0, 1};
+    reader->GetStringViews(nullptr, next, std::span(actual).first(3));
+    EXPECT_EQ(*borrowed, values[3]);
+    EXPECT_EQ(*actual[0], values[6]);
+    EXPECT_TRUE(actual[1].has_value());
+    EXPECT_TRUE(actual[1]->empty());
+    EXPECT_FALSE(actual[2].has_value());
+    EXPECT_EQ(trace->pinned_chunks.size(), 2);
+    auto owned = reader->Get(nullptr, 3);
+    ASSERT_TRUE(owned.has_value());
+    reader.reset();
+    EXPECT_EQ(std::get<std::string>(*owned), values[3]);
+}
+
+TEST_P(JsonKeyStatsScanTest, ReaderFailureDoesNotPublishUnpinnedChunk) {
+    auto fixture = MakeColumn<std::string>(
+        {2, 2}, {"a", "b", "c", "d"}, DataType::STRING, false);
+    auto stats = MakeStats(fixture.column);
+    JsonStatsScanTestAccessor::SetReaderColumn(
+        *stats, fixture.column, JSONType::STRING);
+    auto reader = stats->CreateShreddingReader("/value", JSONType::STRING, 4);
+    std::vector<int64_t> ids{0};
+    std::vector<std::optional<std::string_view>> values(1);
+    reader->GetStringViews(nullptr, ids, values);
+    fixture.trace->cancel_pin = true;
+    ids[0] = 2;
+    try {
+        reader->GetStringViews(nullptr, ids, values);
+        FAIL() << "reader swallowed a classified pin failure";
+    } catch (const SegcoreError& error) {
+        EXPECT_EQ(error.get_error_code(), ErrorCode::FollyCancel);
+    }
+    fixture.trace->cancel_pin = false;
+    reader->GetStringViews(nullptr, ids, values);
+    EXPECT_EQ(*values[0], "c");
+    ids[0] = 0;
+    reader->GetStringViews(nullptr, ids, values);
+    EXPECT_EQ(*values[0], "a");
+    EXPECT_EQ(fixture.trace->pinned_chunks, (std::vector<int64_t>{0, 1}));
+    for (int64_t row : {-1, 4}) {
+        EXPECT_THROW(reader->Get(nullptr, row), SegcoreError);
+    }
+    EXPECT_THROW(reader->GetStringViews(nullptr, ids, {}), SegcoreError);
+}
+
+TEST_P(JsonKeyStatsScanTest, ReaderScalarChunkCachePreservesExactValues) {
+    for (bool nullable : {false, true}) {
+        const std::vector<int64_t> values{
+            INT64_MIN, 42, 9007199254740993LL, INT64_MAX, -1};
+        auto fixture =
+            MakeColumn<int64_t>({2, 3}, values, DataType::INT64, nullable);
+        auto stats = MakeStats(fixture.column);
+        JsonStatsScanTestAccessor::SetReaderColumn(
+            *stats, fixture.column, JSONType::INT64);
+        auto reader =
+            stats->CreateShreddingReader("/value", JSONType::INT64, 5);
+        for (int64_t row : {0, 1, 2, 4, 3, 0}) {
+            auto value = reader->Get(nullptr, row);
+            if (nullable && !ValidRow(row)) {
+                EXPECT_FALSE(value.has_value());
+            } else {
+                ASSERT_TRUE(value.has_value());
+                EXPECT_EQ(std::get<int64_t>(*value), values[row]);
+            }
+        }
+        EXPECT_EQ(fixture.trace->pinned_chunks.size(), 2);
+        EXPECT_EQ(fixture.trace->row_locations, 3);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(ScanPinPolicy,

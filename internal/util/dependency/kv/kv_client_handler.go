@@ -1,6 +1,8 @@
 package kvfactory
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -34,7 +36,9 @@ func CloseEtcdClient() {
 	defer clientCreator.mu.Unlock()
 	if clientCreator.client != nil {
 		err := clientCreator.client.Close()
-		if err != nil {
+		// Embedded clients have no gRPC connection: Close cancels their
+		// context and returns context.Canceled even on a successful close.
+		if err != nil && !errors.Is(err, context.Canceled) {
 			panic(err)
 		}
 	}

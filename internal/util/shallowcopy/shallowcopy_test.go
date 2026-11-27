@@ -7,6 +7,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
 )
 
 func TestShallowCopySearchRequest(t *testing.T) {
@@ -72,6 +73,14 @@ func TestShallowCopySearchRequest(t *testing.T) {
 }
 
 func TestShallowCopyRetrieveRequest(t *testing.T) {
+	t.Run("SQL projection survives shard dispatch", func(t *testing.T) {
+		project := &planpb.SQLProject{Version: 1, Predicate: &planpb.SQLScalarExpr{Op: "is_not_null"}}
+		src := &internalpb.RetrieveRequest{SqlProject: project, GroupByFieldIds: []int64{1000}, Aggregates: []*planpb.Aggregate{{Op: planpb.AggregateOp_count, FieldId: 1000}}}
+		dst := ShallowCopyRetrieveRequest(src, 42)
+		assert.Same(t, project, dst.SqlProject)
+		assert.Equal(t, src.GroupByFieldIds, dst.GroupByFieldIds)
+		assert.Equal(t, src.Aggregates, dst.Aggregates)
+	})
 	t.Run("nil input", func(t *testing.T) {
 		assert.Nil(t, ShallowCopyRetrieveRequest(nil, 1))
 	})

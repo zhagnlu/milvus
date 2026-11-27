@@ -357,6 +357,12 @@ func (stringField *StringFieldAccessor) ValAt(idx int) interface{} {
 	return stringField.vals[idx]
 }
 
+// StringAt reads the same immutable string as ValAt without interface boxing.
+// Callers must check IsNullAt before treating the value as present.
+func (stringField *StringFieldAccessor) StringAt(idx int) string {
+	return stringField.vals[idx]
+}
+
 func (stringField *StringFieldAccessor) IsNullAt(idx int) bool {
 	if len(stringField.validData) == 0 {
 		return false

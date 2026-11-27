@@ -80,6 +80,7 @@ func ShallowCopyRetrieveRequest(src *internalpb.RetrieveRequest, targetID int64)
 		CollectionTtlTimestamps:      src.CollectionTtlTimestamps,
 		GroupByFieldIds:              src.GroupByFieldIds,
 		Aggregates:                   src.Aggregates,
+		SqlProject:                   src.SqlProject,
 		EntityTtlPhysicalTime:        src.EntityTtlPhysicalTime,
 		OrderByFields:                src.OrderByFields,
 		QueryLabel:                   src.QueryLabel,

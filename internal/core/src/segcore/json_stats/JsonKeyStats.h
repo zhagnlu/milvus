@@ -173,6 +173,14 @@ class JsonKeyStats {
         std::optional<Value>
         Get(milvus::OpContext* op_ctx, int64_t row_id);
 
+        // Views borrow the chunks pinned by this query-local reader. They stay
+        // valid until the reader is destroyed, including across later reads.
+        // A disengaged value requests raw fallback; it is not SQL NULL.
+        void
+        GetStringViews(milvus::OpContext* op_ctx,
+                       std::span<const int64_t> row_ids,
+                       std::span<std::optional<std::string_view>> values);
+
      private:
         friend class JsonKeyStats;
         ShreddingReader(std::shared_ptr<ChunkedColumnInterface> column,
@@ -183,6 +191,13 @@ class JsonKeyStats {
         std::shared_ptr<ChunkedColumnInterface> column_;
         JSONType type_;
         std::unordered_map<int64_t, PinWrapper<Chunk*>> pins_;
+        Chunk* current_chunk_ = nullptr;
+        StringChunk* current_strings_ = nullptr;
+        int64_t current_begin_ = 0;
+        int64_t current_end_ = 0;
+
+        int64_t
+        Locate(milvus::OpContext* op_ctx, int64_t row_id);
     };
 
     // Checks path/type eligibility without loading stats. A supported path

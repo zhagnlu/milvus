@@ -162,6 +162,7 @@ var routeToMethod = map[string]string{ //nolint:gosec // not credentials, just a
 	"/v2/vectordb/databases/alter_properties": "AlterDatabase",
 
 	"/v2/vectordb/entities/query":           "Query",
+	"/v2/vectordb/entities/sql_query":       "Query",
 	"/v2/vectordb/entities/get":             "Query",
 	"/v2/vectordb/entities/delete":          "Delete",
 	"/v2/vectordb/entities/insert":          "Insert",
@@ -297,6 +298,9 @@ func (h *HandlersV2) RegisterRoutesToV2(router gin.IRouter) {
 	router.POST(DataBaseCategory+AlterAction, timeoutMiddleware(wrapperPost(func() any { return &DatabaseReqWithProperties{} }, wrapperTraceLog(h.alterDatabase))))
 	router.POST(DataBaseCategory+AlterPropertiesAction, timeoutMiddleware(wrapperPost(func() any { return &DatabaseReqWithProperties{} }, wrapperTraceLog(h.alterDatabase))))
 	// Query
+	router.POST(EntityCategory+"sql_query", h.dqlAdmission(restfulSizeMiddleware(dqlTimeoutMiddleware(wrapperPost(func() any {
+		return &SQLQueryReqV2{}
+	}, wrapperTraceLog(h.sqlQuery))), true)))
 	router.POST(EntityCategory+QueryAction, h.dqlAdmission(restfulSizeMiddleware(dqlTimeoutMiddleware(wrapperPost(func() any {
 		return &QueryReqV2{
 			Limit:        100,
@@ -679,6 +683,17 @@ func getTraceLogRequestFieldWithoutSensitiveInfo(req any) mlog.Field {
 		}
 		redactedReq := *request
 		redactedReq.ExternalSpec = externalspec.RedactExternalSpecForLog(request.ExternalSpec)
+		return mlog.Any("request", &redactedReq)
+	case *SQLQueryReqV2:
+		if request == nil {
+			return proxy.GetRequestFieldWithoutSensitiveInfo(req)
+		}
+		redactedReq := *request
+		redactedReq.Params = redactExprParams(request.Params)
+		redactedReq.SearchParams = make(map[string]string, len(request.SearchParams))
+		for key := range request.SearchParams {
+			redactedReq.SearchParams[key] = proxy.RedactedValue
+		}
 		return mlog.Any("request", &redactedReq)
 	case *QueryReqV2:
 		if request == nil || len(request.ExprParams) == 0 {

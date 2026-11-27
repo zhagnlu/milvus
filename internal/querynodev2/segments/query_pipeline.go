@@ -61,6 +61,11 @@ func RunQNQueryPipeline(
 	manager *Manager,
 	retrievePlan *segcore.RetrievePlan,
 ) (*segcorepb.RetrieveResults, *queryutil.ArrowSelection, error) {
+	var err error
+	schema, err = queryutil.WithSQLProjectionSchema(schema, req.GetReq().GetSqlProject())
+	if err != nil {
+		return nil, nil, err
+	}
 	// Early empty check before any pipeline construction
 	if allSegcoreResultsEmpty(segcoreResults) {
 		res, err := emptySegcoreResult(req, schema)
@@ -70,7 +75,6 @@ func RunQNQueryPipeline(
 	// Build pipeline + input msg — the only branching point
 	var pipeline *queryutil.Pipeline
 	var msg queryutil.OpMsg
-	var err error
 
 	// selection is filled by the plain reduce when the Arrow path ran. It is
 	// returned UNMATERIALIZED: the caller turns the chosen rows into FieldData
@@ -305,6 +309,11 @@ func RunDelegatorQueryPipeline(
 	schema *schemapb.CollectionSchema,
 	results []*internalpb.RetrieveResults,
 ) (*internalpb.RetrieveResults, error) {
+	var err error
+	schema, err = queryutil.WithSQLProjectionSchema(schema, req.GetReq().GetSqlProject())
+	if err != nil {
+		return nil, err
+	}
 	topK := req.GetReq().GetLimit()
 
 	// Read ORDER BY fields directly from RetrieveRequest (populated by proxy),

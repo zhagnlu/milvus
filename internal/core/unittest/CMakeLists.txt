@@ -66,6 +66,7 @@ set(MILVUS_TEST_FILES
         test_group_by_json.cpp
         test_element_filter.cpp
         test_query_group_by.cpp
+        test_sql_projection.cpp
         test_minhash.cpp
         test_boost_score_c.cpp
         test_sort_buffer.cpp
@@ -208,6 +209,20 @@ set_target_properties(all_tests PROPERTIES
         )
 
 milvus_check_aws_runtime(all_tests)
+
+# Focused SQL execution tests can reuse the native SDK without rebuilding every
+# unrelated test translation unit. The same cases remain part of all_tests.
+add_executable(sql_projection_tests EXCLUDE_FROM_ALL
+        init_gtest.cpp
+        ${CMAKE_HOME_DIRECTORY}/src/segcore/json_stats/JsonKeyStatsScanTest.cpp
+        test_sql_projection.cpp)
+target_link_libraries(sql_projection_tests PRIVATE
+        GTest::gtest GTest::gmock milvus_core milvus_conan_deps
+        knowhere milvus-storage AWS::aws-crt-cpp milvus-planparser-cpp)
+target_link_options(sql_projection_tests PRIVATE "-L${PLANPARSER_LIB_DIR}")
+set_target_properties(sql_projection_tests PROPERTIES
+        BUILD_RPATH "$<TARGET_FILE_DIR:milvus_core>;${PLANPARSER_LIB_DIR}")
+milvus_check_aws_runtime(sql_projection_tests)
 
 if (LINUX)
     add_test(NAME aws_runtime_link_check

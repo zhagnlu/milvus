@@ -103,6 +103,7 @@ require (
 	github.com/hamba/avro/v2 v2.29.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
+	github.com/pganalyze/pg_query_go/v6 v6.2.2
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/smartystreets/goconvey v1.7.2 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect

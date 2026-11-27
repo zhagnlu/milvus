@@ -63,10 +63,9 @@ func TestGenEmptyScalarFieldDataLayout(t *testing.T) {
 				require.NotNil(t, field.GetScalars().GetLongData())
 				require.Empty(t, field.GetScalars().GetLongData().GetData())
 			case schemapb.DataType_Timestamptz:
-				// Preserve the shared helper's historical empty-result layout.
-				require.NotNil(t, field.GetScalars().GetLongData())
-				require.Nil(t, field.GetScalars().GetTimestamptzData())
-				require.Empty(t, field.GetScalars().GetLongData().GetData())
+				require.NotNil(t, field.GetScalars().GetTimestamptzData())
+				require.Nil(t, field.GetScalars().GetLongData())
+				require.Empty(t, field.GetScalars().GetTimestamptzData().GetData())
 			default:
 				require.NotNil(t, field.GetScalars().GetStringData())
 				require.Empty(t, field.GetScalars().GetStringData().GetData())

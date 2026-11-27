@@ -319,12 +319,14 @@ class ProjectNode : public PlanNode {
                 std::vector<FieldId>&& field_ids,
                 std::vector<std::string>&& field_names,
                 std::vector<milvus::DataType>&& field_types,
-                std::vector<PlanNodePtr> sources = std::vector<PlanNodePtr>{})
+                std::vector<PlanNodePtr> sources = std::vector<PlanNodePtr>{},
+                const proto::plan::SQLProject* sql_project = nullptr)
         : PlanNode(id),
           sources_(std::move(sources)),
           field_ids_(std::move(field_ids)),
           output_type_(std::make_shared<RowType>(std::move(field_names),
-                                                 std::move(field_types))) {
+                                                 std::move(field_types))),
+          sql_project_(sql_project ? *sql_project : proto::plan::SQLProject{}) {
     }
 
     const std::vector<PlanNodePtr>&
@@ -353,10 +355,16 @@ class ProjectNode : public PlanNode {
         return field_ids_;
     }
 
+    const proto::plan::SQLProject&
+    SqlProject() const {
+        return sql_project_;
+    }
+
  private:
     const std::vector<PlanNodePtr> sources_;
     const std::vector<FieldId> field_ids_;
     const RowTypePtr output_type_;
+    const proto::plan::SQLProject sql_project_;
 };
 
 class MvccNode : public PlanNode {

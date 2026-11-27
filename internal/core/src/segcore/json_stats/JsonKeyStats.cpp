@@ -98,8 +98,12 @@
 
 namespace milvus::index {
 
-std::optional<JsonKeyStats::ShreddingReader::Value>
-JsonKeyStats::ShreddingReader::Get(milvus::OpContext* op_ctx, int64_t row_id) {
+int64_t
+JsonKeyStats::ShreddingReader::Locate(milvus::OpContext* op_ctx,
+                                     int64_t row_id) {
+    if (row_id >= current_begin_ && row_id < current_end_) {
+        return row_id - current_begin_;
+    }
     AssertInfo(row_id >= 0 && row_id < column_->NumRows(),
                "JSON stats row {} is outside column bounds {}",
                row_id,
@@ -114,15 +118,31 @@ JsonKeyStats::ShreddingReader::Get(milvus::OpContext* op_ctx, int64_t row_id) {
     AssertInfo(chunk != nullptr && offset < chunk->RowNums(),
                "JSON stats chunk does not cover row {}",
                row_id);
+    StringChunk* strings = nullptr;
+    if (type_ == JSONType::STRING) {
+        strings = dynamic_cast<StringChunk*>(chunk);
+        AssertInfo(strings != nullptr,
+                   "JSON stats string column has an incompatible chunk");
+    }
+    // Publish the new range only after a successful pin and type check. Keep
+    // every pin so views from earlier batches survive chunk switches.
+    current_chunk_ = chunk;
+    current_strings_ = strings;
+    current_begin_ = row_id - offset;
+    current_end_ = current_begin_ + chunk->RowNums();
+    return offset;
+}
+
+std::optional<JsonKeyStats::ShreddingReader::Value>
+JsonKeyStats::ShreddingReader::Get(milvus::OpContext* op_ctx, int64_t row_id) {
+    const auto offset = Locate(op_ctx, row_id);
+    auto* chunk = current_chunk_;
     if (!chunk->isValid(offset)) {
         return std::nullopt;
     }
     switch (type_) {
         case JSONType::STRING: {
-            auto* strings = dynamic_cast<StringChunk*>(chunk);
-            AssertInfo(strings != nullptr,
-                       "JSON stats string column has an incompatible chunk");
-            return Value(std::string((*strings)[offset]));
+            return Value(std::string((*current_strings_)[offset]));
         }
         case JSONType::BOOL: {
             bool value;
@@ -137,6 +157,23 @@ JsonKeyStats::ShreddingReader::Get(milvus::OpContext* op_ctx, int64_t row_id) {
         default:
             ThrowInfo(ErrorCode::UnexpectedError,
                       "unsupported JSON stats scalar reader type");
+    }
+}
+
+void
+JsonKeyStats::ShreddingReader::GetStringViews(
+    milvus::OpContext* op_ctx,
+    std::span<const int64_t> row_ids,
+    std::span<std::optional<std::string_view>> values) {
+    AssertInfo(type_ == JSONType::STRING && row_ids.size() == values.size(),
+               "JSON stats string batch has incompatible type or size");
+    for (size_t i = 0; i < row_ids.size(); ++i) {
+        const auto offset = Locate(op_ctx, row_ids[i]);
+        if (current_chunk_->isValid(offset)) {
+            values[i] = (*current_strings_)[offset];
+        } else {
+            values[i].reset();
+        }
     }
 }
 

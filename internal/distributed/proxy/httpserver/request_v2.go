@@ -468,6 +468,18 @@ type QueryReqV2 struct {
 	ConsistencyLevel string                     `json:"consistencyLevel"`
 }
 
+type SQLQueryReqV2 struct {
+	DbName           string                     `json:"dbName"`
+	SQL              string                     `json:"sql" binding:"required"`
+	Params           map[string]json.RawMessage `json:"params"`
+	SearchParams     map[string]string          `json:"searchParams"`
+	PartitionNames   []string                   `json:"partitionNames"`
+	ConsistencyLevel string                     `json:"consistencyLevel"`
+	Timezone         string                     `json:"timezone"`
+}
+
+func (req *SQLQueryReqV2) GetDbName() string { return req.DbName }
+
 func (req *QueryReqV2) GetDbName() string         { return req.DbName }
 func (req *QueryReqV2) GetCollectionName() string { return req.CollectionName }
 

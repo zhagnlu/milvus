@@ -27,6 +27,7 @@
 #include "exec/QueryContext.h"
 #include "exec/expression/Utils.h"
 #include "exec/operator/Operator.h"
+#include "exec/operator/SqlProjection.h"
 #include "plan/PlanNode.h"
 #include "segcore/InsertRecord.h"
 #include "segcore/SegmentInterface.h"
@@ -118,6 +119,7 @@ PhyProjectNode::PhyProjectNode(
                projectNode->id(),
                "Project"),
       fields_to_project_(projectNode->FieldsToProject()),
+      sql_project_(projectNode->SqlProject()),
       query_context_(nullptr),
       op_context_(nullptr) {
     auto exec_context = operator_context_->get_exec_context();
@@ -147,7 +149,7 @@ PhyProjectNode::GetOutput() {
     // the matching element count. find_first deduplicates by PK in growing
     // segments (OffsetOrderedMap), which would undercount rows with duplicate
     // PKs.
-    if (fields_to_project_.empty()) {
+    if (fields_to_project_.empty() && !sql_project_.has_predicate()) {
         auto valid_count =
             static_cast<int64_t>(col_input->size()) - raw_data_view.count();
         is_finished_ = true;
@@ -168,6 +170,19 @@ PhyProjectNode::GetOutput() {
     if (selected_count == 0) {
         is_finished_ = true;
         return nullptr;
+    }
+    if (sql_project_.version() != 0) {
+        AssertInfo(!query_context_->bitset_is_element_level(),
+                   "SQL projection does not support element-level rows");
+        auto result = EvaluateSqlProjection(sql_project_,
+                                            fields_to_project_,
+                                            selected_offsets,
+                                            segment_,
+                                            op_context_,
+                                            query_context_->get_plan_options()
+                                                .expr_use_json_stats);
+        is_finished_ = true;
+        return result;
     }
     auto row_type = OutputType();
     std::vector<VectorPtr> column_vectors;

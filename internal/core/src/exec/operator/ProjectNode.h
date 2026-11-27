@@ -72,6 +72,7 @@ class PhyProjectNode : public Operator {
     const segcore::SegmentInternalInterface* segment_;
     bool is_finished_{false};
     const std::vector<FieldId> fields_to_project_;
+    const proto::plan::SQLProject sql_project_;
     QueryContext* query_context_;
     OpContext* op_context_;
 };
